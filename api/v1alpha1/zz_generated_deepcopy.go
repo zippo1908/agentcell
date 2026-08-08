@@ -19,10 +19,19 @@ func (in *PreviewSpec) DeepCopyInto(out *PreviewSpec) {
 
 func (in *ResourceBudget) DeepCopyInto(out *ResourceBudget) { *out = *in }
 
+func (in *ProductionSpec) DeepCopyInto(out *ProductionSpec) {
+	*out = *in
+	if in.Command != nil {
+		out.Command = make([]string, len(in.Command))
+		copy(out.Command, in.Command)
+	}
+}
+
 func (in *CellSpec) DeepCopyInto(out *CellSpec) {
 	*out = *in
 	in.Repo.DeepCopyInto(&out.Repo)
 	in.Preview.DeepCopyInto(&out.Preview)
+	in.Production.DeepCopyInto(&out.Production)
 	in.SessionResources.DeepCopyInto(&out.SessionResources)
 }
 

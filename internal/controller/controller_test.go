@@ -211,6 +211,53 @@ func TestFollowPreviewFlipsCellTarget(t *testing.T) {
 	}
 }
 
+func TestNoProductionZoneBeforeFirstRelease(t *testing.T) {
+	c := newFake(t, testCell())
+	reconcileCell(t, c)
+	err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: ids.WorkloadNamespace("shop"), Name: ids.ProdDeployment},
+		&appsv1.Deployment{})
+	if err == nil {
+		t.Fatal("production deployment must not exist before the first release")
+	}
+	var cell acv1.Cell
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: controlNS, Name: "shop"}, &cell)
+	if cell.Status.ProductionPath != "" {
+		t.Errorf("productionPath = %q, want empty before release", cell.Status.ProductionPath)
+	}
+}
+
+func TestReleaseCreatesIsolatedProduction(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Spec.Production = acv1.ProductionSpec{ReleaseID: ids.NewSessionID()} // command falls back to preview's
+	c := newFake(t, cellCR)
+	reconcileCell(t, c)
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+
+	var dep appsv1.Deployment
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.ProdDeployment}, &dep); err != nil {
+		t.Fatalf("prod deployment: %v", err)
+	}
+	// The isolation guarantee: the prod pod must never mount the dev-zone
+	// PVC — debugging in the dev zone cannot reach production.
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			t.Fatalf("prod pod mounts PVC %q — dev/prod isolation broken", v.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.ProdService}, &corev1.Service{}); err != nil {
+		t.Fatalf("prod service: %v", err)
+	}
+	var cell acv1.Cell
+	if err := c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "shop"}, &cell); err != nil {
+		t.Fatal(err)
+	}
+	if cell.Status.ProductionPath != "/app/shop/" {
+		t.Errorf("productionPath = %q, want /app/shop/", cell.Status.ProductionPath)
+	}
+}
+
 func TestSessionPodGoneLeadsToSettling(t *testing.T) {
 	id := ids.NewSessionID()
 	name := ids.SessionName(id)

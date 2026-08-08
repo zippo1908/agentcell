@@ -51,6 +51,19 @@ Three layers, all real, all deliberately file-based (an agent's native food):
 
 Not built yet (roadmap): indexed retrieval over the knowledge directory for large corpora, automatic distillation of review feedback into knowledge, and cross-Cell shared knowledge. The file-based contract above is designed so those bolt on without changing the session contract.
 
+## Two zones: dev/test merged, production isolated
+
+Each Cell has exactly two zones — development and testing are deliberately one zone, and production is structurally out of its reach:
+
+| | Dev zone(开发区)`/preview/<cell>/` | Production(正式区)`/app/<cell>/` |
+|---|---|---|
+| What it serves | Main checkout or a followed session's worktree — live, messy, restartable | A release checkout, immutable until the next release |
+| Storage | Shared workspace PVC | **Own emptyDir, fresh `--depth 1` clone of the release ref** — never mounts the PVC |
+| Process | Anchor pod's supervised dev server | Separate Deployment + Service |
+| Changes when | Every commit, every followed session, every preview restart | **Only on an explicit release** (UI button / `cellctl release <cell> [--ref v1.2]` / API) |
+
+Because the prod pod shares no volume and no process with the dev zone, no amount of debugging — crashed previews, dirty worktrees, force-killed sessions — can affect what production serves. A release stamps a new `releaseID`, which rolls the prod pod, which re-clones the ref: rollback is `cellctl release <cell> --ref <previous-tag>`.
+
 ## Session lifecycle
 
 ```mermaid
@@ -172,6 +185,19 @@ workspace PVC 布局:
 3. **`/workspace/knowledge/`** —— PVC 上、检出之外的持久目录,跨会话共享。每单的 `TASK.md` 都写明:开工前浏览,收工把可复用经验(约定、坑、决策)沉淀成 md 放回去。会话回收不影响它,`cell rebuild` 也不影响(它在 PVC 上)。
 
 尚未做(路线图):知识目录的索引检索(大语料)、批阅意见自动蒸馏进知识、跨 Cell 共享知识。文件契约是特意设计好的,这些能力叠上去不需要改会话协议。
+
+## 双区模型:开发测试合一,正式区结构性隔离
+
+每个 Cell 恰好两个区——开发和测试刻意合并成一个区,正式区在结构上就够不着它:
+
+| | 开发区 `/preview/<cell>/` | 正式区 `/app/<cell>/` |
+|---|---|---|
+| 服务内容 | 主检出或跟随中会话的 worktree——活的、乱的、随便重启 | 发布检出,到下次发布前不可变 |
+| 存储 | 共享 workspace PVC | **自己的 emptyDir,发布 ref 的全新浅克隆——永不挂 PVC** |
+| 进程 | 锚点 Pod 里被监管的 dev server | 独立 Deployment + Service |
+| 何时变化 | 每个提交、每次会话跟随、每次预览重启 | **仅显式发布时**(UI 按钮 / `cellctl release` / API) |
+
+正式区 Pod 与开发区零共享卷、零共享进程——预览崩了、worktree 脏了、会话被强杀,都碰不到正式区在服务的东西。发布 = 盖一个新 `releaseID` → prod Pod 滚动 → 重新克隆 ref;回滚就是 `cellctl release <cell> --ref <上一个tag>`。
 
 ## 会话生命周期
 

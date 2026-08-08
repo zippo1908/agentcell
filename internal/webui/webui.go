@@ -44,8 +44,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
+	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
 	mux.HandleFunc("DELETE /api/sessions/{session}", h.settleSession)
 	mux.HandleFunc("/preview/{cell}/", h.preview)
+	mux.HandleFunc("/app/{cell}/", h.productionApp)
 	return mux
 }
 
@@ -73,6 +75,8 @@ type cellView struct {
 	ActiveSessions int32  `json:"activeSessions"`
 	MaxSessions    int32  `json:"maxSessions"`
 	PreviewPath    string `json:"previewPath"`
+	ProductionPath string `json:"productionPath"`
+	ReleaseRef     string `json:"releaseRef"`
 	FollowSession  string `json:"followSession"`
 	Message        string `json:"message"`
 }
@@ -81,7 +85,8 @@ func toCellView(c *acv1.Cell) cellView {
 	return cellView{
 		Name: c.Name, Phase: string(c.Status.Phase), Description: c.Spec.Description,
 		ActiveSessions: c.Status.ActiveSessions, MaxSessions: c.Spec.MaxSessions,
-		PreviewPath: c.Status.PreviewPath, FollowSession: c.Spec.Preview.FollowSession,
+		PreviewPath: c.Status.PreviewPath, ProductionPath: c.Status.ProductionPath,
+		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message,
 	}
 }
@@ -223,8 +228,35 @@ func (h *Handler) settleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"ok": "settling"})
 }
 
-// preview reverse-proxies /preview/<cell>/… to the Cell's in-cluster
-// preview Service, so the user's browser needs only celld.
+// release is the only door into the 正式区: it stamps a new ReleaseID
+// (rolling the isolated prod pod, which re-clones the ref). Dev-zone
+// debugging has no other path into production.
+func (h *Handler) release(w http.ResponseWriter, r *http.Request) {
+	cellName := r.PathValue("cell")
+	var body struct {
+		Ref string `json:"ref"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	var cell acv1.Cell
+	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &cell); err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	if body.Ref != "" {
+		cell.Spec.Production.Ref = body.Ref
+	}
+	cell.Spec.Production.ReleaseID = ids.NewSessionID()
+	if err := h.Client.Update(r.Context(), &cell); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{
+		"ok": "release rolling", "releaseID": cell.Spec.Production.ReleaseID,
+	})
+}
+
+// preview reverse-proxies the dev zone (/preview/<cell>/), productionApp
+// the 正式区 (/app/<cell>/); the browser only ever talks to celld.
 func (h *Handler) preview(w http.ResponseWriter, r *http.Request) {
 	cellName := r.PathValue("cell")
 	var cell acv1.Cell
@@ -236,15 +268,39 @@ func (h *Handler) preview(w http.ResponseWriter, r *http.Request) {
 	if port == 0 {
 		port = 3000
 	}
+	h.proxyTo(w, r, cellName, ids.PreviewService, port, "/preview/"+cellName)
+}
+
+func (h *Handler) productionApp(w http.ResponseWriter, r *http.Request) {
+	cellName := r.PathValue("cell")
+	var cell acv1.Cell
+	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &cell); err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	if cell.Status.ProductionPath == "" {
+		writeErr(w, 404, fmt.Errorf("cell %q has no production zone yet — release first", cellName))
+		return
+	}
+	port := cell.Spec.Production.Port
+	if port == 0 {
+		port = cell.Spec.Preview.Port
+	}
+	if port == 0 {
+		port = 3000
+	}
+	h.proxyTo(w, r, cellName, ids.ProdService, port, "/app/"+cellName)
+}
+
+func (h *Handler) proxyTo(w http.ResponseWriter, r *http.Request, cellName, svc string, port int32, prefix string) {
 	target := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s.%s.svc:%d", ids.PreviewService, ids.WorkloadNamespace(cellName), port),
+		Host:   fmt.Sprintf("%s.%s.svc:%d", svc, ids.WorkloadNamespace(cellName), port),
 	}
-	prefix := "/preview/" + cellName
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		w.WriteHeader(http.StatusBadGateway)
-		_, _ = fmt.Fprintf(w, "preview upstream not ready: %v\n", err)
+		_, _ = fmt.Fprintf(w, "upstream not ready: %v\n", err)
 	}
 	http.StripPrefix(prefix, proxy).ServeHTTP(w, r)
 }

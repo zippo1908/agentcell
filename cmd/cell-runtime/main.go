@@ -31,10 +31,12 @@ func main() {
 		err = runSession()
 	case "settle":
 		err = runSettle()
+	case "prod":
+		err = runProd()
 	case "askpass":
 		err = runAskpass(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: cell-runtime <anchor|session|settle|askpass|--version>")
+		fmt.Fprintln(os.Stderr, "usage: cell-runtime <anchor|session|settle|prod|askpass|--version>")
 		os.Exit(2)
 	}
 	if err != nil {

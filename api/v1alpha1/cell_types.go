@@ -33,6 +33,24 @@ type PreviewSpec struct {
 	FollowSession string `json:"followSession,omitempty"`
 }
 
+// ProductionSpec is the Cell's 正式区: a deployment fully isolated from the
+// dev zone (own shallow clone on an emptyDir, never the shared PVC), which
+// changes only on an explicit release action. Dev/test debugging — preview
+// restarts, session churn, dirty worktrees — cannot touch it.
+type ProductionSpec struct {
+	// Command serves the production app (run in the release checkout).
+	Command []string `json:"command,omitempty"`
+	// Port the command serves HTTP on. Defaults to the preview port.
+	Port int32 `json:"port,omitempty"`
+	// Ref is the git ref a release ships (branch, tag or SHA). Defaults to
+	// the repo base branch.
+	Ref string `json:"ref,omitempty"`
+	// ReleaseID changes on every release action; a new value rolls the
+	// production pod, which re-clones Ref. Empty = never released, no
+	// production zone exists.
+	ReleaseID string `json:"releaseID,omitempty"`
+}
+
 // ResourceBudget is the per-session slot budget, expressed as Kubernetes
 // quantity strings.
 type ResourceBudget struct {
@@ -58,8 +76,9 @@ type CellSpec struct {
 	WorkspaceSize string `json:"workspaceSize,omitempty"`
 	// StorageClassName optionally pins the PVC's storage class (cloud
 	// presets set this: Alibaba disk/NAS, Tencent CBS/CFS).
-	StorageClassName string      `json:"storageClassName,omitempty"`
-	Preview          PreviewSpec `json:"preview,omitempty"`
+	StorageClassName string         `json:"storageClassName,omitempty"`
+	Preview          PreviewSpec    `json:"preview,omitempty"`
+	Production       ProductionSpec `json:"production,omitempty"`
 }
 
 // CellPhase summarizes observed state.
@@ -76,9 +95,12 @@ type CellStatus struct {
 	Phase              CellPhase `json:"phase,omitempty"`
 	ObservedGeneration int64     `json:"observedGeneration,omitempty"`
 	ActiveSessions     int32     `json:"activeSessions,omitempty"`
-	// PreviewPath is the platform-relative preview URL (celld proxies it).
+	// PreviewPath is the platform-relative dev-zone URL (celld proxies it).
 	PreviewPath string `json:"previewPath,omitempty"`
-	Message     string `json:"message,omitempty"`
+	// ProductionPath is the platform-relative 正式区 URL; empty until the
+	// first release.
+	ProductionPath string `json:"productionPath,omitempty"`
+	Message        string `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true

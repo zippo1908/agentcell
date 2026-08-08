@@ -71,6 +71,9 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.ensurePreviewService(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
+	if err := r.ensureProduction(ctx, &cell, ns); err != nil {
+		return r.fail(ctx, &cell, err)
+	}
 
 	// Observe.
 	var sts appsv1.StatefulSet
@@ -86,6 +89,11 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	cell.Status.ObservedGeneration = cell.Generation
 	cell.Status.ActiveSessions = active
 	cell.Status.PreviewPath = "/preview/" + cell.Name + "/"
+	if released(&cell) {
+		cell.Status.ProductionPath = "/app/" + cell.Name + "/"
+	} else {
+		cell.Status.ProductionPath = ""
+	}
 	cell.Status.Message = ""
 	if ready {
 		cell.Status.Phase = acv1.CellReady
@@ -273,6 +281,100 @@ func (r *CellReconciler) ensurePreviewService(ctx context.Context, cell *acv1.Ce
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.Spec.Selector = map[string]string{ids.AnchorPodLabelKey: ids.AnchorPodLabelVal}
 		svc.Spec.Ports = []corev1.ServicePort{{Name: "preview", Port: previewPort(cell)}}
+		return nil
+	})
+	return err
+}
+
+// released reports whether the Cell has a production zone at all: it only
+// exists after the first explicit release action.
+func released(cell *acv1.Cell) bool {
+	return cell.Spec.Production.ReleaseID != "" && len(prodCommand(cell)) > 0
+}
+
+// prodCommand falls back to the preview command: the same dev server run
+// against a release checkout is a sane default production shape for the
+// products this targets.
+func prodCommand(cell *acv1.Cell) []string {
+	if len(cell.Spec.Production.Command) > 0 {
+		return cell.Spec.Production.Command
+	}
+	return cell.Spec.Preview.Command
+}
+
+func prodPort(cell *acv1.Cell) int32 {
+	if cell.Spec.Production.Port != 0 {
+		return cell.Spec.Production.Port
+	}
+	return previewPort(cell)
+}
+
+// ensureProduction reconciles the 正式区: an isolated Deployment + Service.
+// Isolation is structural — the prod pod mounts an emptyDir and shallow-
+// clones the release ref itself; it never mounts the dev-zone PVC, so no
+// amount of dev/test debugging can reach it. A new ReleaseID changes the
+// pod env, which rolls the pod, which re-clones: that is the release.
+func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, ns string) error {
+	if !released(cell) {
+		return nil
+	}
+	cmdJSON, err := json.Marshal(prodCommand(cell))
+	if err != nil {
+		return err
+	}
+	ref := cell.Spec.Production.Ref
+	if ref == "" {
+		ref = cell.Spec.Repo.Branch
+	}
+	env := []corev1.EnvVar{
+		{Name: runtimeapi.EnvRepoURL, Value: cell.Spec.Repo.URL},
+		{Name: runtimeapi.EnvProdRef, Value: ref},
+		{Name: runtimeapi.EnvProdCmd, Value: string(cmdJSON)},
+		{Name: runtimeapi.EnvProdReleaseID, Value: cell.Spec.Production.ReleaseID},
+	}
+	var envFrom []corev1.EnvFromSource
+	if cell.Spec.Repo.SecretName != "" {
+		envFrom = append(envFrom, corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: ids.GitSecretName}},
+		})
+	}
+	labels := map[string]string{
+		ids.CellLabelKey:      cell.Name,
+		ids.AnchorPodLabelKey: ids.ProdPodLabelVal,
+	}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.ProdDeployment}}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		one := int32(1)
+		dep.Spec.Replicas = &one
+		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		dep.Spec.Template = corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:    "prod",
+					Image:   cell.Spec.Image,
+					Command: []string{runtimeapi.RuntimeBin, "prod"},
+					Env:     env,
+					EnvFrom: envFrom,
+					Ports:   []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
+					// emptyDir only: structurally impossible to share dev state.
+					VolumeMounts: []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
+				}},
+				Volumes: []corev1.Volume{{
+					Name:         "prodspace",
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				}},
+			},
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.ProdService}}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		svc.Spec.Selector = labels
+		svc.Spec.Ports = []corev1.ServicePort{{Name: "prod", Port: prodPort(cell)}}
 		return nil
 	})
 	return err

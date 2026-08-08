@@ -34,6 +34,16 @@ const (
 	EnvGitUsername = "GIT_USERNAME"
 	EnvGitToken    = "GIT_TOKEN"
 
+	// Production (正式区) container: fresh shallow clone per release,
+	// on an emptyDir — never the dev-zone PVC.
+	EnvProdRef       = "AGENTCELL_PROD_REF"
+	EnvProdCmd       = "AGENTCELL_PROD_CMD" // JSON array
+	EnvProdReleaseID = "AGENTCELL_PROD_RELEASE_ID"
+
+	// ProdRepoPath is where the prod applet clones the release checkout
+	// (backed by an emptyDir volume in the prod pod).
+	ProdRepoPath = "/prodspace/repo"
+
 	// RuntimeBin is where images bake the static cell-runtime binary.
 	RuntimeBin = "/agentcell/cell-runtime"
 

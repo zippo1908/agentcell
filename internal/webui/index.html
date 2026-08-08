@@ -98,10 +98,12 @@
   <div class="col">
     <div class="card preview">
       <div class="bar">
-        <h2 style="margin:0;flex:1">产品预览(常驻)</h2>
+        <h2 style="margin:0;flex:1">开发区预览(常驻)</h2>
         <span class="status" id="followState"></span>
         <button class="ghost" id="reload">刷新</button>
         <button class="ghost" id="openTab">新标签打开</button>
+        <button id="release" title="把当前主干发到隔离的正式区;开发调试不影响它">发布到正式区</button>
+        <a id="prodLink" class="status" href="#" target="_blank" style="display:none">正式区 ↗</a>
       </div>
       <iframe id="frame" title="产品预览"></iframe>
     </div>
@@ -139,6 +141,9 @@ async function refresh() {
     `${c.phase || '…'} · 槽位 ${c.activeSessions}/${c.maxSessions}` + (c.message ? ' · ' + c.message : '');
   if (document.activeElement !== $('desc')) $('desc').value = c.description || '';
   $('followState').textContent = c.followSession ? `跟随会话 ${c.followSession.slice(0, 8)}…` : '显示主检出';
+  const pl = $('prodLink');
+  if (c.productionPath) { pl.href = c.productionPath; pl.style.display = ''; }
+  else { pl.style.display = 'none'; }
   const frame = $('frame');
   const want = c.previewPath || `/preview/${cell}/`;
   if (!frame.dataset.src) { frame.src = want; frame.dataset.src = want; }
@@ -186,6 +191,13 @@ $('dispatch').onclick = async () => {
 };
 $('reload').onclick = () => { $('frame').src = $('frame').src; };
 $('openTab').onclick = () => window.open($('frame').dataset.src, '_blank');
+$('release').onclick = async () => {
+  if (!confirm('把当前主干发布到正式区?(开发区不受影响,正式区将滚动更新)')) return;
+  try { await j(`/api/cells/${cell}/release`, {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: '{}'}); }
+  catch (e) { alert(e.message); }
+  refresh();
+};
 
 (async () => {
   await loadMeta();

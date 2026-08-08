@@ -60,6 +60,15 @@ spec:
                       items: {type: string}
                     port: {type: integer, format: int32}
                     followSession: {type: string}
+                production:
+                  type: object
+                  properties:
+                    command:
+                      type: array
+                      items: {type: string}
+                    port: {type: integer, format: int32}
+                    ref: {type: string}
+                    releaseID: {type: string}
             status:
               type: object
               properties:
@@ -67,4 +76,5 @@ spec:
                 observedGeneration: {type: integer, format: int64}
                 activeSessions: {type: integer, format: int32}
                 previewPath: {type: string}
+                productionPath: {type: string}
                 message: {type: string}

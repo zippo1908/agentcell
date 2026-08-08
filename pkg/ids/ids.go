@@ -52,8 +52,13 @@ const (
 	AnchorStatefulSet = "anchor"
 	WorkspacePVC      = "workspace"
 	PreviewService    = "preview"
+	// Production (正式区): fully isolated from the dev zone — its own
+	// deployment and service, its own clone, never the shared PVC.
+	ProdDeployment    = "prod"
+	ProdService       = "prod"
 	AnchorPodLabelKey = "agentcell.io/role"
 	AnchorPodLabelVal = "anchor"
+	ProdPodLabelVal   = "prod"
 	CellLabelKey      = "agentcell.io/cell"
 	SessionLabelKey   = "agentcell.io/session"
 )

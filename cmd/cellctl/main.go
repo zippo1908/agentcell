@@ -97,8 +97,38 @@ func run(args []string) error {
 			return settle(ctx, args[1], args[2:])
 		}
 		return usage()
+	case "release":
+		if len(args) >= 2 {
+			return release(ctx, args[1], args[2:])
+		}
+		return usage()
 	}
 	return usage()
+}
+
+// release ships a ref to the Cell's isolated production zone (正式区).
+func release(ctx context.Context, cellName string, args []string) error {
+	fs := flag.NewFlagSet("release", flag.ExitOnError)
+	ns := fs.String("namespace", nsDefault(), "")
+	ref := fs.String("ref", "", "git ref to ship (default: repo base branch)")
+	_ = fs.Parse(args)
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	var cell acv1.Cell
+	if err := c.Get(ctx, client.ObjectKey{Namespace: *ns, Name: cellName}, &cell); err != nil {
+		return err
+	}
+	if *ref != "" {
+		cell.Spec.Production.Ref = *ref
+	}
+	cell.Spec.Production.ReleaseID = ids.NewSessionID()
+	if err := c.Update(ctx, &cell); err != nil {
+		return err
+	}
+	fmt.Printf("cell/%s releasing to 正式区 (/app/%s/); dev zone untouched\n", cellName, cellName)
+	return nil
 }
 
 func listCells(ctx context.Context, args []string) error {
