@@ -44,10 +44,20 @@ func runSession() error {
 		}
 	}
 
-	// Record the work order next to the code for the agent and for humans
-	// reviewing the settled branch.
+	// Record the work order and product context next to the code, for the
+	// agent now and for humans reviewing the settled branch later.
 	_ = os.MkdirAll(filepath.Join(wt, ".agentcell"), 0o755)
-	_ = os.WriteFile(filepath.Join(wt, ".agentcell", "TASK.md"), []byte(os.Getenv(runtimeapi.EnvTask)+"\n"), 0o644)
+	task := "# 本单任务\n\n" + os.Getenv(runtimeapi.EnvTask) + "\n"
+	if desc := os.Getenv(runtimeapi.EnvDescription); desc != "" {
+		_ = os.WriteFile(filepath.Join(wt, ".agentcell", "PRODUCT.md"),
+			[]byte("# 产品描述(用户随预览持续校准)\n\n"+desc+"\n"), 0o644)
+		task += "\n产品整体描述见 `.agentcell/PRODUCT.md`,以它为准对齐方向。\n"
+	}
+	if _, err := os.Stat(runtimeapi.KnowledgePath); err == nil {
+		task += "\n项目持久知识库在 `" + runtimeapi.KnowledgePath + "/`(跨会话共享):" +
+			"开工前浏览;本单学到的可复用经验(约定、坑、决策)以 md 文件沉淀回去。\n"
+	}
+	_ = os.WriteFile(filepath.Join(wt, ".agentcell", "TASK.md"), []byte(task), 0o644)
 
 	fmt.Printf("session %s: running %v in %s\n", id, argv, wt)
 	cmd := exec.Command(argv[0], argv[1:]...)

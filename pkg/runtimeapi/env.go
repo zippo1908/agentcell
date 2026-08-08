@@ -13,10 +13,16 @@ const (
 	EnvPreviewTarget = "AGENTCELL_PREVIEW_TARGET" // directory the preview serves from
 
 	// Session and settle containers.
-	EnvSessionID  = "AGENTCELL_SESSION_ID"
-	EnvTask       = "AGENTCELL_TASK"
-	EnvRunner     = "AGENTCELL_RUNNER"
-	EnvBaseBranch = "AGENTCELL_BASE_BRANCH"
+	EnvSessionID   = "AGENTCELL_SESSION_ID"
+	EnvTask        = "AGENTCELL_TASK"
+	EnvRunner      = "AGENTCELL_RUNNER"
+	EnvBaseBranch  = "AGENTCELL_BASE_BRANCH"
+	EnvDescription = "AGENTCELL_DESCRIPTION" // the Cell's living product description
+
+	// KnowledgePath is the persistent, session-shared knowledge directory
+	// on the workspace PVC (outside the git checkout). The anchor creates
+	// it; every session's TASK.md points the agent at it.
+	KnowledgePath = "/workspace/knowledge"
 
 	// Session credential indirection: the pod defines EnvAPIKey from a
 	// per-session Secret, and protocol variables reference it via the

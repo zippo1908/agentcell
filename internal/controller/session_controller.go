@@ -216,6 +216,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		{Name: runtimeapi.EnvTask, Value: sess.Spec.Task},
 		{Name: runtimeapi.EnvRunner, Value: sess.Spec.Runner},
 		{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
+		{Name: runtimeapi.EnvDescription, Value: cell.Spec.Description},
 	}
 	for k, v := range r.Registry.SessionEnv(binding, "$("+runtimeapi.EnvAPIKey+")") {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})

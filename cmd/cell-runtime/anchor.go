@@ -25,6 +25,9 @@ func runAnchor() error {
 	if err := ensureClone(); err != nil {
 		return err
 	}
+	// The persistent, session-shared knowledge directory lives on the PVC
+	// outside the checkout; sessions read it and distill learnings back.
+	_ = os.MkdirAll(runtimeapi.KnowledgePath, 0o755)
 	go reapZombies()
 	go heartbeat()
 
