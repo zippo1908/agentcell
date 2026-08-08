@@ -49,6 +49,40 @@ Components:
 
 Isolation: namespace per project, Pod Security (restricted), non-root containers, NetworkPolicy, optional RuntimeClass (Kata/gVisor) for a hard-isolation tier.
 
+## Quick start
+
+```sh
+# 1. Build and load images (or pull published ones once released)
+make build build-runtime-static
+podman build -t ghcr.io/agentcell/celld  -f images/celld/Containerfile .
+podman build -t ghcr.io/agentcell/devbox -f images/devbox/Containerfile .
+
+# 2. Install into any cluster (single machine: `curl -sfL https://get.k3s.io | sh -`)
+kubectl apply -f config/crd/ -f config/install.yaml
+
+# 3. Create the credentials your sessions will burn
+kubectl -n agentcell-system create secret generic bailian-key --from-literal=key=sk-...
+kubectl -n agentcell-system create secret generic git-cred \
+  --type=kubernetes.io/basic-auth --from-literal=username=bot --from-literal=password=ghp_...
+
+# 4. A cell with a resident product preview
+cellctl cell create shop --repo https://github.com/you/shop.git \
+  --image ghcr.io/agentcell/devbox --secret git-cred \
+  --preview "npm run dev -- --host" --preview-port 5173 \
+  --description "极简版电商:商品列表 + 购物车"
+
+# 5. Dispatch work and watch it live
+cellctl dispatch shop --task "把商品卡片改成两列布局" \
+  --runner claude --provider aliyun-bailian --model qwen3-coder-plus \
+  --cred bailian-key --follow
+```
+
+Then open celld (`kubectl -n agentcell-system port-forward svc/celld 8080:80`) at
+`http://localhost:8080`: product description and dispatch on the left, the
+**resident live preview** on the right — watch the agent work and recalibrate
+the description against what you see. When the session settles, its
+`session/<id>` branch is pushed for review.
+
 ## Build
 
 ```sh

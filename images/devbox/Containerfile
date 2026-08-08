@@ -1,0 +1,21 @@
+# Default devbox image: what anchor and session pods run. Projects may
+# supply their own image; the only contract is:
+#   - /agentcell/cell-runtime exists (baked in below)
+#   - git, and whatever toolchain + agent CLIs the project needs
+# Build from repo root:
+#   make build-runtime-static
+#   podman build -t ghcr.io/agentcell/devbox -f images/devbox/Containerfile .
+FROM docker.io/library/node:22-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git tmux ripgrep jq ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Agent CLIs. Pin versions in real deployments; npm route shown for the two
+# npm-distributed ones. pi and others: add per project image.
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+
+COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime
+RUN chmod 755 /agentcell/cell-runtime
+
+WORKDIR /workspace

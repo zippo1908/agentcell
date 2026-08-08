@@ -1,23 +1,135 @@
-// celld is the non-root control-plane daemon: HTTP API, auth, project and
-// session registry, review queue, reconciler, and the embedded web UI.
-// All privileged operations are delegated to cell-provisionerd over a
-// typed gRPC contract on a Unix domain socket.
-//
-// M0 stub: real wiring lands in M2+.
+// celld is the AgentCell control plane: a controller-manager reconciling
+// the Cell and Session CRDs, plus the HTTP surface (calibration UI, control
+// API, and the resident product-preview reverse proxy).
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	logzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	acv1 "github.com/agentcell/agentcell/api/v1alpha1"
+	"github.com/agentcell/agentcell/internal/access"
+	"github.com/agentcell/agentcell/internal/controller"
 	"github.com/agentcell/agentcell/internal/version"
+	"github.com/agentcell/agentcell/internal/webui"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
+	var (
+		httpAddr    = flag.String("http-addr", ":8080", "UI/API/preview listen address")
+		metricsAddr = flag.String("metrics-addr", ":8081", "Prometheus metrics address")
+		controlNS   = flag.String("control-namespace", envOr("AGENTCELL_NAMESPACE", "agentcell-system"),
+			"namespace holding Cell/Session CRs")
+		providersDir = flag.String("providers-dir", "/etc/agentcell/providers.d",
+			"directory of provider preset overlays (*.yaml)")
+		showVersion = flag.Bool("version", false, "print version and exit")
+	)
+	flag.Parse()
+	if *showVersion {
 		fmt.Println("celld", version.String())
 		return
 	}
-	fmt.Fprintln(os.Stderr, "celld: not implemented yet (M2); see docs/PLAN.md")
-	os.Exit(1)
+	ctrl.SetLogger(logzap.New())
+	log := ctrl.Log.WithName("celld")
+
+	registry, err := loadRegistry(*providersDir)
+	if err != nil {
+		log.Error(err, "load provider registry")
+		os.Exit(1)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		log.Error(err, "add client-go scheme")
+		os.Exit(1)
+	}
+	if err := acv1.AddToScheme(scheme); err != nil {
+		log.Error(err, "add agentcell scheme")
+		os.Exit(1)
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: *metricsAddr},
+		HealthProbeBindAddress: "0", // /healthz served on the main mux below
+	})
+	if err != nil {
+		log.Error(err, "new manager")
+		os.Exit(1)
+	}
+	if err := (&controller.CellReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "setup cell controller")
+		os.Exit(1)
+	}
+	if err := (&controller.SessionReconciler{Client: mgr.GetClient(), Registry: registry}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "setup session controller")
+		os.Exit(1)
+	}
+
+	ui := &webui.Handler{Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry}
+	mux := http.NewServeMux()
+	mux.Handle("/", ui.Routes())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_ = healthz.Ping(nil)
+		w.WriteHeader(http.StatusOK)
+	})
+	// The HTTP surface starts with the manager so it uses the warmed cache.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		srv := &http.Server{Addr: *httpAddr, Handler: mux}
+		go func() {
+			<-ctx.Done()
+			_ = srv.Close()
+		}()
+		log.Info("http listening", "addr", *httpAddr, "controlNamespace", *controlNS)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})); err != nil {
+		log.Error(err, "add http runnable")
+		os.Exit(1)
+	}
+
+	log.Info("starting", "version", version.String())
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		log.Error(err, "manager exited")
+		os.Exit(1)
+	}
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func loadRegistry(dir string) (*access.Registry, error) {
+	var overlays [][]byte
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			overlays = append(overlays, raw)
+		}
+	}
+	return access.Load(overlays...)
 }

@@ -1,0 +1,83 @@
+# Minimal install manifest (Helm chart supersedes this at M10):
+#   kubectl apply -f config/crd/ -f config/install.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentcell-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: celld
+  namespace: agentcell-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentcell-celld
+rules:
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells", "sessions"]
+    verbs: ["*"]
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells/status", "sessions/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentcell-celld
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentcell-celld
+subjects:
+  - kind: ServiceAccount
+    name: celld
+    namespace: agentcell-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celld
+  namespace: agentcell-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: celld}
+  template:
+    metadata:
+      labels: {app: celld}
+    spec:
+      serviceAccountName: celld
+      containers:
+        - name: celld
+          image: ghcr.io/agentcell/celld:latest
+          args: ["--control-namespace=agentcell-system"]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: celld
+  namespace: agentcell-system
+spec:
+  selector: {app: celld}
+  ports:
+    - {name: http, port: 80, targetPort: http}

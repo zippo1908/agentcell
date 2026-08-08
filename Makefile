@@ -5,7 +5,7 @@ LDFLAGS  := -s -w \
   -X github.com/agentcell/agentcell/internal/version.Version=$(VERSION) \
   -X github.com/agentcell/agentcell/internal/version.Commit=$(COMMIT)
 
-BINARIES := celld cell-provisionerd cell-runtime cellctl
+BINARIES := celld cell-runtime cellctl
 
 .PHONY: all build $(BINARIES) test vet fmt-check lint clean
 

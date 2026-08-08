@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentCell</title>
+<style>
+  :root {
+    --bg: #f6f7f5; --panel: #ffffff; --ink: #1d211f; --mut: #67706b;
+    --line: #dde1de; --acc: #2c6e49; --acc-ink: #ffffff; --bad: #b3452f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171a18; --panel: #1f2321; --ink: #e6e9e7; --mut: #96a09a;
+      --line: #333936; --acc: #58a17b; --acc-ink: #10140f; --bad: #d97b62;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
+  header select { font-size: 14px; padding: 4px 8px; }
+  .status { color: var(--mut); font-size: 12px; }
+  main { display: grid; grid-template-columns: minmax(340px, 30%) 1fr; gap: 12px;
+         padding: 12px 16px; height: calc(100vh - 49px); }
+  .col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+          padding: 12px; }
+  .card h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
+             letter-spacing: .08em; color: var(--mut); }
+  textarea, input, select { width: 100%; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: inherit; }
+  textarea { resize: vertical; }
+  button { border: 0; border-radius: 6px; padding: 7px 14px; font: inherit;
+           cursor: pointer; background: var(--acc); color: var(--acc-ink); }
+  button.ghost { background: transparent; color: var(--mut);
+                 border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  .row > * { flex: 1; }
+  #sessions { overflow-y: auto; flex: 1; min-height: 0; }
+  .sess { border-top: 1px solid var(--line); padding: 8px 2px; }
+  .sess .task { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess .sub { color: var(--mut); font-size: 12px; display: flex; gap: 8px;
+               align-items: center; flex-wrap: wrap; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px;
+          font-size: 11px; border: 1px solid var(--line); }
+  .chip.Running  { border-color: var(--acc); color: var(--acc); }
+  .chip.Settled  { background: var(--acc); color: var(--acc-ink); border-color: var(--acc); }
+  .chip.Error    { border-color: var(--bad); color: var(--bad); }
+  .preview { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+  .preview .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .preview iframe { flex: 1; width: 100%; border: 1px solid var(--line);
+                    border-radius: 8px; background: #fff; }
+  label.chk { display: flex; gap: 6px; align-items: center; font-size: 13px;
+              color: var(--mut); }
+  label.chk input { width: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AgentCell</h1>
+  <select id="cellSel" aria-label="选择 Cell"></select>
+  <span class="status" id="cellStatus"></span>
+</header>
+<main>
+  <div class="col">
+    <div class="card">
+      <h2>产品描述(边看预览边校准)</h2>
+      <textarea id="desc" rows="7" placeholder="这个产品是什么、给谁用、当前最重要的差距……"></textarea>
+      <div class="row">
+        <button id="saveDesc">保存描述</button>
+        <button class="ghost" id="descToTask">作为任务派工 ↓</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>派工</h2>
+      <textarea id="task" rows="4" placeholder="这一单要 agent 做什么(默认可从描述带入)"></textarea>
+      <div class="row">
+        <select id="runner"></select>
+        <select id="provider"></select>
+      </div>
+      <div class="row">
+        <input id="model" placeholder="model(可留空)">
+        <input id="cred" placeholder="凭据 Secret 名">
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="follow" checked>预览跟随这单(实时看进展)</label>
+        <button id="dispatch">派工</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <h2>会话</h2>
+      <div id="sessions"></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card preview">
+      <div class="bar">
+        <h2 style="margin:0;flex:1">产品预览(常驻)</h2>
+        <span class="status" id="followState"></span>
+        <button class="ghost" id="reload">刷新</button>
+        <button class="ghost" id="openTab">新标签打开</button>
+      </div>
+      <iframe id="frame" title="产品预览"></iframe>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let cell = null;
+
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || r.status);
+  return body;
+}
+
+async function loadMeta() {
+  const m = await j('/api/meta');
+  $('runner').innerHTML = m.runners.map(x => `<option>${x}</option>`).join('');
+  $('provider').innerHTML = m.providers.map(x => `<option>${x}</option>`).join('');
+}
+
+async function loadCells() {
+  const cells = await j('/api/cells');
+  $('cellSel').innerHTML = cells.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+  if (!cell && cells.length) { cell = cells[0].name; }
+  $('cellSel').value = cell || '';
+}
+
+async function refresh() {
+  if (!cell) return;
+  const d = await j('/api/cells/' + cell);
+  const c = d.cell;
+  $('cellStatus').textContent =
+    `${c.phase || '…'} · 槽位 ${c.activeSessions}/${c.maxSessions}` + (c.message ? ' · ' + c.message : '');
+  if (document.activeElement !== $('desc')) $('desc').value = c.description || '';
+  $('followState').textContent = c.followSession ? `跟随会话 ${c.followSession.slice(0, 8)}…` : '显示主检出';
+  const frame = $('frame');
+  const want = c.previewPath || `/preview/${cell}/`;
+  if (!frame.dataset.src) { frame.src = want; frame.dataset.src = want; }
+  $('sessions').innerHTML = d.sessions.map(s => `
+    <div class="sess">
+      <div class="task" title="${esc(s.task)}">${esc(s.task)}</div>
+      <div class="sub">
+        <span class="chip ${s.phase}">${s.phase || '…'}</span>
+        <span>${s.runner}·${s.provider}</span>
+        ${s.branch ? `<code>${s.branch}</code>` : ''}
+        ${s.message ? `<span title="${esc(s.message)}">ℹ</span>` : ''}
+        ${['Settled','Discarded','Error'].includes(s.phase) ? '' :
+          `<button class="ghost" onclick="settle('${s.name}')">结算</button>`}
+      </div>
+    </div>`).join('') || '<div class="status">还没有会话 — 在左侧派第一单。</div>';
+}
+
+function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function settle(name) {
+  try { await j('/api/sessions/' + name, {method: 'DELETE'}); } catch (e) { alert(e.message); }
+  refresh();
+}
+
+$('cellSel').onchange = () => { cell = $('cellSel').value; $('frame').removeAttribute('data-src'); refresh(); };
+$('saveDesc').onclick = async () => {
+  try {
+    await j(`/api/cells/${cell}/description`, {method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({description: $('desc').value})});
+  } catch (e) { alert(e.message); }
+};
+$('descToTask').onclick = () => { $('task').value = $('desc').value; };
+$('dispatch').onclick = async () => {
+  try {
+    await j(`/api/cells/${cell}/dispatch`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        task: $('task').value, runner: $('runner').value, provider: $('provider').value,
+        model: $('model').value, credentialSecret: $('cred').value,
+        followPreview: $('follow').checked })});
+    $('task').value = '';
+    refresh();
+  } catch (e) { alert(e.message); }
+};
+$('reload').onclick = () => { $('frame').src = $('frame').src; };
+$('openTab').onclick = () => window.open($('frame').dataset.src, '_blank');
+
+(async () => {
+  await loadMeta();
+  await loadCells();
+  await refresh();
+  setInterval(async () => { try { await loadCells(); await refresh(); } catch {} }, 4000);
+})();
+</script>
+</body>
+</html>

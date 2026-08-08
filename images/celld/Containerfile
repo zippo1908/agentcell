@@ -1,0 +1,6 @@
+# celld operator image. Build from repo root:
+#   make build && podman build -t ghcr.io/agentcell/celld -f images/celld/Containerfile .
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY bin/celld /celld
+USER nonroot
+ENTRYPOINT ["/celld"]

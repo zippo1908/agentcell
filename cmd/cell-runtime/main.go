@@ -1,15 +1,12 @@
-// cell-runtime is the multi-call binary that runs inside every Cell
-// container. Applets are selected by the first argument (or argv[0] symlink):
+// cell-runtime is the static multi-call binary baked into every Cell
+// image. Applets:
 //
-//	init        container PID 1: umask, zombie reaping, heartbeat, tmux healing,
-//	            per-slot cgroup subtrees (cgroup v2 delegation from quadlet)
-//	slot        create / settle / reclaim a session slot (worktree + tmux + cgroup)
-//	agent-entry launch and supervise the agent process of one session
-//
-// The binary is statically linked (CGO_ENABLED=0) so it can be bind-mounted
-// read-only into any container image.
-//
-// M0 stub: real applets land in M3/M4.
+//	anchor   PID 1 of the anchor pod: clone/refresh the repo, keep the
+//	         resident product preview running, reap zombies, heartbeat
+//	session  PID 1 of a session pod: create the worktree, run the agent
+//	settle   settle job: commit/push produced work, reclaim the worktree,
+//	         report {produced,branch} via the termination message
+//	askpass  git credential helper (reads GIT_USERNAME / GIT_TOKEN)
 package main
 
 import (
@@ -24,14 +21,24 @@ func main() {
 	if len(os.Args) > 1 {
 		applet = os.Args[1]
 	}
+	var err error
 	switch applet {
 	case "--version":
 		fmt.Println("cell-runtime", version.String())
-	case "init", "slot", "agent-entry":
-		fmt.Fprintf(os.Stderr, "cell-runtime %s: not implemented yet (M3/M4); see docs/PLAN.md\n", applet)
-		os.Exit(1)
+	case "anchor":
+		err = runAnchor()
+	case "session":
+		err = runSession()
+	case "settle":
+		err = runSettle()
+	case "askpass":
+		err = runAskpass(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: cell-runtime <init|slot|agent-entry|--version>")
+		fmt.Fprintln(os.Stderr, "usage: cell-runtime <anchor|session|settle|askpass|--version>")
 		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cell-runtime "+applet+": "+err.Error())
+		os.Exit(1)
 	}
 }
