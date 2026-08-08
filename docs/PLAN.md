@@ -187,6 +187,8 @@ flowchart TB
 
 依赖关系:M0→M1→M2→M3→M4 是主干,M5/M6 依赖 M4,M7 依赖 M4+M6,M8 依赖 M4,M9 依赖 M5+M7,M10 收尾。M5 与 M6 可并行派工。
 
+> **进度(2026-08-08)**:全链路纵切片已提交(`5222d59`)——ids/接入层/CRD/双控制器(槽位闸+settle finalizer+预览跟随)/cell-runtime 三 applet/celld(校准 UI+预览反代)/cellctl/CRD+install 清单/两个镜像定义;单测全绿(含 fake-client 控制器 5 用例)。**新增一等需求:实例化即常驻产品预览**——Cell 锚点跑 dev server,celld 反代 `/preview/<cell>/`,UI 左侧改描述/派工、右侧 iframe 实时看;`--follow` 让预览跟随某会话的 worktree 看进行中的活。M1–M4 主干与 M6/M7/M9 的核心路径已被切片覆盖,剩余:真机 k3s e2e、终端 attach(M5)、批阅队列 UI 完整化、broker 化 git 凭据、Helm chart(M10)。
+
 ## 6. 派工方式(给 Fable 的任务包模板)
 
 每个 issue 正文用这个骨架,Fable 拿到即可独立开工:
