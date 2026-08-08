@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: gofmt
+        run: make fmt-check
+      - name: vet
+        run: make vet
+      - name: test
+        run: make test
+      - name: build
+        run: make build build-runtime-static
+
+  # Real-machine e2e (useradd/podman/quadlet need root + systemd) cannot run
+  # on hosted runners; it runs via `make e2e` on a self-hosted runner or a
+  # developer box, and its output is attached to the PR as evidence.

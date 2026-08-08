@@ -1,0 +1,94 @@
+# AgentCell built-in provider presets (embedded at build time).
+# Override or extend via /etc/agentcell/providers.d/*.yaml — user files win.
+#
+# Endpoint URLs drift; these are last-known-good values. Any field here can
+# be overridden without touching code. See docs/adr/0002-provider-access-layer.md.
+version: 1
+
+providers:
+  anthropic:
+    display_name: Anthropic
+    region: global
+    protocols:
+      anthropic:
+        base_url: https://api.anthropic.com
+    auth_env: ANTHROPIC_API_KEY
+
+  openai:
+    display_name: OpenAI
+    region: global
+    protocols:
+      openai:
+        base_url: https://api.openai.com/v1
+    auth_env: OPENAI_API_KEY
+
+  aliyun-bailian:
+    display_name: 阿里云百炼 (DashScope / 通义千问)
+    region: cn
+    protocols:
+      openai:
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      anthropic:
+        # Anthropic-compatible proxy for Claude Code; verify against the
+        # current DashScope documentation before relying on it.
+        base_url: https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy
+    auth_env: DASHSCOPE_API_KEY
+    models: [qwen3-coder-plus, qwen-max]
+    docs: https://help.aliyun.com/zh/model-studio/
+
+  tencent-hunyuan:
+    display_name: 腾讯混元
+    region: cn
+    protocols:
+      openai:
+        base_url: https://api.hunyuan.cloud.tencent.com/v1
+    auth_env: HUNYUAN_API_KEY
+    docs: https://cloud.tencent.com/document/product/1729
+
+  deepseek:
+    display_name: DeepSeek
+    region: cn
+    protocols:
+      openai:
+        base_url: https://api.deepseek.com
+      anthropic:
+        base_url: https://api.deepseek.com/anthropic
+    auth_env: DEEPSEEK_API_KEY
+    models: [deepseek-chat, deepseek-reasoner]
+
+  moonshot:
+    display_name: 月之暗面 Kimi
+    region: cn
+    protocols:
+      openai:
+        base_url: https://api.moonshot.cn/v1
+      anthropic:
+        base_url: https://api.moonshot.cn/anthropic
+    auth_env: MOONSHOT_API_KEY
+
+  zhipu:
+    display_name: 智谱 GLM
+    region: cn
+    protocols:
+      openai:
+        base_url: https://open.bigmodel.cn/api/paas/v4
+      anthropic:
+        base_url: https://open.bigmodel.cn/api/anthropic
+    auth_env: ZHIPUAI_API_KEY
+
+  openrouter:
+    display_name: OpenRouter
+    region: global
+    protocols:
+      openai:
+        base_url: https://openrouter.ai/api/v1
+    auth_env: OPENROUTER_API_KEY
+
+# Runners declare which protocols they speak; a (runner, provider, model)
+# binding is valid iff the protocol sets intersect. Runner definitions are
+# code (five-point interface, see docs/adr/0002), summarized here for
+# reference only:
+#
+#   claude  -> anthropic            (env: ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL)
+#   codex   -> openai               (env: OPENAI_BASE_URL / OPENAI_API_KEY; or ~/.codex/auth.json)
+#   pi      -> openai + anthropic   (per-provider API key envs)
