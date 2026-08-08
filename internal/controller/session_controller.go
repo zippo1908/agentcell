@@ -18,10 +18,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	acv1 "github.com/agentcell/agentcell/api/v1alpha1"
-	"github.com/agentcell/agentcell/internal/access"
-	"github.com/agentcell/agentcell/pkg/ids"
-	"github.com/agentcell/agentcell/pkg/runtimeapi"
+	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
+	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 const (

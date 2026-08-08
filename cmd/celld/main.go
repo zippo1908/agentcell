@@ -19,11 +19,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	acv1 "github.com/agentcell/agentcell/api/v1alpha1"
-	"github.com/agentcell/agentcell/internal/access"
-	"github.com/agentcell/agentcell/internal/controller"
-	"github.com/agentcell/agentcell/internal/version"
-	"github.com/agentcell/agentcell/internal/webui"
+	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
+	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/internal/controller"
+	"github.com/zippo1908/agentcell/internal/version"
+	"github.com/zippo1908/agentcell/internal/webui"
 )
 
 func main() {

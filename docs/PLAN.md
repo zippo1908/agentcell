@@ -223,7 +223,7 @@ make test && make e2e-<包名>
 
 ## 8. 待拍板(开工前需要你定的)
 
-1. **项目名**:✅ 已定 **AgentCell**(2026-08-08)。本地仓库 `/home/tinci/agentcell`,module `github.com/agentcell/agentcell`(GitHub org/repo 建好后如不同名,首推前 sed 一次 module path 即可)。
+1. **项目名**:✅ 已定 **AgentCell**(2026-08-08)。本地仓库 `/home/tinci/agentcell`,module `github.com/zippo1908/agentcell`(GitHub org/repo 建好后如不同名,首推前 sed 一次 module path 即可)。
 2. **License**:建议 Apache-2.0(企业采用友好);MIT 也可。
 3. **AIP 代码路线**:§2 的 A(clean-room,默认)还是 B(申请授权抽取)。
 4. **GitHub 归属**:个人账号还是新 org;是否从第一天公开(建议私有开发到 M4 有真东西再 public)。

@@ -6,8 +6,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/agentcell/agentcell/pkg/ids"
-	"github.com/agentcell/agentcell/pkg/runtimeapi"
+	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 // runSettle is the mandatory reckoning after every session: commit

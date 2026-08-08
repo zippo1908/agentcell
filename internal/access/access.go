@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/agentcell/agentcell/configs"
+	"github.com/zippo1908/agentcell/configs"
 )
 
 // Protocol flavors spoken between runners and providers.

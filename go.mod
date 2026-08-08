@@ -1,4 +1,4 @@
-module github.com/agentcell/agentcell
+module github.com/zippo1908/agentcell
 
 go 1.26
 

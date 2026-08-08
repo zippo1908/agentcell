@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/agentcell/agentcell/pkg/ids"
-	"github.com/agentcell/agentcell/pkg/runtimeapi"
+	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 // runSession is PID 1 of a session pod: carve a worktree out of the shared

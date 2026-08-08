@@ -17,9 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	acv1 "github.com/agentcell/agentcell/api/v1alpha1"
-	"github.com/agentcell/agentcell/internal/access"
-	"github.com/agentcell/agentcell/pkg/ids"
+	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
+	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/pkg/ids"
 )
 
 //go:embed index.html

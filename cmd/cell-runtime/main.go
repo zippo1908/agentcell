@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agentcell/agentcell/internal/version"
+	"github.com/zippo1908/agentcell/internal/version"
 )
 
 func main() {

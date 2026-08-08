@@ -2,8 +2,8 @@ BINDIR   := bin
 VERSION  ?= v0.0.0-dev
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -s -w \
-  -X github.com/agentcell/agentcell/internal/version.Version=$(VERSION) \
-  -X github.com/agentcell/agentcell/internal/version.Commit=$(COMMIT)
+  -X github.com/zippo1908/agentcell/internal/version.Version=$(VERSION) \
+  -X github.com/zippo1908/agentcell/internal/version.Commit=$(COMMIT)
 
 BINARIES := celld cell-runtime cellctl
 

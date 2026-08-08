@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agentcell/agentcell/pkg/ids"
-	"github.com/agentcell/agentcell/pkg/runtimeapi"
+	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 // runAnchor is PID 1 of the anchor pod: it makes the workspace real (clone
