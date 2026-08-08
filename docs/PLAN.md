@@ -1,6 +1,8 @@
 # AgentCell — 开源项目计划
 
-> 一句话:**每个项目一个常驻的"细胞"容器,AI 开发员工以会话槽位(tmux + worktree + cgroup)进驻干活,下线即回收,SDLC 闭环在实例内完成。**
+> 一句话:**每个项目一个常驻的"细胞"实例,AI 开发员工以会话槽位(worktree + tmux + 资源限额)进驻干活,下线即清算回收,SDLC 闭环在实例内完成。**
+>
+> ⚠️ **重大修订(2026-08-08,ADR-0003)**:K8s 升格为**基础实现**——部署二选一:自带 K8s(本地私有云,单机走 k3s)或云厂商托管 K8s(阿里 ACK/腾讯 TKE 一等公民)。控制面 = Operator + 两个 CRD(Cell/Session);Cell = Namespace+常驻锚点 StatefulSet+PVC,Session = 挂同 PVC 的 Pod(limits 即槽位限额,finalizer 挂 settle);root 的 provisionerd 从 v0.1 移除(其职责由 K8s API 接管),host-lite 驱动进 backlog。本文 §3/§4 的图为原 systemd 形态,概念不变、资源映射以 repo `docs/adr/0003` 的 D2 表为准;里程碑表已按 K8s 形态修订。
 >
 > 形态:GitHub 开源项目(Apache-2.0,建议),自托管、单机起步、单二进制安装。
 > 执行方式:计划切成 M0–M10 共 11 个任务包,每包可独立派给 Fable 模型完成,人只批阅 PR。
@@ -151,7 +153,9 @@ flowchart TB
 | 语言 | **Go 1.26+**,`CGO_ENABLED=0` 全静态 | 静态交叉编译(cell-runtime 要注入任意容器,静态是硬需求);goroutine 天然适合 pty/stream 管道;AIP 已验证。不选 Rust:无既验代码、招手快;不选 TS/Node:运行时依赖违背单二进制 |
 | 进程间 | **gRPC over UDS**(grpc-go + protobuf) | 类型化契约可冻结、可 mock;UDS + group 权限做特权边界。不选 HTTP/JSON:契约漂移没有编译期约束 |
 | 控制面存储 | **SQLite**(modernc.org/sqlite 纯 Go,WAL + busy_timeout,embed 顺序迁移) | 零外部服务、0600 单文件好备份;单机规模远够。不选 Postgres:多一个要运维的东西,反卖点 |
-| 隔离原语 | **rootless podman + quadlet** + userns/subuid + **pasta** + **cgroup v2 委托** + **git worktree** + **tmux** | 全是系统自带原语,平台只是编排者。不选 Docker:daemon 常驻 root、无 quadlet;不选 K8s:单机自托管定位,K8s 是反卖点;不选 Firecracker/microVM:v0.1 过重,留作未来驱动 |
+| 基础实现 | **K8s Operator + CRD**(controller-runtime + envtest);单机快速路径 = **k3s** | ADR-0003:部署二选一(自带 K8s=私有云 / 云厂商托管 K8s);对账/存储/重启全交给 K8s;operator 是社区最熟的开源姿势 |
+| 隔离原语 | Namespace per project + Pod Security(restricted)+ 非 root 容器 + NetworkPolicy + 可选 RuntimeClass(Kata/gVisor)+ **git worktree** + **tmux** | 全是 K8s 原生语言;强隔离档留给 RuntimeClass 而非自造 |
+| 云厂商集成 | Helm values 预置包 `deploy/presets/`:k3s / **ack(阿里云)** / **tke(腾讯云)** / vanilla | 差异只进 values(StorageClass/LB/ECI 弹性会话),operator 永远只说 vanilla K8s API |
 | Git 操作 | **系统 git CLI**(exec argv,无 shell) | worktree/凭据边角 go-git 覆盖不全;forge 走 REST 适配器(GitHub→GitLab),broker spool 就是文件系统 JSON |
 | 终端链路 | **creack/pty + coder/websocket + @xterm/xterm** | AIP 全链路验证过;二进制帧裸透传,文本帧控制消息 |
 | Agent 层 | runner×provider 注册表;headless 走 `claude -p --output-format stream-json` / `codex exec` | 见附录 A;平台不内嵌任何模型 SDK——agent 是外部进程,天生解耦 |
@@ -161,7 +165,7 @@ flowchart TB
 | 构建/发布 | Makefile + golangci-lint + GitHub Actions + goreleaser + install.sh | 产物 = 4 个二进制(celld / cell-provisionerd / cell-runtime multi-call / cellctl)+ 一个 devbox 基础镜像(Containerfile,常用工具链;项目可换自定义镜像) |
 | 测试 | go test(单元)+ 脚本化真机 e2e(useradd/podman 需真 root,跑自托管 runner 或本地 `make e2e`) | GitHub 托管 runner 只跑 lint+单测+构建;e2e 结果作为 PR 必附证据 |
 
-产品形态决策:**v0.1 CLI-first**——`cellctl` 覆盖全部操作,Web UI 最后做(M9)。依赖总数目标:直接依赖 ≤ 12 个(AIP 是 11 个,证明够用)。
+产品形态决策:**v0.1 CLI-first**——`cellctl` 覆盖全部操作,Web UI 最后做(M9)。依赖预算修订(ADR-0003):k8s 驱动引 controller-runtime/client-go 全家桶不可避免,收紧点改为**核心业务包不 import k8s 依赖**(领域逻辑可脱离集群单测)。
 
 ## 5. 里程碑(每个 = 一个可派给 Fable 的任务包)
 
@@ -171,15 +175,15 @@ flowchart TB
 |---|---|---|---|
 | **M0** | 仓库自举 ✅ | LICENSE(Apache-2.0)、go.mod、Makefile、GitHub Actions(fmt+vet+test+build)、README(EN/中文)、`docs/adr/0001` 架构决策、`docs/adr/0002` 云服务接入层(阿里云/腾讯云一等公民)、`configs/providers.yaml` 预置 | CI 绿;README 讲清核心模型 |
 | **M1** | 领域与命名 | `pkg/ids`:ULID + 从 ProjectID/SessionID 派生 unix user、容器名、tmux 名、worktree 路径、scope 名(**全平台唯一的命名派生处**);SQLite schema v1 + 迁移框架 | 单测覆盖派生函数;迁移可重放 |
-| **M2** | Provisioner 骨架 | `proto/v1`(冻结铁律写进头注释)、UDS gRPC server/client、identity(useradd+subuid)、storage 目录树、mock client | 集成测试:root 下建/删一个项目 user+目录 |
-| **M3** | Cell 常驻化 | `cell-runtime` PID1(收僵尸/心跳/umask)、quadlet **文件模板**+渲染、`Provision/Start/Stop/Rebuild` RPC、`cellctl cell up/down/rebuild` | 真机:容器常驻、宿主重启后 quadlet 自动拉起、rebuild 幂等 |
-| **M4** | 会话槽位(**核心包**) | `CreateSession/EndSession/ListSessions` RPC:worktree add + Slot cgroup 子树(`cpu.max`/`memory.max`,quadlet 开 cgroup v2 委托、PID1 管理)+ tmux 会话;槽位数上限;**reaper**(会话进程退出/心跳超时→settle→回收) | 真机:两会话并发改同仓不互踩;kill -9 会话进程后 reaper 在 60s 内完成清算;槽满时排队;超限会话被 cgroup 压制而非拖垮 Cell |
+| **M2** | CRD + Operator 骨架 | **Cell/Session 两个 CRD schema(冻结,后续包不许改)**、controller-runtime 骨架、envtest 测试环境、mock 不再需要(K8s API 即契约) | envtest:建 Cell CR → controller 落 status;schema 校验拒绝非法 spec |
+| **M3** | Cell 锚点常驻化 | Cell controller:Namespace+StatefulSet 锚点+PVC 渲染;`cell-runtime` PID1 镜像(收僵尸/心跳/worktree 工具);k3s 单机开发环境脚本;`cellctl cell up/down/rebuild` | 真机(k3s):锚点常驻、节点重启自动拉起、rebuild 幂等重放 PVC 初始化 |
+| **M4** | Session Pod 生命周期(**核心包**) | Session controller:Pod(挂 Cell PVC+节点亲和)+ worktree + tmux + `resources.limits` 即槽位限额;`spec.maxSessions`+ResourceQuota 槽位闸;**finalizer 挂 settle**(有产出推分支/无产出丢弃/异常打包现场) | 真机(k3s):两会话并发改同仓不互踩;`kubectl delete pod` 强杀后 finalizer 60s 内完成清算;槽满时新 Session 排队;超限被 limits 压制而非拖垮节点 |
 | **M5** | 终端链路 | WebSocket→pty→`podman exec tmux attach`;per-slot 输入租约(同 slot 一人可写多人旁观) | 浏览器/CLI attach 同一会话;断开不杀会话 |
 | **M6** | Agent 进驻 | agent 注册表(claude/codex/自定义 argv);会话内 agent 监管(退避重启、状态文件);**凭据按会话注入**,容器 env 里零令牌 | 起两个会话分别用不同人的令牌,互相 env 里看不到对方 |
 | **M7** | Git 闭环 | 容器内 git 助手 + 宿主 broker(per-session spool);checkpoint;settle 推 `session/*` 分支;forge 适配器(GitHub):开 PR | e2e:派工→agent 改码→settle→GitHub 上出现 PR |
-| **M8** | Reconciler + 观测 | 逐 slot 对账(容器/tmux/scope/心跳四维)、退避、休眠降频;`/metrics`;`cellctl doctor` | 手工制造漂移(杀容器/杀 tmux/杀 scope)全部自愈或清算 |
+| **M8** | 对账强化 + 观测 | controller 对账补齐边角(锚点漂移/PVC 丢失/会话心跳)、退避;`/metrics`(Prometheus);`cellctl doctor` | chaos 验收:删锚点 pod/删 session pod/断心跳/塞满槽位,全部自愈或清算,无泄漏资源 |
 | **M9** | 最小 Web UI | 项目列表、Cell 状态、会话列表(占用/限额/时长)、Web 终端、批阅队列(diff + 通过→开 PR) | 全流程可在浏览器完成一遍 |
-| **M10** | v0.1 发布 | install.sh、`docs/`(安装/安全边界/威胁模型/运维)、demo GIF、GitHub Release + goreleaser | 一台干净 Rocky/Ubuntu 机器按 README 从零跑通 e2e |
+| **M10** | v0.1 发布 | **Helm chart + `deploy/presets/`(k3s/ack/tke/vanilla 四套 values)**、镜像发布(goreleaser+ghcr)、install.sh(k3s 快速路径)、`docs/`(安装/安全边界/威胁模型/运维)、demo GIF | 一台干净机器:install.sh→k3s→helm→e2e 全通;ACK 或 TKE 上按 preset 部署一遍全通 |
 
 依赖关系:M0→M1→M2→M3→M4 是主干,M5/M6 依赖 M4,M7 依赖 M4+M6,M8 依赖 M4,M9 依赖 M5+M7,M10 收尾。M5 与 M6 可并行派工。
 

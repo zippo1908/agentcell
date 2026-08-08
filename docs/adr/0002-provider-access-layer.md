@@ -40,7 +40,9 @@ Provider 预置放 `configs/providers.yaml`(编译期 embed),用户可在 `/etc/
 
 > 端点 URL 会漂移:预置表里的值是"最后已知良好",实现时以各云官方文档核准,且任何字段可被 providers.d 覆盖。
 
-### D5 基础设施云中立(与 D1–D4 相对)
+### D5 基础设施云中立(与 D1–D4 相对)—— **已被 ADR-0003 取代**
+
+> 2026-08-08:发起人决定 K8s 升格为基础实现,部署二选一(自带 K8s=私有云,或云厂商托管 K8s)。基础设施层的云厂商差异收敛在 Helm values 预置包,见 ADR-0003 D3。以下原文保留存档。
 
 "云适配"只发生在模型服务这一层。**基础设施层(部署宿主)保持云中立、零感知**:AgentCell 对宿主的全部要求是干净 Linux + systemd + podman + cgroup v2,阿里云 ECS、腾讯云 CVM、其他公有云、裸金属一视同仁;核心代码不引任何云厂商 SDK、不绑托管服务与 IAM。允许存在的只是便利层:install.sh 识别国内主流发行版(Alibaba Cloud Linux / OpenCloudOS 等 RHEL 系)、将来的云市场镜像或 Terraform 模板——它们在仓库的 `deploy/` 里,永远不进核心。
 

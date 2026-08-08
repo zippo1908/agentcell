@@ -15,8 +15,8 @@
 
 ```mermaid
 flowchart TB
-    subgraph CELL["Cell = resident rootless container (dedicated unix user + subuid range)"]
-        PID1["cell-runtime PID 1<br/>reap · heartbeat · tmux healing · slot cgroups"]
+    subgraph CELL["Cell = project Namespace + resident anchor pod + PVC (warm checkout)"]
+        PID1["cell-runtime PID 1<br/>reap · heartbeat · tmux · worktree lifecycle"]
         OBJ[("main checkout /workspace<br/>shared git object store")]
         subgraph S1["Slot s01 — occupied"]
             W1["worktree .cells/s01"]
@@ -35,23 +35,28 @@ Session lifecycle: `dispatch → work → settle → reclaim`. **Settle is manda
 
 ## Architecture
 
-Two-tier privilege separation, validated in production on an internal predecessor platform:
+**Kubernetes is the foundation** ([ADR-0003](docs/adr/0003-kubernetes-foundation.md)). Deploying AgentCell is a choice between two shapes of the same thing:
 
-- **`celld`** (non-root) — HTTP API, auth, project/session registry, review queue, reconciler, SQLite, embedded web UI.
-- **`cell-provisionerd`** (the only root component) — group-restricted Unix socket, typed gRPC only (never a command string, never a caller-chosen host path): unix users, storage, quadlet, slots, git broker, reaper.
-- **`cell-runtime`** — static multi-call binary, PID 1 inside every Cell.
+- **Bring your own K8s = on-prem private cloud.** Single machine? `k3s` + `helm install agentcell` and you're running in minutes. Nothing leaves your network.
+- **Managed K8s from a cloud vendor.** Alibaba Cloud ACK and Tencent Cloud TKE are first-class (Helm values presets in `deploy/presets/`, incl. ECI / super-node elastic sessions); any conformant cluster works.
+
+Components:
+
+- **`celld`** — a standard operator (controller-manager) reconciling two CRDs: **Cell** (project: Namespace + resident StatefulSet anchor + PVC holding the warm checkout) and **Session** (one work session: a Pod sharing the Cell's PVC, `resources.limits` as the slot budget, a finalizer that runs *settle* before reclaim).
+- **`cell-runtime`** — static multi-call binary, PID 1 of anchor and session pods (tmux, heartbeat, worktree lifecycle).
 - **`cellctl`** — operator CLI; v0.1 is CLI-first.
+- **git broker** — in-cluster deployment holding forge tokens; session pods reach the forge only through it (NetworkPolicy-enforced).
 
-Isolation is composed entirely from system primitives: rootless podman + quadlet, user namespaces, pasta, cgroup v2 delegation, git worktree, tmux.
+Isolation: namespace per project, Pod Security (restricted), non-root containers, NetworkPolicy, optional RuntimeClass (Kata/gVisor) for a hard-isolation tier.
 
 ## Build
 
 ```sh
-make build          # bin/{celld,cell-provisionerd,cell-runtime,cellctl}
+make build          # bin/{celld,cell-runtime,cellctl}
 make test lint
 ```
 
-Requires Go 1.26+. Runtime hosts additionally need systemd, podman ≥ 4.x, tmux, git.
+Requires Go 1.26+. Running the platform requires a Kubernetes cluster (single-node k3s is the supported quick path).
 
 ## License
 
