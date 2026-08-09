@@ -61,9 +61,19 @@ func ensureClone() error {
 		return fmt.Errorf("%s not set", runtimeapi.EnvRepoURL)
 	}
 	if _, err := os.Stat(filepath.Join(ids.RepoPath, ".git")); err == nil {
-		// Refresh so the preview of the main checkout tracks the base branch.
+		// Refresh AND advance the local base branch — sessions fork worktrees
+		// from the local ref, so fetch alone would leave them on a stale
+		// base. The main checkout is a pristine mirror of the remote base by
+		// contract (sessions edit worktrees, never this checkout), so a hard
+		// reset is the correct semantic.
 		if err := git(ids.RepoPath, "fetch", "origin"); err != nil {
 			fmt.Fprintln(os.Stderr, "anchor: fetch failed (continuing with stale checkout)")
+			return nil
+		}
+		if branch != "" {
+			if err := git(ids.RepoPath, "reset", "--hard", "origin/"+branch); err != nil {
+				fmt.Fprintln(os.Stderr, "anchor: reset to origin/"+branch+" failed (continuing)")
+			}
 		}
 		return nil
 	}

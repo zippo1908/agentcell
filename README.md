@@ -1,8 +1,25 @@
 # AgentCell
 
-**A workshop for AI coding agents: one resident Kubernetes-backed instance per project ("Cell"), disposable work sessions as slots inside it, a resident live product preview for the human to calibrate against, and the full SDLC loop — dispatch → work → settle → review → PR — closed within the instance.**
+**A workshop for AI coding agents: one resident Kubernetes-backed instance per project ("Cell"), disposable work sessions as slots inside it, a resident live product preview for the human to calibrate against, and an SDLC loop closed within the instance — dispatch → work → settle are implemented today; review queue → PR is on the roadmap (M7/M9).**
 
-> Status: **pre-alpha**. The full-chain vertical slice (operator, runtime, resident preview, calibration UI, CLI) compiles and is unit-tested; real-cluster e2e is the current milestone. See [docs/PLAN.md](docs/PLAN.md).
+> Status: **pre-alpha — not yet safe for company code, tokens, or production apps.** The vertical slice (operator, runtime, resident preview, calibration UI, CLI) compiles, passes unit tests (including real-git settle tests), but has not yet run a real-cluster e2e. Read the table below for exactly what is implemented vs designed.
+
+## Implemented vs designed
+
+| Capability | State |
+|---|---|
+| Cell operator: namespace / PVC / anchor / preview Service | ✅ implemented, fake-client tested |
+| Session lifecycle: slot gate → pod → TTL → settle Job → reclaim | ✅ implemented, fake-client tested |
+| Settle data-safety (push-confirmed or fail-and-retry, worktree kept) | ✅ implemented, real-git tested |
+| Resident preview + calibration UI + `/preview` `/app` proxies | ✅ implemented, not yet cluster-verified |
+| Two-zone release (`/app`, emptyDir clone, release/rollback) | ✅ implemented; storage-isolated only — same namespace/network, NetworkPolicy pending |
+| Provider registry (Aliyun Bailian / Tencent Hunyuan / …) | ✅ implemented, unit tested |
+| Real-cluster (k3s) e2e | ⬜ next milestone |
+| Review queue, diff approval, auto-PR, merge tracking | ⬜ designed (M7/M9) |
+| Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
+| NetworkPolicy / PSS restricted / non-root images | ⬜ designed (M8) |
+| Git-token broker (tokens out of anchor/prod env) | ⬜ designed |
+| Knowledge indexing / review-feedback distillation | ⬜ designed |
 
 [中文版在下面 ↓](#agentcell中文)
 
@@ -10,8 +27,8 @@
 
 - **Resident Cell, disposable Slot.** Ephemeral sandboxes (E2B/Daytona-style) pay a cold-start tax on every task; workspaces for humans (Coder/Gitpod) don't manage agents. AgentCell keeps the project environment warm while each work session gets its own git worktree, pod-level resource budget, and a mandatory *settle* on the way out.
 - **Watch while you steer.** Every Cell keeps the product's dev server running for its whole life. The UI puts the living product description next to the live preview: dispatch a task, watch the agent's work render in real time, recalibrate the description, dispatch again.
-- **Nothing lands unreviewed, nothing gets lost.** A session that produced commits settles into a `session/<id>` branch for review; an empty session is discarded; a crashed one is settled from whatever is on disk. A resident Cell never accumulates garbage.
-- **Credentials never enter the instance spec.** Model keys are injected per session via secret indirection; forge tokens touch only the anchor (clone) and settle jobs (push).
+- **Nothing gets lost.** A session that produced commits settles into a `session/<id>` branch; the settle job succeeds only after the push is confirmed — otherwise it fails, retries, and keeps the worktree on disk (real-git tested). Review/approval of those branches is roadmap (M7/M9); today they wait on the forge.
+- **Session pods never see forge credentials.** Model keys are injected per session via secret indirection ($(VAR), literal never in the pod spec — unit-tested). Honest limitation: anchor, settle and production pods do receive the git token via env, and they execute repo-controlled commands — a host-side broker (the AIP pattern) is designed to close this.
 - **China-cloud friendly, first-class.** Providers are data, not code: Alibaba Cloud Bailian, Tencent Hunyuan, DeepSeek, Moonshot/Kimi, Zhipu work through their OpenAI-/Anthropic-compatible endpoints, no proxy on domestic servers ([ADR-0002](docs/adr/0002-provider-access-layer.md)).
 
 ## What exactly is on one instance?
@@ -62,7 +79,7 @@ Each Cell has exactly two zones — development and testing are deliberately one
 | Process | Anchor pod's supervised dev server | Separate Deployment + Service |
 | Changes when | Every commit, every followed session, every preview restart | **Only on an explicit release** (UI button / `cellctl release <cell> [--ref v1.2]` / API) |
 
-Because the prod pod shares no volume and no process with the dev zone, no amount of debugging — crashed previews, dirty worktrees, force-killed sessions — can affect what production serves. A release stamps a new `releaseID`, which rolls the prod pod, which re-clones the ref: rollback is `cellctl release <cell> --ref <previous-tag>`.
+Because the prod pod shares no volume and no process with the dev zone, dev debugging — crashed previews, dirty worktrees, force-killed sessions — cannot change what production serves. Honest scope of that claim today: the isolation is **storage- and process-level**; both zones still share the namespace, the network and the devbox image, and the prod pod holds the git token (NetworkPolicy, a hardened prod image and a token broker are on the roadmap). `ref` must be a branch or tag (SHA pinning is roadmap). A release stamps a new `releaseID`, which rolls the prod pod, which re-clones the ref: rollback is `cellctl release <cell> --ref <previous-tag>`.
 
 ## Session lifecycle
 
@@ -78,12 +95,13 @@ flowchart LR
 
 Deleting a Session CR is safe at any moment: a finalizer guarantees settle runs first.
 
-## Security model
+## Security model (and its current honest limits)
 
 - Namespace per project; session pods run with pod-level CPU/memory limits.
 - Model keys: per-session Secret + `$(VAR)` indirection — the literal never appears in a pod spec (unit-tested).
-- Forge tokens: only in the anchor and settle jobs, fed to git via an askpass shim — never written to `.git/config`.
-- Planned (M8+): NetworkPolicy per cell namespace, Pod Security restricted, optional RuntimeClass (Kata/gVisor) hard-isolation tier.
+- Forge tokens: never in session pods; in anchor/settle/prod pods they arrive via env and are fed to git through an askpass shim (not written to `.git/config`). **Known gap:** those pods execute repo-controlled commands, and code they run can read the env — the designed fix is a host/cluster-side git broker.
+- **Trust model within a project:** all sessions of one Cell share the workspace PVC (that's what makes worktrees share one object store), so a session can read the main checkout, other worktrees, and the knowledge dir. Isolation is strong *between* projects (namespaces), advisory *within* one.
+- Pods currently run with the image default user (root in the stock devbox). Planned (M8+): non-root images, NetworkPolicy per cell namespace, Pod Security restricted, seccomp/drop-caps, optional RuntimeClass (Kata/gVisor) hard-isolation tier.
 
 ## Providers out of the box
 
@@ -197,7 +215,7 @@ workspace PVC 布局:
 | 进程 | 锚点 Pod 里被监管的 dev server | 独立 Deployment + Service |
 | 何时变化 | 每个提交、每次会话跟随、每次预览重启 | **仅显式发布时**(UI 按钮 / `cellctl release` / API) |
 
-正式区 Pod 与开发区零共享卷、零共享进程——预览崩了、worktree 脏了、会话被强杀,都碰不到正式区在服务的东西。发布 = 盖一个新 `releaseID` → prod Pod 滚动 → 重新克隆 ref;回滚就是 `cellctl release <cell> --ref <上一个tag>`。
+正式区 Pod 与开发区零共享卷、零共享进程——预览崩了、worktree 脏了、会话被强杀,都改不了正式区在服务的东西。**当前隔离的诚实边界:是存储与进程级隔离;两区仍同 Namespace、同网络、同 devbox 镜像,prod Pod 持有 git 令牌(NetworkPolicy、硬化镜像、令牌 broker 在路线图);`ref` 仅支持分支/标签(SHA 固定在路线图)。**发布 = 盖一个新 `releaseID` → prod Pod 滚动 → 重新克隆 ref;回滚就是 `cellctl release <cell> --ref <上一个tag>`。
 
 ## 会话生命周期
 

@@ -42,8 +42,9 @@ type ProductionSpec struct {
 	Command []string `json:"command,omitempty"`
 	// Port the command serves HTTP on. Defaults to the preview port.
 	Port int32 `json:"port,omitempty"`
-	// Ref is the git ref a release ships (branch, tag or SHA). Defaults to
-	// the repo base branch.
+	// Ref is the git ref a release ships — a branch or tag (the prod
+	// applet uses `clone --branch`, which does not accept bare commit
+	// SHAs; SHA pinning is roadmap). Defaults to the repo base branch.
 	Ref string `json:"ref,omitempty"`
 	// ReleaseID changes on every release action; a new value rolls the
 	// production pod, which re-clones Ref. Empty = never released, no

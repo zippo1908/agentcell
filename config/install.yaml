@@ -26,7 +26,7 @@ rules:
     resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods"]
     verbs: ["*"]
   - apiGroups: ["apps"]
-    resources: ["statefulsets"]
+    resources: ["statefulsets", "deployments"]
     verbs: ["*"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
