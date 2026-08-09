@@ -81,13 +81,25 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.AnchorStatefulSet}, &sts); err == nil {
 		ready = sts.Status.ReadyReplicas > 0
 	}
-	active, err := r.countActiveSessions(ctx, &cell)
+	active, liveIDs, err := r.observeSessions(ctx, &cell)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	cell.Status.ObservedGeneration = cell.Generation
 	cell.Status.ActiveSessions = active
+	// Stale-lease reconciliation: a lease whose session is gone or terminal
+	// is a leaked slot (e.g. controller crash between terminal-status write
+	// and release). Drop it here so the gate self-heals.
+	if len(cell.Status.SlotLeases) > 0 {
+		kept := cell.Status.SlotLeases[:0]
+		for _, l := range cell.Status.SlotLeases {
+			if liveIDs[l] {
+				kept = append(kept, l)
+			}
+		}
+		cell.Status.SlotLeases = kept
+	}
 	cell.Status.PreviewPath = "/preview/" + cell.Name + "/"
 	if released(&cell) {
 		cell.Status.ProductionPath = "/app/" + cell.Name + "/"
@@ -225,11 +237,8 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 		{Name: runtimeapi.EnvPreviewPort, Value: fmt.Sprint(cell.Spec.Preview.Port)},
 		{Name: runtimeapi.EnvPreviewTarget, Value: previewTargetDir(cell)},
 	}
-	var envFrom []corev1.EnvFromSource
 	if cell.Spec.Repo.SecretName != "" {
-		envFrom = append(envFrom, corev1.EnvFromSource{
-			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: ids.GitSecretName}},
-		})
+		env = append(env, gitCredEnv(ids.GitSecretName)...)
 	}
 
 	labels := map[string]string{
@@ -252,7 +261,6 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 					Command:         []string{runtimeapi.RuntimeBin, "anchor"},
 					SecurityContext: containerSecurity(),
 					Env:             env,
-					EnvFrom:         envFrom,
 					Ports: []corev1.ContainerPort{{
 						Name: "preview", ContainerPort: previewPort(cell),
 					}},
@@ -336,11 +344,8 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 		{Name: runtimeapi.EnvProdRef, Value: ref},
 		{Name: runtimeapi.EnvProdReleaseID, Value: cell.Spec.Production.ReleaseID},
 	}
-	var cloneEnvFrom []corev1.EnvFromSource
 	if cell.Spec.Repo.SecretName != "" {
-		cloneEnvFrom = append(cloneEnvFrom, corev1.EnvFromSource{
-			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: ids.GitSecretName}},
-		})
+		cloneEnv = append(cloneEnv, gitCredEnv(ids.GitSecretName)...)
 	}
 	serveEnv := []corev1.EnvVar{
 		{Name: runtimeapi.EnvProdCmd, Value: string(cmdJSON)},
@@ -365,7 +370,6 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					Command:         []string{runtimeapi.RuntimeBin, "prod-clone"},
 					SecurityContext: containerSecurity(),
 					Env:             cloneEnv,
-					EnvFrom:         cloneEnvFrom,
 					VolumeMounts:    []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
 				}},
 				Containers: []corev1.Container{{
@@ -398,12 +402,15 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 	return err
 }
 
-func (r *CellReconciler) countActiveSessions(ctx context.Context, cell *acv1.Cell) (int32, error) {
+// observeSessions counts active sessions and returns the set of session
+// ids that may legitimately hold a slot lease (existing and non-terminal).
+func (r *CellReconciler) observeSessions(ctx context.Context, cell *acv1.Cell) (int32, map[string]bool, error) {
 	var list acv1.SessionList
 	if err := r.List(ctx, &list, client.InNamespace(cell.Namespace)); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	var n int32
+	live := map[string]bool{}
 	for i := range list.Items {
 		s := &list.Items[i]
 		if s.Spec.Cell != cell.Name {
@@ -412,9 +419,13 @@ func (r *CellReconciler) countActiveSessions(ctx context.Context, cell *acv1.Cel
 		switch s.Status.Phase {
 		case acv1.SessionQueued, acv1.SessionRunning, acv1.SessionSettling, "":
 			n++
+			if s.Status.SessionID != "" {
+				live[s.Status.SessionID] = true
+			}
+			// Pre-id sessions can't hold a lease yet (claim needs the id).
 		}
 	}
-	return n, nil
+	return n, live, nil
 }
 
 // SetupWithManager wires the controller: Cell events plus Session events

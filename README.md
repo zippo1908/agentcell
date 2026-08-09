@@ -125,10 +125,13 @@ Runners: `claude`, `codex`, `pi`. A (runner, provider, model) binding is valid i
 ## Quick start
 
 ```sh
-# 1. Build and load images (or pull published ones once released)
+# 1. Build the images and import them into the cluster's containerd
+#    (k3s does not see your local podman storage)
 make build build-runtime-static
 podman build -t ghcr.io/agentcell/celld  -f images/celld/Containerfile .
 podman build -t ghcr.io/agentcell/devbox -f images/devbox/Containerfile .
+podman save ghcr.io/agentcell/celld ghcr.io/agentcell/devbox \
+  | sudo k3s ctr images import -
 
 # 2. Install into any cluster (single machine: `curl -sfL https://get.k3s.io | sh -`)
 kubectl apply -f config/crd/ -f config/install.yaml
@@ -168,7 +171,7 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 # AgentCell(中文)
 
-**AI 开发员工的车间:每个项目一个常驻实例(Cell),会话是实例内的一次性工位(Slot),实例自带常驻产品预览让人"边看边校准",SDLC 闭环——派工 → 干活 → 清算 → 批阅 → PR——在实例内完成。**
+**AI 开发员工的车间:每个项目一个常驻实例(Cell),会话是实例内的一次性工位(Slot),实例自带常驻产品预览让人"边看边校准"。SDLC 环节中,派工 → 干活 → 清算(推 `session/*` 分支)→ 双区发布已实现;批阅队列 → PR 在路线图(M7/M9),与英文版状态表一致。**
 
 > 状态:**pre-alpha**。全链路纵切片(Operator、运行时、常驻预览、校准 UI、CLI)已完成并通过单测;当前里程碑是真机 e2e。详见 [docs/PLAN.md](docs/PLAN.md)。
 

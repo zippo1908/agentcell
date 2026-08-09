@@ -30,6 +30,7 @@ func runAnchor() error {
 	_ = os.MkdirAll(runtimeapi.KnowledgePath, 0o755)
 	go reapZombies()
 	go heartbeat()
+	go syncBase(os.Getenv(runtimeapi.EnvRepoBranch))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
@@ -88,20 +89,40 @@ func ensureClone() error {
 	return git("/", args...)
 }
 
+// syncBase keeps the local base branch tracking the remote so worktrees
+// created days into a Cell's life still fork from the true base. The main
+// checkout is a pristine mirror by contract (sessions edit worktrees, not
+// this checkout), so a periodic hard reset is the correct semantic.
+func syncBase(branch string) {
+	if branch == "" {
+		return
+	}
+	for {
+		time.Sleep(5 * time.Minute)
+		if err := git(ids.RepoPath, "fetch", "origin"); err != nil {
+			continue
+		}
+		_ = git(ids.RepoPath, "reset", "--hard", "origin/"+branch)
+	}
+}
+
 // supervisePreview keeps the dev server alive with capped backoff. The
-// preview target directory is fixed per pod: switching follow-target edits
-// the StatefulSet env, which rolls the pod — restart is the reload.
+// follow-target is fixed per pod (env change rolls the pod), but the
+// followed worktree may not exist yet at pod start: each cycle re-resolves
+// the directory, and while serving the fallback a watcher kicks the server
+// the moment the real target appears.
 func supervisePreview(argv []string, dir string, stop <-chan os.Signal) {
 	backoff := time.Second
 	for {
+		serveDir := dir
 		if _, err := os.Stat(dir); err != nil {
 			// Followed worktree not created yet (session still starting);
-			// serve the main checkout meanwhile.
-			fmt.Printf("anchor: preview target %s absent, serving %s\n", dir, ids.RepoPath)
-			dir = ids.RepoPath
+			// serve the main checkout meanwhile — and switch when it lands.
+			fmt.Printf("anchor: preview target %s absent, serving %s until it appears\n", dir, ids.RepoPath)
+			serveDir = ids.RepoPath
 		}
 		cmd := exec.Command(argv[0], argv[1:]...)
-		cmd.Dir = dir
+		cmd.Dir = serveDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		// The dev server runs repo-controlled code; it must not inherit the
@@ -115,12 +136,33 @@ func supervisePreview(argv []string, dir string, stop <-chan os.Signal) {
 		} else {
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
+			quit := make(chan struct{})
+			if serveDir != dir {
+				// Serving the fallback: the moment the followed worktree
+				// appears, kick the server so the next cycle serves it.
+				go func(pid int) {
+					for {
+						select {
+						case <-quit:
+							return
+						case <-time.After(2 * time.Second):
+							if _, err := os.Stat(dir); err == nil {
+								fmt.Printf("anchor: preview target %s appeared, switching\n", dir)
+								_ = syscall.Kill(-pid, syscall.SIGTERM)
+								return
+							}
+						}
+					}
+				}(cmd.Process.Pid)
+			}
 			select {
 			case <-stop:
+				close(quit)
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 				<-done
 				return
 			case err = <-done:
+				close(quit)
 				fmt.Fprintf(os.Stderr, "anchor: preview exited: %v\n", err)
 			}
 		}

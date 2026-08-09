@@ -24,3 +24,23 @@ func containerSecurity() *corev1.SecurityContext {
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 	}
 }
+
+// gitCredEnv maps the kubernetes.io/basic-auth secret keys (username /
+// password) onto the exact variable names the askpass shim reads. Explicit
+// mapping — never envFrom: envFrom would inject the raw key names, which
+// askpass ignores and env filters don't know about.
+func gitCredEnv(secretName string) []corev1.EnvVar {
+	if secretName == "" {
+		return nil
+	}
+	ref := func(key string) *corev1.EnvVarSource {
+		return &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+			Key:                  key,
+		}}
+	}
+	return []corev1.EnvVar{
+		{Name: "GIT_USERNAME", ValueFrom: ref("username")},
+		{Name: "GIT_TOKEN", ValueFrom: ref("password")},
+	}
+}

@@ -49,7 +49,10 @@ func TestSettleProducedPushesAndReclaims(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, "feature.txt"), []byte("work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	v, err := settleWorktree(repoPath, wt, branch, "main", "aaa")
+	// A malicious session may rewrite the shared remote config; settle must
+	// ignore it and push only to the explicit URL.
+	mustGit(t, repoPath, "remote", "set-url", "origin", "/nonexistent-attacker.git")
+	v, err := settleWorktree(repoPath, wt, branch, "main", "aaa", origin)
 	if err != nil {
 		t.Fatalf("settle: %v", err)
 	}
@@ -65,8 +68,8 @@ func TestSettleProducedPushesAndReclaims(t *testing.T) {
 }
 
 func TestSettleEmptySessionDiscards(t *testing.T) {
-	repoPath, wt, branch, _ := newFixture(t, "bbb")
-	v, err := settleWorktree(repoPath, wt, branch, "main", "bbb")
+	repoPath, wt, branch, origin := newFixture(t, "bbb")
+	v, err := settleWorktree(repoPath, wt, branch, "main", "bbb", origin)
 	if err != nil {
 		t.Fatalf("settle: %v", err)
 	}
@@ -89,10 +92,8 @@ func TestSettlePushFailureKeepsWorktreeAndRetrySucceeds(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, "feature.txt"), []byte("work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Break the remote.
-	mustGit(t, repoPath, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "nonexistent.git"))
-
-	v, err := settleWorktree(repoPath, wt, branch, "main", "ccc")
+	// Unreachable push destination.
+	v, err := settleWorktree(repoPath, wt, branch, "main", "ccc", filepath.Join(t.TempDir(), "nonexistent.git"))
 	if err == nil {
 		t.Fatal("settle succeeded with unconfirmed push — the data-safety contract is broken")
 	}
@@ -103,9 +104,8 @@ func TestSettlePushFailureKeepsWorktreeAndRetrySucceeds(t *testing.T) {
 		t.Fatal("worktree was reclaimed despite failed push — work lost")
 	}
 
-	// Heal the remote and retry: settle must be idempotent.
-	mustGit(t, repoPath, "remote", "set-url", "origin", origin)
-	v, err = settleWorktree(repoPath, wt, branch, "main", "ccc")
+	// Destination healed: settle must be idempotent.
+	v, err = settleWorktree(repoPath, wt, branch, "main", "ccc", origin)
 	if err != nil {
 		t.Fatalf("retry settle: %v", err)
 	}

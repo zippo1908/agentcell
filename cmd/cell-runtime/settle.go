@@ -29,7 +29,8 @@ func runSettle() error {
 	if err := ensureAskpass(); err != nil {
 		return err
 	}
-	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(id), ids.SessionBranch(id), base, id)
+	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(id), ids.SessionBranch(id), base, id,
+		os.Getenv(runtimeapi.EnvRepoURL))
 	raw, _ := json.Marshal(v)
 	// Termination message is the transport back to the controller; write it
 	// on failure too so a final failed attempt still explains itself.
@@ -53,7 +54,11 @@ type verdict struct {
 // every outcome that must NOT count as a completed settle (commits present
 // but push unconfirmed, or state that could not be determined) — in those
 // cases the worktree is always left on disk.
-func settleWorktree(repoPath, wt, branch, base, id string) (verdict, error) {
+//
+// pushURL, when set, is the ONLY destination pushed to: the worktree's
+// remote configuration is attacker-writable (sessions share the .git), so
+// a credentialed push must never trust it.
+func settleWorktree(repoPath, wt, branch, base, id, pushURL string) (verdict, error) {
 	if _, err := os.Stat(wt); os.IsNotExist(err) {
 		return verdict{Produced: false, Message: "worktree absent (session never started)"}, nil
 	}
@@ -91,9 +96,13 @@ func settleWorktree(repoPath, wt, branch, base, id string) (verdict, error) {
 	produced := false
 	msg := "no commits produced"
 	if n > 0 {
+		dest := pushURL
+		if dest == "" {
+			dest = "origin"
+		}
 		// Push must be confirmed before anything is reclaimed or reported
 		// settled. On failure the job retries with the worktree intact.
-		if err := git(wt, "push", "-u", "origin", branch); err != nil {
+		if err := git(wt, "push", dest, branch); err != nil {
 			return verdict{Branch: branch,
 					Message: fmt.Sprintf("%d commit(s) present but push unconfirmed — worktree kept for retry", n)},
 				fmt.Errorf("git push: %w", err)

@@ -54,8 +54,13 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Terminal phases: nothing to do while the CR lives on as a record.
+	// Terminal phases: the CR lives on as a record. Release is re-run here
+	// idempotently — if the controller crashed between writing the terminal
+	// status and releasing the lease, this is where the slot comes back.
 	if sess.DeletionTimestamp.IsZero() && isTerminal(sess.Status.Phase) {
+		if sess.Status.SessionID != "" {
+			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, sess.Status.SessionID)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -366,11 +371,16 @@ func (r *SessionReconciler) startSettle(ctx context.Context, sess *acv1.Session,
 }
 
 func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell, ns, id string) error {
-	var envFrom []corev1.EnvFromSource
+	settleEnv := []corev1.EnvVar{
+		{Name: runtimeapi.EnvSessionID, Value: id},
+		{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
+		// Push goes to this explicit URL, never to the worktree's remote
+		// config — a malicious session editing .git/config cannot redirect
+		// a credentialed push.
+		{Name: runtimeapi.EnvRepoURL, Value: cell.Spec.Repo.URL},
+	}
 	if cell.Spec.Repo.SecretName != "" {
-		envFrom = append(envFrom, corev1.EnvFromSource{
-			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: ids.GitSecretName}},
-		})
+		settleEnv = append(settleEnv, gitCredEnv(ids.GitSecretName)...)
 	}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.SettleJobName(id)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, job, func() error {
@@ -398,11 +408,7 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 						Image:           cell.Spec.Image,
 						Command:         []string{runtimeapi.RuntimeBin, "settle"},
 						SecurityContext: containerSecurity(),
-						Env: []corev1.EnvVar{
-							{Name: runtimeapi.EnvSessionID, Value: id},
-							{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
-						},
-						EnvFrom:      envFrom,
+						Env:          settleEnv,
 						VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
 					}},
 					Volumes: []corev1.Volume{{

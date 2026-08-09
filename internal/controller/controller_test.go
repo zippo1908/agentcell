@@ -312,6 +312,55 @@ func TestReleaseCreatesIsolatedProduction(t *testing.T) {
 	}
 }
 
+// Crash between terminal-status write and lease release: the next
+// reconcile of the terminal session must return the slot.
+func TestTerminalSessionReleasesLeakedLease(t *testing.T) {
+	id := ids.NewSessionID()
+	name := ids.SessionName(id)
+	sess := newSession(name, "t")
+	cellCR := testCell()
+	cellCR.Status.SlotLeases = []string{id} // leaked lease
+	c := newFake(t, cellCR, credSecret("bailian-key"), sess)
+	r := sessionReconciler(t, c)
+	ctx := context.Background()
+
+	// Simulate the crash aftermath: session already terminal with its id.
+	var s acv1.Session
+	if err := c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: name}, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.SessionID = id
+	s.Status.Phase = acv1.SessionSettled
+	if err := c.Status().Update(ctx, &s); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcileSession(t, r, name, 1)
+	var cell acv1.Cell
+	if err := c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "shop"}, &cell); err != nil {
+		t.Fatal(err)
+	}
+	if len(cell.Status.SlotLeases) != 0 {
+		t.Fatalf("leaked lease not reclaimed on terminal reconcile: %v", cell.Status.SlotLeases)
+	}
+}
+
+// The cell controller's stale-lease sweep: a lease with no live session
+// behind it (session deleted outright) is dropped.
+func TestCellReconcileSweepsOrphanLeases(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Status.SlotLeases = []string{"orphan-id-no-session"}
+	c := newFake(t, cellCR)
+	reconcileCell(t, c)
+	var cell acv1.Cell
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: controlNS, Name: "shop"}, &cell); err != nil {
+		t.Fatal(err)
+	}
+	if len(cell.Status.SlotLeases) != 0 {
+		t.Fatalf("orphan lease survived the sweep: %v", cell.Status.SlotLeases)
+	}
+}
+
 func TestSessionPodGoneLeadsToSettling(t *testing.T) {
 	id := ids.NewSessionID()
 	name := ids.SessionName(id)
