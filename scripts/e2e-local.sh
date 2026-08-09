@@ -37,8 +37,10 @@ make build build-runtime-static
 $BUILDER build -t ghcr.io/agentcell/celld       -f images/celld/Containerfile .
 $BUILDER build -t ghcr.io/agentcell/devbox-e2e  -f images/devbox-e2e/Containerfile .
 if [ "${E2E_IMPORT:-0}" = "1" ]; then
-  $BUILDER save ghcr.io/agentcell/celld ghcr.io/agentcell/devbox-e2e \
-    | sudo k3s ctr images import -
+  # Import each image separately: k3s ctr can collapse tags from a multi-image
+  # Docker archive, making devbox-e2e point at celld.
+  $BUILDER save ghcr.io/agentcell/celld | sudo k3s ctr images import -
+  $BUILDER save ghcr.io/agentcell/devbox-e2e | sudo k3s ctr images import -
 fi
 
 log "2/8 install CRDs + control plane + secrets"

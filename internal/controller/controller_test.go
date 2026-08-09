@@ -87,6 +87,9 @@ func TestCellReconcileCreatesWorkloadResources(t *testing.T) {
 	if got := sts.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort; got != 5173 {
 		t.Errorf("preview port = %d, want 5173", got)
 	}
+	if got := sts.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Errorf("anchor imagePullPolicy = %s, want %s", got, corev1.PullIfNotPresent)
+	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.PreviewService}, &corev1.Service{}); err != nil {
 		t.Fatalf("preview service: %v", err)
 	}
@@ -184,6 +187,9 @@ func TestSessionDispatchCreatesPodWithPerSessionCredential(t *testing.T) {
 	}
 	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
 		t.Error("session pod must run as non-root")
+	}
+	if got := pod.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Errorf("session imagePullPolicy = %s, want %s", got, corev1.PullIfNotPresent)
 	}
 	var cell acv1.Cell
 	if err := c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "shop"}, &cell); err != nil {
@@ -308,9 +314,15 @@ func TestReleaseCreatesIsolatedProduction(t *testing.T) {
 		dep.Spec.Template.Spec.InitContainers[0].Command[1] != "prod-clone" {
 		t.Fatal("prod pod must clone via a dedicated init container")
 	}
+	if got := dep.Spec.Template.Spec.InitContainers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Errorf("prod clone imagePullPolicy = %s, want %s", got, corev1.PullIfNotPresent)
+	}
 	serve := dep.Spec.Template.Spec.Containers[0]
 	if serve.Command[1] != "prod-serve" {
 		t.Errorf("serving container command = %v", serve.Command)
+	}
+	if got := serve.ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Errorf("prod serve imagePullPolicy = %s, want %s", got, corev1.PullIfNotPresent)
 	}
 	if len(serve.EnvFrom) != 0 {
 		t.Error("serving container must not inherit the git credential secret")

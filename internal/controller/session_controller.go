@@ -310,6 +310,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 			Containers: []corev1.Container{{
 				Name:            "session",
 				Image:           cell.Spec.Image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
 				Command:         []string{runtimeapi.RuntimeBin, "session"},
 				Env:             env,
 				SecurityContext: containerSecurity(),
@@ -406,6 +407,7 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 					Containers: []corev1.Container{{
 						Name:            "settle",
 						Image:           cell.Spec.Image,
+						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{runtimeapi.RuntimeBin, "settle"},
 						SecurityContext: containerSecurity(),
 						Env:             settleEnv,

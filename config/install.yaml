@@ -72,6 +72,7 @@ spec:
       containers:
         - name: celld
           image: ghcr.io/agentcell/celld:latest
+          imagePullPolicy: IfNotPresent
           args: ["--control-namespace=agentcell-system"]
           securityContext:
             allowPrivilegeEscalation: false

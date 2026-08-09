@@ -329,6 +329,7 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 				Containers: []corev1.Container{{
 					Name:            "anchor",
 					Image:           cell.Spec.Image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{runtimeapi.RuntimeBin, "anchor"},
 					SecurityContext: containerSecurity(),
 					Env:             env,
@@ -438,6 +439,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 				InitContainers: []corev1.Container{{
 					Name:            "clone",
 					Image:           cell.Spec.Image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{runtimeapi.RuntimeBin, "prod-clone"},
 					SecurityContext: containerSecurity(),
 					Env:             cloneEnv,
@@ -446,6 +448,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 				Containers: []corev1.Container{{
 					Name:            "prod",
 					Image:           cell.Spec.Image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{runtimeapi.RuntimeBin, "prod-serve"},
 					SecurityContext: containerSecurity(),
 					Env:             serveEnv,
