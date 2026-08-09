@@ -35,7 +35,13 @@ func (in *CellSpec) DeepCopyInto(out *CellSpec) {
 	in.SessionResources.DeepCopyInto(&out.SessionResources)
 }
 
-func (in *CellStatus) DeepCopyInto(out *CellStatus) { *out = *in }
+func (in *CellStatus) DeepCopyInto(out *CellStatus) {
+	*out = *in
+	if in.SlotLeases != nil {
+		out.SlotLeases = make([]string, len(in.SlotLeases))
+		copy(out.SlotLeases, in.SlotLeases)
+	}
+}
 
 func (in *Cell) DeepCopyInto(out *Cell) {
 	*out = *in

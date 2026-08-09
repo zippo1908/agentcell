@@ -104,6 +104,9 @@ func supervisePreview(argv []string, dir string, stop <-chan os.Signal) {
 		cmd.Dir = dir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		// The dev server runs repo-controlled code; it must not inherit the
+		// git credentials this supervisor holds for clone/fetch.
+		cmd.Env = envWithoutGitCreds()
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		start := time.Now()
 		err := cmd.Start()

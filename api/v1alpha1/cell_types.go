@@ -42,9 +42,9 @@ type ProductionSpec struct {
 	Command []string `json:"command,omitempty"`
 	// Port the command serves HTTP on. Defaults to the preview port.
 	Port int32 `json:"port,omitempty"`
-	// Ref is the git ref a release ships — a branch or tag (the prod
-	// applet uses `clone --branch`, which does not accept bare commit
-	// SHAs; SHA pinning is roadmap). Defaults to the repo base branch.
+	// Ref is the git ref a release ships — branch, tag or commit SHA.
+	// Defaults to the repo base branch. The resolved SHA is recorded in
+	// /prodspace/RELEASE_SHA inside the prod pod and printed in its log.
 	Ref string `json:"ref,omitempty"`
 	// ReleaseID changes on every release action; a new value rolls the
 	// production pod, which re-clones Ref. Empty = never released, no
@@ -101,7 +101,12 @@ type CellStatus struct {
 	// ProductionPath is the platform-relative 正式区 URL; empty until the
 	// first release.
 	ProductionPath string `json:"productionPath,omitempty"`
-	Message        string `json:"message,omitempty"`
+	// SlotLeases are the session ids currently holding a slot. Admission
+	// appends here through the apiserver's optimistic concurrency
+	// (resourceVersion CAS), which makes the slot gate race-free even with
+	// concurrent reconcilers or multiple controller replicas.
+	SlotLeases []string `json:"slotLeases,omitempty"`
+	Message    string   `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true

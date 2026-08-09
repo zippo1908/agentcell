@@ -12,14 +12,18 @@
 | Session lifecycle: slot gate → pod → TTL → settle Job → reclaim | ✅ implemented, fake-client tested |
 | Settle data-safety (push-confirmed or fail-and-retry, worktree kept) | ✅ implemented, real-git tested |
 | Resident preview + calibration UI + `/preview` `/app` proxies | ✅ implemented, not yet cluster-verified |
-| Two-zone release (`/app`, emptyDir clone, release/rollback) | ✅ implemented; storage-isolated only — same namespace/network, NetworkPolicy pending |
+| Two-zone release (`/app`, emptyDir clone via credential-free serving container, branch/tag/SHA refs, resolved SHA recorded) | ✅ implemented; same namespace/network — NetworkPolicy pending |
 | Provider registry (Aliyun Bailian / Tencent Hunyuan / …) | ✅ implemented, unit tested |
+| Race-free slot admission (lease CAS on Cell status) | ✅ implemented, unit tested |
+| Non-root pods (runAsNonRoot, seccomp, drop-ALL caps) + non-root devbox image | ✅ implemented |
+| Git credentials kept from repo-controlled processes (prod init-container split; preview child env filtered) | ✅ implemented |
 | Real-cluster (k3s) e2e | ⬜ next milestone |
 | Review queue, diff approval, auto-PR, merge tracking | ⬜ designed (M7/M9) |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
-| NetworkPolicy / PSS restricted / non-root images | ⬜ designed (M8) |
-| Git-token broker (tokens out of anchor/prod env) | ⬜ designed |
+| NetworkPolicy / PSS restricted labels | ⬜ designed (M8) |
+| Git-token broker (tokens fully out of workload pods) | ⬜ designed |
 | Knowledge indexing / review-feedback distillation | ⬜ designed |
+| agent-sandbox substrate (ADR-0004 Phase 1) | ⬜ designed |
 
 [中文版在下面 ↓](#agentcell中文)
 
@@ -79,7 +83,7 @@ Each Cell has exactly two zones — development and testing are deliberately one
 | Process | Anchor pod's supervised dev server | Separate Deployment + Service |
 | Changes when | Every commit, every followed session, every preview restart | **Only on an explicit release** (UI button / `cellctl release <cell> [--ref v1.2]` / API) |
 
-Because the prod pod shares no volume and no process with the dev zone, dev debugging — crashed previews, dirty worktrees, force-killed sessions — cannot change what production serves. Honest scope of that claim today: the isolation is **storage- and process-level**; both zones still share the namespace, the network and the devbox image, and the prod pod holds the git token (NetworkPolicy, a hardened prod image and a token broker are on the roadmap). `ref` must be a branch or tag (SHA pinning is roadmap). A release stamps a new `releaseID`, which rolls the prod pod, which re-clones the ref: rollback is `cellctl release <cell> --ref <previous-tag>`.
+Because the prod pod shares no volume and no process with the dev zone, dev debugging — crashed previews, dirty worktrees, force-killed sessions — cannot change what production serves. Honest scope of that claim today: the isolation is **storage- and process-level**; both zones still share the namespace, the network and the devbox image (NetworkPolicy and a hardened prod image are on the roadmap). The git token exists only in the prod pod's clone init container — the serving container runs credential-free. `ref` accepts a branch, tag or commit SHA; the resolved SHA is recorded in `/prodspace/RELEASE_SHA` and the pod log. A release stamps a new `releaseID`, which rolls the prod pod, which re-clones the ref: rollback is `cellctl release <cell> --ref <previous-tag-or-sha>`.
 
 ## Session lifecycle
 
@@ -99,9 +103,9 @@ Deleting a Session CR is safe at any moment: a finalizer guarantees settle runs 
 
 - Namespace per project; session pods run with pod-level CPU/memory limits.
 - Model keys: per-session Secret + `$(VAR)` indirection — the literal never appears in a pod spec (unit-tested).
-- Forge tokens: never in session pods; in anchor/settle/prod pods they arrive via env and are fed to git through an askpass shim (not written to `.git/config`). **Known gap:** those pods execute repo-controlled commands, and code they run can read the env — the designed fix is a host/cluster-side git broker.
+- Forge tokens: never in session pods. In the prod pod they exist only in the clone **init container** (the serving container gets no git env); the anchor strips them from the preview dev server's environment. Remaining exposure: the anchor's own supervisor process holds them for clone/fetch — the designed fix is a cluster-side git broker.
 - **Trust model within a project:** all sessions of one Cell share the workspace PVC (that's what makes worktrees share one object store), so a session can read the main checkout, other worktrees, and the knowledge dir. Isolation is strong *between* projects (namespaces), advisory *within* one.
-- Pods currently run with the image default user (root in the stock devbox). Planned (M8+): non-root images, NetworkPolicy per cell namespace, Pod Security restricted, seccomp/drop-caps, optional RuntimeClass (Kata/gVisor) hard-isolation tier.
+- All platform-rendered pods run non-root (uid 1000, seccomp RuntimeDefault, drop-ALL caps, no privilege escalation); the stock devbox image sets `USER node`. Planned (M8+): NetworkPolicy per cell namespace, Pod Security restricted labels, optional RuntimeClass (Kata/gVisor) hard-isolation tier.
 
 ## Providers out of the box
 
@@ -215,7 +219,7 @@ workspace PVC 布局:
 | 进程 | 锚点 Pod 里被监管的 dev server | 独立 Deployment + Service |
 | 何时变化 | 每个提交、每次会话跟随、每次预览重启 | **仅显式发布时**(UI 按钮 / `cellctl release` / API) |
 
-正式区 Pod 与开发区零共享卷、零共享进程——预览崩了、worktree 脏了、会话被强杀,都改不了正式区在服务的东西。**当前隔离的诚实边界:是存储与进程级隔离;两区仍同 Namespace、同网络、同 devbox 镜像,prod Pod 持有 git 令牌(NetworkPolicy、硬化镜像、令牌 broker 在路线图);`ref` 仅支持分支/标签(SHA 固定在路线图)。**发布 = 盖一个新 `releaseID` → prod Pod 滚动 → 重新克隆 ref;回滚就是 `cellctl release <cell> --ref <上一个tag>`。
+正式区 Pod 与开发区零共享卷、零共享进程——预览崩了、worktree 脏了、会话被强杀,都改不了正式区在服务的东西。**当前隔离的诚实边界:是存储与进程级隔离;两区仍同 Namespace、同网络、同 devbox 镜像(NetworkPolicy、硬化镜像在路线图)。git 令牌只存在于 prod Pod 的克隆 init 容器,服务容器零凭据;`ref` 支持分支/标签/SHA,解析出的 SHA 记录在 `/prodspace/RELEASE_SHA`。**发布 = 盖一个新 `releaseID` → prod Pod 滚动 → 重新克隆 ref;回滚就是 `cellctl release <cell> --ref <上一个tag>`。
 
 ## 会话生命周期
 

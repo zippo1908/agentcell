@@ -245,12 +245,14 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 		sts.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
+				SecurityContext: podSecurity(),
 				Containers: []corev1.Container{{
-					Name:    "anchor",
-					Image:   cell.Spec.Image,
-					Command: []string{runtimeapi.RuntimeBin, "anchor"},
-					Env:     env,
-					EnvFrom: envFrom,
+					Name:            "anchor",
+					Image:           cell.Spec.Image,
+					Command:         []string{runtimeapi.RuntimeBin, "anchor"},
+					SecurityContext: containerSecurity(),
+					Env:             env,
+					EnvFrom:         envFrom,
 					Ports: []corev1.ContainerPort{{
 						Name: "preview", ContainerPort: previewPort(cell),
 					}},
@@ -326,17 +328,23 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 	if ref == "" {
 		ref = cell.Spec.Repo.Branch
 	}
-	env := []corev1.EnvVar{
+	// Credential hygiene: only the init container (which runs exclusively
+	// our clone applet) sees the git token; the serving container executes
+	// repo-controlled commands and gets no git env at all.
+	cloneEnv := []corev1.EnvVar{
 		{Name: runtimeapi.EnvRepoURL, Value: cell.Spec.Repo.URL},
 		{Name: runtimeapi.EnvProdRef, Value: ref},
-		{Name: runtimeapi.EnvProdCmd, Value: string(cmdJSON)},
 		{Name: runtimeapi.EnvProdReleaseID, Value: cell.Spec.Production.ReleaseID},
 	}
-	var envFrom []corev1.EnvFromSource
+	var cloneEnvFrom []corev1.EnvFromSource
 	if cell.Spec.Repo.SecretName != "" {
-		envFrom = append(envFrom, corev1.EnvFromSource{
+		cloneEnvFrom = append(cloneEnvFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: ids.GitSecretName}},
 		})
+	}
+	serveEnv := []corev1.EnvVar{
+		{Name: runtimeapi.EnvProdCmd, Value: string(cmdJSON)},
+		{Name: runtimeapi.EnvProdReleaseID, Value: cell.Spec.Production.ReleaseID},
 	}
 	labels := map[string]string{
 		ids.CellLabelKey:      cell.Name,
@@ -350,13 +358,23 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 		dep.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
+				SecurityContext: podSecurity(),
+				InitContainers: []corev1.Container{{
+					Name:            "clone",
+					Image:           cell.Spec.Image,
+					Command:         []string{runtimeapi.RuntimeBin, "prod-clone"},
+					SecurityContext: containerSecurity(),
+					Env:             cloneEnv,
+					EnvFrom:         cloneEnvFrom,
+					VolumeMounts:    []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
+				}},
 				Containers: []corev1.Container{{
-					Name:    "prod",
-					Image:   cell.Spec.Image,
-					Command: []string{runtimeapi.RuntimeBin, "prod"},
-					Env:     env,
-					EnvFrom: envFrom,
-					Ports:   []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
+					Name:            "prod",
+					Image:           cell.Spec.Image,
+					Command:         []string{runtimeapi.RuntimeBin, "prod-serve"},
+					SecurityContext: containerSecurity(),
+					Env:             serveEnv,
+					Ports:           []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
 					// emptyDir only: structurally impossible to share dev state.
 					VolumeMounts: []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
 				}},

@@ -37,6 +37,19 @@ func git(dir string, args ...string) error {
 	return cmd.Run()
 }
 
+// envWithoutGitCreds is the environment for child processes that execute
+// repo-controlled code: everything except the git credential variables.
+func envWithoutGitCreds() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GIT_USERNAME=") || strings.HasPrefix(kv, "GIT_TOKEN=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // gitOut runs a git command and captures trimmed stdout.
 func gitOut(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)

@@ -77,4 +77,7 @@ spec:
                 activeSessions: {type: integer, format: int32}
                 previewPath: {type: string}
                 productionPath: {type: string}
+                slotLeases:
+                  type: array
+                  items: {type: string}
                 message: {type: string}

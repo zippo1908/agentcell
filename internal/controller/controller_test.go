@@ -167,6 +167,47 @@ func TestSessionDispatchCreatesPodWithPerSessionCredential(t *testing.T) {
 	if sess.Status.Phase != acv1.SessionRunning {
 		t.Errorf("phase = %s, want Running", sess.Status.Phase)
 	}
+	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
+		t.Error("session pod must run as non-root")
+	}
+	var cell acv1.Cell
+	if err := c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "shop"}, &cell); err != nil {
+		t.Fatal(err)
+	}
+	if len(cell.Status.SlotLeases) != 1 || cell.Status.SlotLeases[0] != id {
+		t.Errorf("slot lease not recorded: %v", cell.Status.SlotLeases)
+	}
+}
+
+func TestSlotLeaseClaimIdempotentAndRelease(t *testing.T) {
+	id1, id2, id3 := ids.NewSessionID(), ids.NewSessionID(), ids.NewSessionID()
+	s1 := newSession(ids.SessionName(id1), "a")
+	c := newFake(t, testCell(), credSecret("bailian-key"), s1)
+	r := sessionReconciler(t, c)
+	ctx := context.Background()
+
+	claim := func(sessID string) bool {
+		ok, err := r.claimSlot(ctx, s1, sessID)
+		if err != nil {
+			t.Fatalf("claimSlot(%s): %v", sessID, err)
+		}
+		return ok
+	}
+	if !claim(id1) || !claim(id1) {
+		t.Fatal("claim must succeed and be idempotent for the same id")
+	}
+	if !claim(id2) {
+		t.Fatal("second slot should be free (maxSessions=2)")
+	}
+	if claim(id3) {
+		t.Fatal("third claim must be rejected — gate oversold")
+	}
+	r.releaseSlot(ctx, controlNS, "shop", id1)
+	if !claim(id3) {
+		t.Fatal("released slot must be claimable again")
+	}
+	// Double release is harmless.
+	r.releaseSlot(ctx, controlNS, "shop", id1)
 }
 
 func TestSlotGateQueuesThirdSession(t *testing.T) {
@@ -245,6 +286,19 @@ func TestReleaseCreatesIsolatedProduction(t *testing.T) {
 		if v.PersistentVolumeClaim != nil {
 			t.Fatalf("prod pod mounts PVC %q — dev/prod isolation broken", v.PersistentVolumeClaim.ClaimName)
 		}
+	}
+	// Credential hygiene: git env only in the clone init container; the
+	// serving container (which runs repo-controlled code) gets none.
+	if len(dep.Spec.Template.Spec.InitContainers) != 1 ||
+		dep.Spec.Template.Spec.InitContainers[0].Command[1] != "prod-clone" {
+		t.Fatal("prod pod must clone via a dedicated init container")
+	}
+	serve := dep.Spec.Template.Spec.Containers[0]
+	if serve.Command[1] != "prod-serve" {
+		t.Errorf("serving container command = %v", serve.Command)
+	}
+	if len(serve.EnvFrom) != 0 {
+		t.Error("serving container must not inherit the git credential secret")
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.ProdService}, &corev1.Service{}); err != nil {
 		t.Fatalf("prod service: %v", err)

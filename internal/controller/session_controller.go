@@ -116,11 +116,22 @@ func isTerminal(p acv1.SessionPhase) bool {
 
 // dispatch admits the session through the slot gate and creates its pod.
 func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) (ctrl.Result, error) {
-	busy, err := r.busySlots(ctx, sess, cell)
+	// Validations without side effects come before the slot claim.
+	binding, err := r.Registry.Resolve(sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.fail(ctx, sess, err)
 	}
-	if busy >= cell.Spec.MaxSessions {
+	argv, err := access.HeadlessArgv(sess.Spec.Runner, sess.Spec.Task)
+	if err != nil {
+		return r.fail(ctx, sess, err)
+	}
+
+	claimed, err := r.claimSlot(ctx, sess, id)
+	if err != nil {
+		// Includes optimistic-concurrency conflicts: requeue and retry.
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+	if !claimed {
 		if sess.Status.Phase != acv1.SessionQueued {
 			sess.Status.Phase = acv1.SessionQueued
 			sess.Status.Message = fmt.Sprintf("all %d slots busy", cell.Spec.MaxSessions)
@@ -131,26 +142,27 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	binding, err := r.Registry.Resolve(sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model)
-	if err != nil {
-		return r.fail(ctx, sess, err)
-	}
-	argv, err := access.HeadlessArgv(sess.Spec.Runner, sess.Spec.Task)
-	if err != nil {
-		return r.fail(ctx, sess, err)
-	}
 	if err := r.copyCredential(ctx, sess, ns, id); err != nil {
+		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
 		return r.fail(ctx, sess, fmt.Errorf("credential secret: %w", err))
 	}
 	if err := r.ensureSessionPod(ctx, sess, cell, ns, id, binding, argv); err != nil {
+		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
 		return r.fail(ctx, sess, err)
 	}
 
 	// Preview follow: watching work-in-progress is a Cell-level switch.
-	if sess.Spec.FollowPreview && cell.Spec.Preview.FollowSession != id {
-		cell.Spec.Preview.FollowSession = id
-		if err := r.Update(ctx, cell); err != nil {
+	// Re-read the Cell — claimSlot just bumped its resourceVersion.
+	if sess.Spec.FollowPreview {
+		var fresh acv1.Cell
+		if err := r.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Cell}, &fresh); err != nil {
 			return ctrl.Result{}, err
+		}
+		if fresh.Spec.Preview.FollowSession != id {
+			fresh.Spec.Preview.FollowSession = id
+			if err := r.Update(ctx, &fresh); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
@@ -165,24 +177,57 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
-// busySlots counts sessions of the same cell currently holding a slot.
-func (r *SessionReconciler) busySlots(ctx context.Context, self *acv1.Session, cell *acv1.Cell) (int32, error) {
-	var list acv1.SessionList
-	if err := r.List(ctx, &list, client.InNamespace(self.Namespace)); err != nil {
-		return 0, err
+// claimSlot atomically takes a slot lease on the Cell's status. The
+// apiserver's resourceVersion check turns concurrent claims into update
+// conflicts, so the gate cannot oversell regardless of reconciler
+// concurrency or controller replicas. Idempotent for an already-held lease.
+func (r *SessionReconciler) claimSlot(ctx context.Context, sess *acv1.Session, id string) (bool, error) {
+	var fresh acv1.Cell
+	if err := r.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Cell}, &fresh); err != nil {
+		return false, err
 	}
-	var n int32
-	for i := range list.Items {
-		s := &list.Items[i]
-		if s.Spec.Cell != cell.Name || s.Name == self.Name {
-			continue
-		}
-		switch s.Status.Phase {
-		case acv1.SessionRunning, acv1.SessionSettling:
-			n++
+	applyCellDefaults(&fresh)
+	for _, l := range fresh.Status.SlotLeases {
+		if l == id {
+			return true, nil
 		}
 	}
-	return n, nil
+	if int32(len(fresh.Status.SlotLeases)) >= fresh.Spec.MaxSessions {
+		return false, nil
+	}
+	fresh.Status.SlotLeases = append(fresh.Status.SlotLeases, id)
+	if err := r.Status().Update(ctx, &fresh); err != nil {
+		return false, err // conflict → caller requeues and retries
+	}
+	return true, nil
+}
+
+// releaseSlot returns a lease, retrying briefly on conflicts. Losing a
+// release would leak a slot until operator intervention, so this tries
+// harder than claim does.
+func (r *SessionReconciler) releaseSlot(ctx context.Context, controlNS, cellName, id string) {
+	for range 5 {
+		var fresh acv1.Cell
+		if err := r.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: cellName}, &fresh); err != nil {
+			return // cell gone: nothing to release
+		}
+		kept := fresh.Status.SlotLeases[:0]
+		found := false
+		for _, l := range fresh.Status.SlotLeases {
+			if l == id {
+				found = true
+				continue
+			}
+			kept = append(kept, l)
+		}
+		if !found {
+			return
+		}
+		fresh.Status.SlotLeases = kept
+		if err := r.Status().Update(ctx, &fresh); err == nil {
+			return
+		}
+	}
 }
 
 func (r *SessionReconciler) copyCredential(ctx context.Context, sess *acv1.Session, ns, id string) error {
@@ -246,7 +291,8 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 			ids.SessionLabelKey: id,
 		}
 		pod.Spec = corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
+			RestartPolicy:   corev1.RestartPolicyNever,
+			SecurityContext: podSecurity(),
 			// RWO PVC: sessions must land on the anchor's node.
 			Affinity: &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
@@ -257,10 +303,11 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 				}},
 			}},
 			Containers: []corev1.Container{{
-				Name:    "session",
-				Image:   cell.Spec.Image,
-				Command: []string{runtimeapi.RuntimeBin, "session"},
-				Env:     env,
+				Name:            "session",
+				Image:           cell.Spec.Image,
+				Command:         []string{runtimeapi.RuntimeBin, "session"},
+				Env:             env,
+				SecurityContext: containerSecurity(),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{corev1.ResourceCPU: cpu, corev1.ResourceMemory: mem},
 				},
@@ -336,7 +383,8 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{ids.SessionLabelKey: id}},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:   corev1.RestartPolicyNever,
+					SecurityContext: podSecurity(),
 					Affinity: &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
 						RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
 							LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
@@ -346,9 +394,10 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 						}},
 					}},
 					Containers: []corev1.Container{{
-						Name:    "settle",
-						Image:   cell.Spec.Image,
-						Command: []string{runtimeapi.RuntimeBin, "settle"},
+						Name:            "settle",
+						Image:           cell.Spec.Image,
+						Command:         []string{runtimeapi.RuntimeBin, "settle"},
+						SecurityContext: containerSecurity(),
 						Env: []corev1.EnvVar{
 							{Name: runtimeapi.EnvSessionID, Value: id},
 							{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
@@ -405,7 +454,7 @@ func (r *SessionReconciler) observeSettle(ctx context.Context, sess *acv1.Sessio
 	switch {
 	case !ok:
 		sess.Status.Phase = acv1.SessionError
-		sess.Status.Message = result.Message
+		sess.Status.Message = result.Message + " — worktree kept on the PVC for manual recovery"
 	case result.Produced:
 		sess.Status.Phase = acv1.SessionSettled
 		sess.Status.Branch = result.Branch
@@ -418,6 +467,7 @@ func (r *SessionReconciler) observeSettle(ctx context.Context, sess *acv1.Sessio
 	if err := r.Status().Update(ctx, sess); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
 	return ctrl.Result{}, nil
 }
 
@@ -462,6 +512,10 @@ func (r *SessionReconciler) fail(ctx context.Context, sess *acv1.Session, err er
 	sess.Status.Message = err.Error()
 	if serr := r.Status().Update(ctx, sess); serr != nil {
 		return ctrl.Result{}, serr
+	}
+	// Error is terminal: whatever lease this session held must come back.
+	if sess.Status.SessionID != "" {
+		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, sess.Status.SessionID)
 	}
 	return ctrl.Result{}, nil // recorded on status; do not hot-loop
 }

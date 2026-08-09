@@ -18,4 +18,8 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime
 RUN chmod 755 /agentcell/cell-runtime
 
+# The platform renders every pod with runAsNonRoot + runAsUser 1000; the
+# node image ships user "node" (uid 1000). Declare it here too so the image
+# is safe even when run outside the platform.
+USER node
 WORKDIR /workspace
