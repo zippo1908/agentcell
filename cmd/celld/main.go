@@ -34,6 +34,10 @@ func main() {
 			"namespace holding Cell/Session CRs")
 		providersDir = flag.String("providers-dir", "/etc/agentcell/providers.d",
 			"directory of provider preset overlays (*.yaml)")
+		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
+			"file of API access tokens (whitespace-separated); enables auth when present")
+		allowNoAuth = flag.Bool("allow-no-auth", false,
+			"start with the HTTP surface unauthenticated (dev only)")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -78,9 +82,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	auth := webui.NewAuthenticator(readTokenFile(*tokenFile))
+	if !auth.Enabled() {
+		if !*allowNoAuth {
+			log.Error(nil, "no API tokens found and --allow-no-auth not set; refusing to expose an unauthenticated control plane",
+				"tokenFile", *tokenFile)
+			os.Exit(1)
+		}
+		log.Info("WARNING: HTTP surface is UNAUTHENTICATED (--allow-no-auth)")
+	}
+
 	ui := &webui.Handler{Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry}
 	mux := http.NewServeMux()
-	mux.Handle("/", ui.Routes())
+	auth.LoginRoutes(mux)
+	mux.Handle("/", auth.Middleware(ui.Routes()))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_ = healthz.Ping(nil)
 		w.WriteHeader(http.StatusOK)
@@ -114,6 +129,16 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// readTokenFile returns the token material, or "" if the file is absent —
+// absence is a valid (dev) state that the caller gates on --allow-no-auth.
+func readTokenFile(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 func loadRegistry(dir string) (*access.Registry, error) {

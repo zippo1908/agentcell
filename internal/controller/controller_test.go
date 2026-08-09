@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -88,6 +89,20 @@ func TestCellReconcileCreatesWorkloadResources(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.PreviewService}, &corev1.Service{}); err != nil {
 		t.Fatalf("preview service: %v", err)
+	}
+	// Namespace locked to default-deny + explicit allows.
+	var deny netv1.NetworkPolicy
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "default-deny"}, &deny); err != nil {
+		t.Fatalf("default-deny netpol: %v", err)
+	}
+	if len(deny.Spec.PolicyTypes) != 2 {
+		t.Errorf("default-deny must cover both ingress and egress, got %v", deny.Spec.PolicyTypes)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "allow-egress"}, &netv1.NetworkPolicy{}); err != nil {
+		t.Fatalf("allow-egress netpol: %v", err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "allow-control-plane-ingress"}, &netv1.NetworkPolicy{}); err != nil {
+		t.Fatalf("ingress netpol: %v", err)
 	}
 
 	var cell acv1.Cell

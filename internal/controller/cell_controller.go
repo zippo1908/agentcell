@@ -8,10 +8,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -56,6 +58,9 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	ns := ids.WorkloadNamespace(cell.Name)
 	if err := r.ensureNamespace(ctx, ns, cell.Name); err != nil {
 		return r.fail(ctx, &cell, err)
+	}
+	if err := r.ensureNetworkPolicies(ctx, ns, cell.Namespace); err != nil {
+		return r.fail(ctx, &cell, fmt.Errorf("network policies: %w", err))
 	}
 	if cell.Spec.Repo.SecretName != "" {
 		if err := r.copySecret(ctx, cell.Namespace, cell.Spec.Repo.SecretName, ns, ids.GitSecretName); err != nil {
@@ -172,8 +177,74 @@ func (r *CellReconciler) ensureNamespace(ctx context.Context, name, cellName str
 		}
 		ns.Labels[ids.CellLabelKey] = cellName
 		ns.Labels["app.kubernetes.io/managed-by"] = "agentcell"
-		// Pod Security: restricted baseline for everything in the cell.
-		ns.Labels["pod-security.kubernetes.io/enforce"] = "baseline"
+		// Pod Security: all platform-rendered pods are non-root, seccomp,
+		// drop-ALL — they satisfy the restricted profile.
+		ns.Labels["pod-security.kubernetes.io/enforce"] = "restricted"
+		return nil
+	})
+	return err
+}
+
+// ensureNetworkPolicies locks a Cell namespace down to default-deny, then
+// reopens only what the workload needs: DNS + HTTPS egress (model APIs and
+// git over 443) and ingress from the control-plane namespace to the
+// preview/prod ports. Cross-project reachability is thereby removed even
+// though projects share the cluster network.
+func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, ns, controlNS string) error {
+	deny := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "default-deny"}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, deny, func() error {
+		deny.Spec = netv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{}, // all pods
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress, netv1.PolicyTypeEgress},
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
+	dns := intstr.FromInt(53)
+	https := intstr.FromInt(443)
+	egress := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "allow-egress"}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, egress, func() error {
+		egress.Spec = netv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+			Egress: []netv1.NetworkPolicyEgressRule{
+				{Ports: []netv1.NetworkPolicyPort{
+					{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns},
+				}},
+				{Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &https}}},
+			},
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Ingress to preview/prod is allowed only from the control-plane
+	// namespace (celld's reverse proxy), never peer cells.
+	ingress := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "allow-control-plane-ingress"}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ingress, func() error {
+		ingress.Spec = netv1.NetworkPolicySpec{
+			// Both zones' serving pods (preview anchor + prod) are reachable
+			// only from the control plane.
+			PodSelector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      ids.AnchorPodLabelKey,
+					Operator: metav1.LabelSelectorOpIn,
+					Values:   []string{ids.AnchorPodLabelVal, ids.ProdPodLabelVal},
+				}},
+			},
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress},
+			Ingress: []netv1.NetworkPolicyIngressRule{{
+				From: []netv1.NetworkPolicyPeer{{
+					NamespaceSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
+					},
+				}},
+			}},
+		}
 		return nil
 	})
 	return err

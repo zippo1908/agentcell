@@ -17,10 +17,11 @@
 | Race-free slot admission (lease CAS on Cell status) | ✅ implemented, unit tested |
 | Non-root pods (runAsNonRoot, seccomp, drop-ALL caps) + non-root devbox image | ✅ implemented |
 | Git credentials kept from repo-controlled processes (prod init-container split; preview child env filtered) | ✅ implemented |
+| HTTP surface auth (bearer token / browser login cookie; refuses to start open) | ✅ implemented, unit tested |
+| NetworkPolicy per cell (default-deny + DNS/HTTPS egress + control-plane-only ingress) + PSS restricted | ✅ implemented, unit tested |
 | Real-cluster (k3s) e2e | ⬜ next milestone |
 | Review queue, diff approval, auto-PR, merge tracking | ⬜ designed (M7/M9) |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
-| NetworkPolicy / PSS restricted labels | ⬜ designed (M8) |
 | Git-token broker (tokens fully out of workload pods) | ⬜ designed |
 | Knowledge indexing / review-feedback distillation | ⬜ designed |
 | agent-sandbox substrate (ADR-0004 Phase 1) | ⬜ designed |
@@ -135,6 +136,12 @@ podman save ghcr.io/agentcell/celld ghcr.io/agentcell/devbox \
 
 # 2. Install into any cluster (single machine: `curl -sfL https://get.k3s.io | sh -`)
 kubectl apply -f config/crd/ -f config/install.yaml
+
+# 2b. Set an API access token (celld refuses to start unauthenticated
+#     unless --allow-no-auth). Rotate by putting several tokens in the file.
+kubectl -n agentcell-system create secret generic celld-tokens \
+  --from-literal=tokens="$(openssl rand -hex 24)"
+#     install.yaml mounts this at /etc/agentcell/auth/tokens.
 
 # 3. Create the credentials your sessions will burn
 kubectl -n agentcell-system create secret generic bailian-key --from-literal=key=sk-...

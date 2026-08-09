@@ -1,0 +1,30 @@
+# e2e devbox: a token-free stand-in for a real project image. Its "agent"
+# is a stub `codex` that makes a deterministic edit instead of calling a
+# model, so the e2e validates the PLATFORM chain (worktree → agent exec →
+# settle → pushed branch → preview/prod proxy) without spending any model
+# credentials. Swap in the real devbox image to also exercise a live runner.
+#
+# Build from repo root after `make build-runtime-static`:
+#   podman build -t ghcr.io/agentcell/devbox-e2e -f images/devbox-e2e/Containerfile .
+FROM docker.io/library/alpine:3.20
+
+RUN apk add --no-cache git
+
+# Static cell-runtime (linux/amd64), baked at the contract path.
+COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime
+RUN chmod 755 /agentcell/cell-runtime
+
+# Fake agent: ignores model/provider, makes one deterministic change so the
+# session "produces" work. Runs with cwd = the session worktree.
+RUN printf '#!/bin/sh\nprintf "# e2e agent ran\\nargs: %%s\\n" "$*" > AGENT_RAN.md\n' \
+      > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+
+# The Cell's preview/prod command uses busybox httpd (built into alpine) to
+# serve the checkout, so the reverse-proxy + Service + NetworkPolicy path is
+# exercised end to end.
+
+# PSS restricted: non-root, no home needed but git wants HOME writable.
+RUN adduser -D -u 1000 agent
+USER 1000
+ENV HOME=/tmp
+WORKDIR /workspace
