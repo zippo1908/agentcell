@@ -408,8 +408,8 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 						Image:           cell.Spec.Image,
 						Command:         []string{runtimeapi.RuntimeBin, "settle"},
 						SecurityContext: containerSecurity(),
-						Env:          settleEnv,
-						VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+						Env:             settleEnv,
+						VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
 					}},
 					Volumes: []corev1.Volume{{
 						Name: "workspace",
