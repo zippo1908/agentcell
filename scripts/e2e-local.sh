@@ -32,6 +32,21 @@ cd "$ROOT"
 log()  { printf '\n\033[1;32m== %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*"; exit 1; }
 
+# http_ok retries a proxied URL until it returns a real application response
+# (2xx/3xx/4xx). A 5xx or 000 means the upstream isn't actually serving —
+# that is a failure, not "reachable". $1 url, $2 label.
+http_ok() {
+  local url="$1" label="$2" code
+  for _ in $(seq 1 30); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$url" || true)
+    case "$code" in
+      2??|3??|4??) echo "$label HTTP status: $code"; return 0 ;;
+    esac
+    sleep 3
+  done
+  fail "$label never served a real response (last status: $code; 5xx/000 means the upstream app is down)"
+}
+
 log "1/8 build binaries + images"
 make build build-runtime-static
 $BUILDER build -t ghcr.io/agentcell/celld       -f images/celld/Containerfile .
@@ -79,11 +94,8 @@ for i in $(seq 1 60); do
 done
 [ "$phase" = "Ready" ] || fail "Cell not Ready (phase=$phase)"
 
-log "6/8 preview reachable through the authenticated proxy"
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:18080/preview/$CELL/README.md" || true)
-[ "$code" != "000" ] || fail "preview proxy unreachable (000)"
-echo "preview HTTP status: $code"
+log "6/8 preview actually serves through the authenticated proxy"
+http_ok "http://127.0.0.1:18080/preview/$CELL/README.md" "preview"
 
 log "7/8 dispatch a session and wait for a produced settle"
 go run ./cmd/cellctl dispatch "$CELL" --task "e2e change" \
@@ -109,9 +121,6 @@ for i in $(seq 1 60); do
   sleep 5
 done
 [ -n "$pp" ] || fail "production path never set"
-sleep 10
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:18080/app/$CELL/README.md" || true)
-echo "production HTTP status: $code"
+http_ok "http://127.0.0.1:18080/app/$CELL/README.md" "production"
 
-log "E2E PASSED — auth, reconcile, preview, dispatch→settle→branch, release all verified"
+log "E2E PASSED — auth, reconcile, preview served, dispatch→settle→branch, release served"

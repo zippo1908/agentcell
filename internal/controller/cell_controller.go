@@ -336,7 +336,14 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 					Ports: []corev1.ContainerPort{{
 						Name: "preview", ContainerPort: previewPort(cell),
 					}},
-					VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+					// Readiness = the preview is actually serving. Without
+					// this, the pod (and Cell) reports Ready the instant the
+					// container starts — before the clone finishes and the
+					// dev server binds — and the proxy 502s on early hits.
+					// Only gated when a preview command exists; otherwise the
+					// anchor idles and never binds the port.
+					ReadinessProbe: previewReadiness(cell),
+					VolumeMounts:   []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
 				}},
 				Volumes: []corev1.Volume{{
 					Name: "workspace",
@@ -356,6 +363,30 @@ func previewPort(cell *acv1.Cell) int32 {
 		return cell.Spec.Preview.Port
 	}
 	return 3000
+}
+
+// previewReadiness gates anchor readiness on the preview actually listening,
+// but only when a preview command is configured (an anchor with no preview
+// idles and never binds a port, so a probe would wedge it NotReady).
+func previewReadiness(cell *acv1.Cell) *corev1.Probe {
+	if len(cell.Spec.Preview.Command) == 0 {
+		return nil
+	}
+	return tcpReadiness(previewPort(cell))
+}
+
+// tcpReadiness returns a lenient TCP-connect readiness probe: it flips to
+// Ready once something accepts on the port, which is exactly when the proxy
+// stops 502-ing. Generous failureThreshold covers slow first clones.
+func tcpReadiness(port int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(port)},
+		},
+		InitialDelaySeconds: 3,
+		PeriodSeconds:       5,
+		FailureThreshold:    60,
+	}
 }
 
 func (r *CellReconciler) ensurePreviewService(ctx context.Context, cell *acv1.Cell, ns string) error {
@@ -453,6 +484,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					SecurityContext: containerSecurity(),
 					Env:             serveEnv,
 					Ports:           []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
+					ReadinessProbe:  tcpReadiness(prodPort(cell)),
 					// emptyDir only: structurally impossible to share dev state.
 					VolumeMounts: []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
 				}},

@@ -90,6 +90,11 @@ func TestCellReconcileCreatesWorkloadResources(t *testing.T) {
 	if got := sts.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
 		t.Errorf("anchor imagePullPolicy = %s, want %s", got, corev1.PullIfNotPresent)
 	}
+	// Readiness must gate on the preview port so "Ready" means "serving",
+	// not "container started" — otherwise the proxy 502s on early hits.
+	if p := sts.Spec.Template.Spec.Containers[0].ReadinessProbe; p == nil || p.TCPSocket == nil {
+		t.Error("anchor with a preview command must have a TCP readiness probe")
+	}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.PreviewService}, &corev1.Service{}); err != nil {
 		t.Fatalf("preview service: %v", err)
 	}
@@ -320,6 +325,9 @@ func TestReleaseCreatesIsolatedProduction(t *testing.T) {
 	serve := dep.Spec.Template.Spec.Containers[0]
 	if serve.Command[1] != "prod-serve" {
 		t.Errorf("serving container command = %v", serve.Command)
+	}
+	if serve.ReadinessProbe == nil || serve.ReadinessProbe.TCPSocket == nil {
+		t.Error("prod serving container must have a TCP readiness probe")
 	}
 	if got := serve.ImagePullPolicy; got != corev1.PullIfNotPresent {
 		t.Errorf("prod serve imagePullPolicy = %s, want %s", got, corev1.PullIfNotPresent)
