@@ -86,7 +86,7 @@ func ensureClone() error {
 		args = append(args, "--branch", branch)
 	}
 	args = append(args, url, ids.RepoPath)
-	return git("/", args...)
+	return gitNet("/", args...)
 }
 
 // syncBase keeps the local base branch tracking the remote so worktrees

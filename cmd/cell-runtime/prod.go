@@ -49,14 +49,14 @@ func runProdClone() error {
 		if err := git(runtimeapi.ProdRepoPath, "remote", "add", "origin", url); err != nil {
 			return err
 		}
-		if err := git(runtimeapi.ProdRepoPath, "fetch", "--depth", "1", "origin", ref); err != nil {
+		if err := gitNet(runtimeapi.ProdRepoPath, "fetch", "--depth", "1", "origin", ref); err != nil {
 			return fmt.Errorf("fetch release sha %q: %w", ref, err)
 		}
 		if err := git(runtimeapi.ProdRepoPath, "checkout", "--detach", "FETCH_HEAD"); err != nil {
 			return err
 		}
 	} else {
-		if err := git("/", "clone", "--depth", "1", "--branch", ref, url, runtimeapi.ProdRepoPath); err != nil {
+		if err := gitNet("/", "clone", "--depth", "1", "--branch", ref, url, runtimeapi.ProdRepoPath); err != nil {
 			return fmt.Errorf("clone release %q: %w", ref, err)
 		}
 	}

@@ -38,6 +38,31 @@ proxy therefore hit a not-yet-listening upstream and returned 502.
 
 Re-run `scripts/e2e-local.sh` to confirm steps 6 and 8 reach a 2xx/3xx/4xx.
 
+## Run 2 — 2026-08-10 (strict script, single-node k3s on WSL)
+
+The readiness fix worked; a second, unrelated issue surfaced (GitHub #2).
+
+| Step | Check | Result |
+| --- | --- | --- |
+| 1–5 | build / install / auth / create / ready | ✅ |
+| 6 | Preview served through proxy | ✅ **HTTP 200** (was 502; readiness probe fixed it) |
+| 7 | Dispatch → settle → remote branch | ⚠️ branch verified, but the harness matched a *stale* session (items[0]) not the one just dispatched |
+| 8 | Release → production served | ❌ **HTTP 502** — prod init clone failed: `Could not resolve host: github.com` |
+
+**Genuinely fixed since Run 1:** preview now serves (readiness probe).
+**Step 8 root cause:** transient cluster DNS/egress at pod startup — the
+prod clone ran before CoreDNS/egress was ready; the same host resolved fine
+moments later from the anchor. Not a platform logic bug; the strict script
+correctly refused to call it a pass.
+
+### Fixes (committed, awaiting Run 3)
+
+- Network git ops (anchor + prod clone/fetch) now retry with backoff
+  (1/4/9/16s) via `gitNet`, so a pod that starts before DNS/egress is ready
+  recovers instead of failing the release.
+- `scripts/e2e-local.sh` step 7 now parses the dispatched session name from
+  `cellctl` output and verifies *that* session, never `items[0]`.
+
 ### Re-run prompt (for a local Codex CLI)
 
 > Pull the latest `main` of https://github.com/zippo1908/agentcell. Rebuild

@@ -98,17 +98,22 @@ log "6/8 preview actually serves through the authenticated proxy"
 http_ok "http://127.0.0.1:18080/preview/$CELL/README.md" "preview"
 
 log "7/8 dispatch a session and wait for a produced settle"
-go run ./cmd/cellctl dispatch "$CELL" --task "e2e change" \
-  --runner codex --provider deepseek --cred e2e-model --namespace "$NS"
+# Capture THIS session's name from cellctl output; never assume items[0],
+# which on a re-run can be a leftover session from a prior attempt.
+disp=$(go run ./cmd/cellctl dispatch "$CELL" --task "e2e change" \
+  --runner codex --provider deepseek --cred e2e-model --namespace "$NS")
+echo "$disp"
+sess=$(printf '%s\n' "$disp" | sed -n 's#^session/\([^ ]*\) dispatched.*#\1#p' | head -1)
+[ -n "$sess" ] || fail "could not determine dispatched session name from: $disp"
 for i in $(seq 1 60); do
-  sess=$(kubectl -n "$NS" get sessions -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-  phase=$(kubectl -n "$NS" get session "$sess" -n "$NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  phase=$(kubectl -n "$NS" get session "$sess" -o jsonpath='{.status.phase}' 2>/dev/null || true)
   [ "$phase" = "Settled" ] && break
-  [ "$phase" = "Error" ] && fail "session errored: $(kubectl -n "$NS" get session "$sess" -o jsonpath='{.status.message}')"
+  [ "$phase" = "Error" ] && fail "session $sess errored: $(kubectl -n "$NS" get session "$sess" -o jsonpath='{.status.message}')"
   sleep 5
 done
-[ "$phase" = "Settled" ] || fail "session not Settled (phase=$phase)"
+[ "$phase" = "Settled" ] || fail "session $sess not Settled (phase=$phase)"
 branch=$(kubectl -n "$NS" get session "$sess" -o jsonpath='{.status.branch}')
+[ -n "$branch" ] || fail "settled session $sess has no branch recorded"
 git ls-remote "https://$E2E_GIT_USER:$E2E_GIT_TOKEN@${E2E_REPO_URL#https://}" "$branch" \
   | grep -q "$branch" || fail "settled branch $branch not found on remote"
 echo "settled branch on remote: $branch"

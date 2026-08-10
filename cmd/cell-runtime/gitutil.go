@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // askpassScript is written at container start; git invokes it for
@@ -48,6 +49,22 @@ func envWithoutGitCreds() []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// gitNet runs a network git op (clone/fetch/push) with bounded retry: a
+// pod that starts before CoreDNS or egress is ready would otherwise fail
+// permanently on a transient "could not resolve host". Backoff is fixed and
+// short; the caller's own supervision handles anything past this window.
+func gitNet(dir string, args ...string) error {
+	var err error
+	for attempt := 1; attempt <= 5; attempt++ {
+		if err = git(dir, args...); err == nil {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "git %s: attempt %d failed: %v\n", args[0], attempt, err)
+		time.Sleep(time.Duration(attempt*attempt) * time.Second) // 1,4,9,16s
+	}
+	return err
 }
 
 // gitOut runs a git command and captures trimmed stdout.
