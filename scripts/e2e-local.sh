@@ -79,11 +79,11 @@ code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/cells |
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/api/cells || true)
 [ "$code" = "200" ] || fail "authenticated /api/cells returned $code, want 200"
 
-log "4/8 create the Cell (fake-agent image, busybox httpd preview)"
+log "4/8 create the Cell (fake-agent image, httpd preview)"
 kubectl delete cell "$CELL" -n "$NS" --ignore-not-found --wait=true
 go run ./cmd/cellctl cell create "$CELL" \
   --repo "$E2E_REPO_URL" --image ghcr.io/agentcell/devbox-e2e --secret git-cred \
-  --preview "busybox httpd -f -p 3000 -h ." --preview-port 3000 \
+  --preview "httpd -f -p 3000 -h ." --preview-port 3000 \
   --description "e2e" --namespace "$NS"
 
 log "5/8 wait for the Cell to be Ready"

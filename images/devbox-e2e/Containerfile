@@ -8,7 +8,7 @@
 #   podman build -t ghcr.io/agentcell/devbox-e2e -f images/devbox-e2e/Containerfile .
 FROM docker.io/library/alpine:3.20
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git busybox-extras
 
 # Static cell-runtime (linux/amd64), baked at the contract path.
 COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime
@@ -19,9 +19,9 @@ RUN chmod 755 /agentcell/cell-runtime
 RUN printf '#!/bin/sh\nprintf "# e2e agent ran\\nargs: %%s\\n" "$*" > AGENT_RAN.md\n' \
       > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
 
-# The Cell's preview/prod command uses busybox httpd (built into alpine) to
-# serve the checkout, so the reverse-proxy + Service + NetworkPolicy path is
-# exercised end to end.
+# The Cell's preview/prod command uses the httpd supplied by busybox-extras.
+# Alpine's base busybox does not include that applet, so install it explicitly
+# to exercise the reverse-proxy + Service + NetworkPolicy path end to end.
 
 # PSS restricted: non-root, no home needed but git wants HOME writable.
 RUN adduser -D -u 1000 agent
