@@ -125,6 +125,10 @@ Runners: `claude`, `codex`, `pi`. A (runner, provider, model) binding is valid i
 
 ## Quick start
 
+For a production-oriented walkthrough (secrets, ingress/TLS, storage,
+multi-node, upgrades, troubleshooting) see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+The condensed version:
+
 ```sh
 # 1. Build the images and import them into the cluster's containerd
 #    (k3s does not see your local podman storage)
