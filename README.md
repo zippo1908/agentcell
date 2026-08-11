@@ -2,7 +2,7 @@
 
 **A workshop for AI coding agents: one resident Kubernetes-backed instance per project ("Cell"), disposable work sessions as slots inside it, a resident live product preview for the human to calibrate against, and an SDLC loop closed within the instance — dispatch → work → settle are implemented today; review queue → PR is on the roadmap (M7/M9).**
 
-> Status: **pre-alpha — not yet safe for company code, tokens, or production apps.** The vertical slice (operator, runtime, resident preview, calibration UI, CLI) compiles, passes unit tests (including real-git settle tests), but has not yet run a real-cluster e2e. Read the table below for exactly what is implemented vs designed.
+> Status: **alpha — evaluate before trusting it with production apps.** The vertical slice (operator, runtime, resident preview, calibration UI, CLI) compiles, passes unit tests (including real-git settle tests), and passes a full 8-step end-to-end run on real single-node k3s (auth → reconcile → preview HTTP 200 → dispatch→settle→pushed branch → release → production HTTP 200; see [docs/E2E_RESULTS.md](docs/E2E_RESULTS.md)). Read the table below for exactly what is implemented vs designed.
 
 ## Implemented vs designed
 
@@ -19,7 +19,7 @@
 | Git credentials kept from repo-controlled processes (prod init-container split; preview child env filtered) | ✅ implemented |
 | HTTP surface auth (bearer token / browser login cookie; refuses to start open) | ✅ implemented, unit tested |
 | NetworkPolicy per cell (default-deny + DNS/HTTPS egress + control-plane-only ingress) + PSS restricted | ✅ implemented, unit tested |
-| Real-cluster (k3s) e2e | ⬜ next milestone |
+| Real-cluster (k3s) e2e — all 8 steps incl. preview & production HTTP 200 | ✅ passed ([docs/E2E_RESULTS.md](docs/E2E_RESULTS.md) Run 3) |
 | Review queue, diff approval, auto-PR, merge tracking | ⬜ designed (M7/M9) |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
 | Git-token broker (tokens fully out of workload pods) | ⬜ designed |
