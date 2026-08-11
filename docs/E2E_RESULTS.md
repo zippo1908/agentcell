@@ -65,3 +65,25 @@ just dispatched.
 > `kubectl -n cell-e2e get events`. Fix the root cause, re-run until it
 > prints `E2E PASSED`, and append a "Run 3" section here with the per-step
 > table and the exact HTTP codes for steps 6 and 8.
+
+## Run 3 - strict rerun after finalizer fix
+
+| Step | Check | Result |
+| --- | --- | --- |
+| 1 | Build binaries and both images; import into k3s | PASS |
+| 2 | Install CRDs, control plane, and E2E secrets | PASS |
+| 3 | Auth rejects no token and accepts the configured token | PASS |
+| 4 | Delete the prior Cell, then create `e2e` | PASS |
+| 5 | Cell becomes Ready | PASS |
+| 6 | Preview through the authenticated proxy | PASS, HTTP 200 |
+| 7 | Dispatch the named Session, settle, and verify its remote branch | PASS, `session/01kzsjysdmwhqc3ks1gncbqcbn` |
+| 8 | Release and reach production through `/app/e2e/` | PASS, HTTP 200 |
+
+The strict script printed `E2E PASSED` on the final run. The first Run 3
+attempt exposed a cleanup race: the Cell controller removed its finalizer as
+soon as it requested Namespace deletion, allowing a same-name Cell to
+reconcile against `cell-e2e` while that namespace was still Terminating.
+Kubernetes then rejected copied credentials and per-session secrets. The
+controller now keeps the Cell finalizer and requeues until the workload
+namespace is actually gone; `TestCellFinalizeWaitsForWorkloadNamespaceDeletion`
+covers that ordering.

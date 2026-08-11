@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -122,6 +123,39 @@ func TestCellReconcileCreatesWorkloadResources(t *testing.T) {
 	}
 }
 
+func TestCellFinalizeWaitsForWorkloadNamespaceDeletion(t *testing.T) {
+	ctx := context.Background()
+	cell := testCell()
+	cell.Finalizers = []string{cellFinalizer}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ids.WorkloadNamespace(cell.Name)}}
+	c := newFake(t, cell, ns)
+	r := &CellReconciler{Client: c}
+
+	result, err := r.finalize(ctx, cell)
+	if err != nil {
+		t.Fatalf("first finalize: %v", err)
+	}
+	if result.RequeueAfter != 2*time.Second {
+		t.Fatalf("first finalize requeue = %s, want 2s", result.RequeueAfter)
+	}
+	if len(cell.Finalizers) != 1 || cell.Finalizers[0] != cellFinalizer {
+		t.Fatalf("finalizer removed before namespace deletion completed: %v", cell.Finalizers)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Name: ns.Name}, &corev1.Namespace{}); err == nil {
+		t.Fatal("workload namespace still exists after delete request")
+	}
+
+	result, err = r.finalize(ctx, cell)
+	if err != nil {
+		t.Fatalf("second finalize: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("second finalize requeue = %s, want no requeue", result.RequeueAfter)
+	}
+	if len(cell.Finalizers) != 0 {
+		t.Fatalf("finalizer retained after namespace deletion: %v", cell.Finalizers)
+	}
+}
 func credSecret(name string) *corev1.Secret {
 	s := &corev1.Secret{}
 	s.Name, s.Namespace = name, controlNS

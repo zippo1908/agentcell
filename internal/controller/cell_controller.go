@@ -157,8 +157,20 @@ func (r *CellReconciler) fail(ctx context.Context, cell *acv1.Cell, err error) (
 
 func (r *CellReconciler) finalize(ctx context.Context, cell *acv1.Cell) (ctrl.Result, error) {
 	ns := ids.WorkloadNamespace(cell.Name)
-	err := r.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
-	if err != nil && !apierrors.IsNotFound(err) {
+	var namespace corev1.Namespace
+	err := r.Get(ctx, types.NamespacedName{Name: ns}, &namespace)
+	if err == nil {
+		if namespace.DeletionTimestamp.IsZero() {
+			if err := r.Delete(ctx, &namespace); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		}
+		// Namespace deletion is asynchronous. Keep the Cell finalizer until it
+		// has actually completed so a same-name Cell cannot reuse a terminating
+		// workload namespace.
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+	if !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
 	if controllerutil.RemoveFinalizer(cell, cellFinalizer) {
