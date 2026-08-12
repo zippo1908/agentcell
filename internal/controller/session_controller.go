@@ -44,6 +44,9 @@ type SessionReconciler struct {
 	// Forge opens/tracks PRs through the broker after review approval
 	// (ADR-0006). nil/disabled leaves review purely informational.
 	Forge ForgeClient
+	// Exec reaches into a user's runtime pod to open and close session
+	// windows. nil means resident sessions are unavailable.
+	Exec ExecFunc
 	// UIDs resolves the Unix identity a Session's pods run as (ADR-0009).
 	// nil keeps every workload on the shared project identity, which is the
 	// pre-identity behaviour.
@@ -148,7 +151,17 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 	if err != nil {
 		return r.fail(ctx, sess, err)
 	}
-	argv, err := access.HeadlessArgv(sess.Spec.Runner, sess.Spec.Task)
+	// Name the CLI-side conversation once, at first dispatch, so a later
+	// "keep going" addresses this one rather than opening a fresh context.
+	if sess.Status.RunnerSessionID == "" {
+		if sid := access.NewRunnerSession(sess.Spec.Runner); sid != "" {
+			sess.Status.RunnerSessionID = sid
+			if err := r.Status().Update(ctx, sess); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
+	argv, err := access.StartArgvFor(sess.Spec.Runner, sess.Spec.Task, sess.Status.RunnerSessionID)
 	if err != nil {
 		return r.fail(ctx, sess, err)
 	}
@@ -169,13 +182,39 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if err := r.copyCredential(ctx, sess, ns, id); err != nil {
-		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
-		return r.fail(ctx, sess, fmt.Errorf("credential secret: %w", err))
-	}
-	if err := r.ensureSessionPod(ctx, sess, cell, ns, id, binding, argv); err != nil {
-		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
-		return r.fail(ctx, sess, err)
+	if sess.Spec.Resident {
+		// A resident session is a window in its owner's runtime, not a pod of
+		// its own: the CLIs manage conversations, so one tmux server per user
+		// is what the platform actually needs to provide.
+		uid, err := r.ownerUID(ctx, sess)
+		if err != nil {
+			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+			return r.fail(ctx, sess, err)
+		}
+		ready, err := r.ensureUserRuntime(ctx, cell, ns, uid)
+		if err != nil {
+			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+			return r.fail(ctx, sess, err)
+		}
+		if !ready {
+			// Keep the slot: it is this session's, and the runtime is coming
+			// up for it.
+			return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
+		}
+		if err := r.openWindow(ctx, sess, cell, ns, id, uid, binding, argv); err != nil {
+			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+			return r.fail(ctx, sess, err)
+		}
+		sess.Status.PodName = ids.UserRuntimePod(uid)
+	} else {
+		if err := r.copyCredential(ctx, sess, ns, id); err != nil {
+			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+			return r.fail(ctx, sess, fmt.Errorf("credential secret: %w", err))
+		}
+		if err := r.ensureSessionPod(ctx, sess, cell, ns, id, binding, argv); err != nil {
+			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+			return r.fail(ctx, sess, err)
+		}
 	}
 
 	// Preview follow: watching work-in-progress is a Cell-level switch.
@@ -195,7 +234,13 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 
 	now := metav1.Now()
 	sess.Status.Phase = acv1.SessionRunning
-	sess.Status.PodName = ids.SessionName(id)
+	// Only a one-shot session has a pod of its own; a resident one already
+	// recorded the runtime that hosts its window, and overwriting that sent
+	// every later lookup — status, follow-ups, attach — to a pod that does
+	// not exist.
+	if !sess.Spec.Resident {
+		sess.Status.PodName = ids.SessionName(id)
+	}
 	sess.Status.StartTime = &now
 	sess.Status.Message = ""
 	if err := r.Status().Update(ctx, sess); err != nil {
@@ -385,11 +430,17 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	if ttl == 0 {
 		ttl = defaultTTL
 	}
+	host := ids.SessionName(id)
+	if sess.Spec.Resident {
+		host = sess.Status.PodName
+	}
 	var pod corev1.Pod
-	err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.SessionName(id)}, &pod)
+	err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: host}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
-		// Pod vanished (evicted, force-deleted): settle what's on disk.
+		// Pod vanished (evicted, force-deleted): settle what's on disk. For a
+		// resident session that is its runtime going away, which takes the
+		// window with it.
 		return r.startSettle(ctx, sess, cell, ns, id, "session pod disappeared")
 	case err != nil:
 		return ctrl.Result{}, err
@@ -411,6 +462,13 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 }
 
 func (r *SessionReconciler) startSettle(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id, why string) (ctrl.Result, error) {
+	if sess.Spec.Resident {
+		// Close the window before settle takes the worktree, so nothing is
+		// still typing into it while it is committed and reclaimed.
+		if uid, err := r.ownerUID(ctx, sess); err == nil {
+			r.closeWindow(ctx, ns, id, uid)
+		}
+	}
 	if err := r.ensureSettleJob(ctx, sess, cell, ns, id); err != nil {
 		return r.fail(ctx, sess, err)
 	}
@@ -546,6 +604,15 @@ func (r *SessionReconciler) observeSettle(ctx context.Context, sess *acv1.Sessio
 		return ctrl.Result{}, err
 	}
 	r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+	if sess.Spec.Resident {
+		// Reclaim the runtime once this user has nothing open in the Cell.
+		// A tmux takes a slot; when you are done it goes away.
+		if uid, err := r.ownerUID(ctx, sess); err == nil {
+			if err := r.reapUserRuntime(ctx, ns, uid, sess.Spec.Cell); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
 	return ctrl.Result{}, nil
 }
 

@@ -241,3 +241,47 @@ had no tmux, so a resident session simply failed and the Session reported
 "agent finished (Failed)" — which points at the agent rather than at the
 image. The runtime now checks for tmux up front and says so in a sentence an
 operator can act on.
+
+## Run 7 - one tmux per user (ADR-0010 §6)
+
+Run 6 gave each resident session its own pod and its own tmux server. That
+was one layer too many: the agent CLIs manage conversations themselves, so a
+process per conversation is a second, worse copy of their bookkeeping. Run 7
+verifies the corrected shape — a user's sessions in a Cell are windows in one
+runtime pod.
+
+| Check | Result |
+| --- | --- |
+| Two resident sessions dispatched concurrently | PASS |
+| Both hosted by ONE runtime pod | PASS, `runtime-100002` |
+| No per-session pod exists | PASS |
+| Exactly one window per session, no duplicates | PASS |
+| The tmux socket is 0700 and owned by its user | PASS |
+| The window environment file is removed after sourcing | PASS |
+
+Four defects, all of them in the seam between a cache-backed controller and a
+real cluster, and none reachable without one:
+
+**Reading a pod straight back after creating it can miss.** The client reads
+through an informer cache, so a just-created runtime looks absent. Treating
+that as an error failed the first session of every runtime with
+`Pod "runtime-100002" not found`.
+
+**Two sessions starting together both create it.** Losing that race is the
+runtime existing, which is the goal; treating `already exists` as an error
+failed one of the two.
+
+**Reaping was too eager.** "In use" was Running-or-Queued, so a session that
+had not been given a phase yet — precisely the one being started — did not
+count, and its runtime was deleted out from under it.
+
+**The status host was overwritten.** A resident session recorded its runtime
+as host, and the next line set it to the session's own name unconditionally,
+pointing state, follow-ups and attach at a pod that does not exist. It made a
+resident session quietly behave like a one-shot.
+
+And one thing this run caught that contradicted its own design: the model key
+was being passed as `tmux new-window -e KEY=VALUE`, which puts it in the tmux
+client's argv and therefore in `/proc` for every other window the user has
+open — the exact exposure the stdin channel exists to avoid. The environment
+now goes through a `0600` file the window sources and unlinks.

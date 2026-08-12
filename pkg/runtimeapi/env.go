@@ -97,7 +97,16 @@ const (
 	// RuntimeBin is where images bake the static cell-runtime binary.
 	RuntimeBin = "/agentcell/cell-runtime"
 
+	// UserRuntimeContainer is the container name in a user's runtime pod.
+	UserRuntimeContainer = "runtime"
+
 	// TerminationMessagePath JSON emitted by the settle applet:
 	// {"produced":bool,"branch":string,"message":string}.
 	SettleResultPath = "/dev/termination-log"
 )
+
+// DoneMarkerFor names the completion marker of one session. A user runtime
+// holds several windows, so the marker cannot be a single fixed path.
+func DoneMarkerFor(sessionID string) string {
+	return "/tmp/agentcell-" + sessionID + ".done"
+}

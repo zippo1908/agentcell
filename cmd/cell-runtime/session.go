@@ -48,32 +48,9 @@ func runSession() error {
 		return err
 	}
 	wt := ids.WorktreePath(uid, id)
-	branch := ids.SessionBranch(id)
-	if _, err := os.Stat(wt); os.IsNotExist(err) {
-		// 0700 all the way down: a peer's pod runs as a different uid on the
-		// same volume, and an unpublished worktree is nobody else's business.
-		if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
-			return err
-		}
-		if err := git(ids.RepoPath, "worktree", "add", "-b", branch, wt, base); err != nil {
-			return fmt.Errorf("worktree add: %w", err)
-		}
+	if err := prepareWorktree(wt, id, base); err != nil {
+		return err
 	}
-
-	// Record the work order and product context next to the code, for the
-	// agent now and for humans reviewing the settled branch later.
-	_ = os.MkdirAll(filepath.Join(wt, ".agentcell"), 0o755)
-	task := "# 本单任务\n\n" + os.Getenv(runtimeapi.EnvTask) + "\n"
-	if desc := os.Getenv(runtimeapi.EnvDescription); desc != "" {
-		_ = os.WriteFile(filepath.Join(wt, ".agentcell", "PRODUCT.md"),
-			[]byte("# 产品描述(用户随预览持续校准)\n\n"+desc+"\n"), 0o644)
-		task += "\n产品整体描述见 `.agentcell/PRODUCT.md`,以它为准对齐方向。\n"
-	}
-	if _, err := os.Stat(runtimeapi.KnowledgePath); err == nil {
-		task += "\n项目持久知识库在 `" + runtimeapi.KnowledgePath + "/`(跨会话共享):" +
-			"开工前浏览;本单学到的可复用经验(约定、坑、决策)以 md 文件沉淀回去。\n"
-	}
-	_ = os.WriteFile(filepath.Join(wt, ".agentcell", "TASK.md"), []byte(task), 0o644)
 
 	// When the user asked to watch this session live, serve the preview from
 	// this pod. The worktree is private to its owner, so the anchor cannot
@@ -268,27 +245,13 @@ func ensureSharedParent(dir string) error {
 // semicolon in a task description must stay a semicolon rather than becoming
 // the start of another command.
 func runTell(args []string) error {
-	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
-		return fmt.Errorf("tell: nothing to say")
+	if len(args) < 2 {
+		return fmt.Errorf("tell: need <session-id> <argv...>")
 	}
-	id := os.Getenv(runtimeapi.EnvSessionID)
-	if id == "" {
-		return fmt.Errorf("tell: %s not set", runtimeapi.EnvSessionID)
-	}
+	id, args := args[0], args[1:]
 	sock := ids.TmuxSocket(int64(os.Getuid()))
-	window := ids.TmuxWindow(id)
-	text := strings.Join(args, " ")
-	// Clear whatever half-typed line is sitting there first, so a follow-up
-	// cannot be concatenated onto it.
-	if out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window, "C-u").CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux send-keys: %v: %s", err, out)
-	}
-	out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window, "-l", text).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tmux send-keys: %v: %s", err, out)
-	}
-	if out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window, "Enter").CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux send-keys Enter: %v: %s", err, out)
+	if err := sendCommand(sock, ids.TmuxWindow(id), args, true, id, ""); err != nil {
+		return err
 	}
 	fmt.Println("sent")
 	return nil
@@ -300,11 +263,11 @@ func runTell(args []string) error {
 // inside the pod from the uid it runs as and the session id in the
 // environment. That is deliberate: an operator attaching should not have to
 // know, or be told, another user's private paths.
-func runAttach() error {
-	id := os.Getenv(runtimeapi.EnvSessionID)
-	if id == "" {
-		return fmt.Errorf("attach: %s not set", runtimeapi.EnvSessionID)
+func runAttach(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("attach: need <session-id>")
 	}
+	id := args[0]
 	tmux, err := exec.LookPath("tmux")
 	if err != nil {
 		return fmt.Errorf("attach: tmux is not in this image")

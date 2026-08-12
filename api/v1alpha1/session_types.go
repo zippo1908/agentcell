@@ -80,6 +80,13 @@ type SessionStatus struct {
 	Phase     SessionPhase `json:"phase,omitempty"`
 	SessionID string       `json:"sessionID,omitempty"`
 	PodName   string       `json:"podName,omitempty"`
+	// RunnerSessionID names the conversation inside the agent CLI, where that
+	// CLI lets the caller choose one. It is what makes "keep going" continue
+	// the same conversation instead of starting one that has to rediscover
+	// everything. The CLIs already do this well; the platform's job is to
+	// name the conversation and give it a private $HOME (ADR-0009), not to
+	// reimplement transcripts.
+	RunnerSessionID string `json:"runnerSessionID,omitempty"`
 	// Branch is the settled output branch (session/<id>) when Produced.
 	Branch    string       `json:"branch,omitempty"`
 	Produced  bool         `json:"produced,omitempty"`
