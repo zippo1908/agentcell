@@ -39,17 +39,20 @@ design. In short:
   with an audience-bound ServiceAccount token; only the settle role may push,
   and only to its own `session/<id>` branch. Session pods carry no token at
   all.
-- **Preview and production content is untrusted.** `/preview/<cell>/` and
-  `/app/<cell>/` serve repo- and agent-authored code from the control
-  plane's own origin. It is therefore confined two ways: the UI frames it
-  with a `sandbox` attribute that omits `allow-same-origin`, and celld
-  stamps an equivalent `Content-Security-Policy: sandbox …` on every
-  proxied response so the confinement also applies when an operator opens
-  the URL directly. Both give the document an **opaque origin**: its
-  scripts cannot read the console's DOM, cannot use our cookie, and cannot
-  navigate the top-level page. Trade-off: a previewed app that relies on
-  its own cookies/storage degrades. A dedicated preview origin remains the
-  stronger long-term answer.
+- **Preview and production content is untrusted, and served from its own
+  origin.** `/preview/<cell>/` and `/app/<cell>/` run repo- and
+  agent-authored code, so celld serves them on a **separate origin** from
+  the console (default port 8081; set `--preview-origin` to a distinct
+  hostname in production). Cross-origin scripts cannot read the console's
+  DOM, cookie-authenticated writes from that origin fail the Origin check
+  below, and CORS keeps API responses from being exposed to them. Because
+  the content owns its origin, a previewed app keeps full same-origin
+  powers over *itself* — cookies, localStorage, service workers — and is
+  not degraded. A residual CSP `sandbox` still forbids one thing:
+  navigating or replacing the top-level console page. See
+  [ADR-0007](docs/adr/0007-preview-origin-separation.md).
+  **Deployment note:** cookies ignore port, so a same-host/different-port
+  split does not isolate cookies; use a distinct hostname in production.
 - **Cookie-authenticated writes require same-origin provenance.** Because
   untrusted preview content is *same-site* with the console, SameSite
   cookies provide no protection at all. Every state-changing request

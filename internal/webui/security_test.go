@@ -81,11 +81,11 @@ func TestCookieWritesRequireSameOrigin(t *testing.T) {
 	})
 }
 
-// Untrusted preview/production responses must carry a sandbox CSP with an
-// opaque origin, whether they are framed or opened directly.
+// Isolation comes from origin separation (ADR-0007), so the previewed app
+// keeps same-origin powers over itself — what must stay denied is taking
+// over the console page.
 func TestUntrustedContentCSP(t *testing.T) {
 	for _, forbidden := range []string{
-		"allow-same-origin",
 		"allow-top-navigation",
 		"allow-popups-to-escape-sandbox",
 	} {
@@ -96,8 +96,52 @@ func TestUntrustedContentCSP(t *testing.T) {
 	if !strings.HasPrefix(untrustedContentCSP, "sandbox ") {
 		t.Errorf("CSP must be a sandbox directive, got %q", untrustedContentCSP)
 	}
-	if !strings.Contains(untrustedContentCSP, "allow-scripts") {
-		t.Error("preview needs allow-scripts to be useful")
+	// A previewed app must not be degraded: it needs its own origin powers.
+	for _, required := range []string{"allow-scripts", "allow-same-origin", "allow-forms"} {
+		if !strings.Contains(untrustedContentCSP, required) {
+			t.Errorf("preview would degrade without %q: %s", required, untrustedContentCSP)
+		}
+	}
+}
+
+// The console origin must not serve untrusted content, and the preview
+// origin must not expose the console API or SPA — that separation IS the
+// security boundary.
+func TestConsoleAndPreviewOriginsAreDisjoint(t *testing.T) {
+	h := &Handler{Registry: nil}
+
+	previewMux := h.PreviewRoutes()
+	for _, p := range []string{"/api/cells", "/api/meta", "/reviews", "/cells"} {
+		rec := httptest.NewRecorder()
+		previewMux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code == http.StatusOK {
+			t.Errorf("preview origin exposes console path %s (200)", p)
+		}
+	}
+
+	// The console mux must not proxy untrusted content any more.
+	consoleMux := (&Handler{}).Routes()
+	for _, p := range []string{"/preview/shop/", "/app/shop/"} {
+		rec := httptest.NewRecorder()
+		consoleMux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code == http.StatusOK {
+			t.Errorf("console origin still serves untrusted path %s (200)", p)
+		}
+	}
+}
+
+// The UI must be told an absolute, different origin for untrusted content.
+func TestPreviewOriginIsAbsoluteAndDistinct(t *testing.T) {
+	h := &Handler{PreviewPort: "8081"}
+	req := httptest.NewRequest(http.MethodGet, "/api/meta", nil)
+	req.Host = "console.example:8080"
+	if got := h.previewOriginFor(req); got != "http://console.example:8081" {
+		t.Errorf("derived preview origin = %q", got)
+	}
+
+	h = &Handler{PreviewOrigin: "https://preview.example.com/"}
+	if got := h.previewOriginFor(req); got != "https://preview.example.com" {
+		t.Errorf("configured preview origin = %q", got)
 	}
 }
 

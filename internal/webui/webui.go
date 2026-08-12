@@ -33,6 +33,12 @@ type Handler struct {
 	// Forge serves diffs through the broker (ADR-0006); nil/disabled makes
 	// the diff endpoint report 501 and review purely informational.
 	Forge *forge.Client
+	// PreviewOrigin is the absolute origin serving untrusted Cell content
+	// (ADR-0007), e.g. https://preview.example.com. Empty derives it from
+	// the request host and PreviewPort.
+	PreviewOrigin string
+	// PreviewPort is used only when PreviewOrigin is empty.
+	PreviewPort string
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -47,11 +53,29 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{session}/diff", h.sessionDiff)
 	mux.HandleFunc("POST /api/sessions/{session}/review", h.reviewSession)
 	mux.HandleFunc("DELETE /api/sessions/{session}", h.settleSession)
-	mux.HandleFunc("/preview/{cell}/", h.preview)
-	mux.HandleFunc("/app/{cell}/", h.productionApp)
 	// The SPA is last: it serves built assets and falls back to index.html
 	// so client-side routes (/cells/x, /reviews) survive a hard reload.
 	mux.Handle("/", spaHandler())
+	return mux
+}
+
+// PreviewRoutes serves untrusted Cell content — and nothing else — on a
+// SEPARATE ORIGIN from the console (ADR-0007). Origin separation, not
+// sandboxing, is what confines this content, so a previewed app keeps full
+// same-origin powers over itself (cookies, localStorage, service workers)
+// while being unable to touch the console: cross-origin scripts cannot read
+// our DOM, cookie-authenticated writes fail the Origin check, and responses
+// are not exposed to it by CORS.
+//
+// The console API and SPA are deliberately absent from this mux: nothing
+// here should be reachable from the origin that runs untrusted code.
+func (h *Handler) PreviewRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/preview/{cell}/", h.preview)
+	mux.HandleFunc("/app/{cell}/", h.productionApp)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	return mux
 }
 
@@ -121,11 +145,40 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-func (h *Handler) meta(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) meta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"runners":   access.Runners(),
 		"providers": h.Registry.Providers(),
+		// Absolute base for preview/app URLs. It is a different origin from
+		// the console on purpose; the UI must not build these as relative
+		// paths or the isolation collapses.
+		"previewOrigin": h.previewOriginFor(r),
 	})
+}
+
+// previewOriginFor resolves the origin browsers should use for untrusted
+// content: the configured value, or the console's host with the preview
+// port substituted (which is what a port-forward setup gives you).
+func (h *Handler) previewOriginFor(r *http.Request) string {
+	if h.PreviewOrigin != "" {
+		return strings.TrimRight(h.PreviewOrigin, "/")
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	}
+	host := r.Host
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	port := h.PreviewPort
+	if port == "" {
+		port = "8081"
+	}
+	return scheme + "://" + host + ":" + port
 }
 
 type cellView struct {
@@ -352,16 +405,19 @@ func (h *Handler) productionApp(w http.ResponseWriter, r *http.Request) {
 	h.proxyTo(w, r, cellName, ids.ProdService, port, "/app/"+cellName)
 }
 
-// untrustedContentCSP forces every preview/production response into a
-// sandbox with an OPAQUE ORIGIN. This content is repo- and agent-authored,
-// i.e. untrusted, yet served from the control plane's own origin — without
-// this a preview page could read the UI's DOM or call the control API with
-// the operator's cookie. Deliberately absent: allow-same-origin (that would
-// hand the page back our origin) and every top-navigation permission.
+// untrustedContentCSP confines preview/production content. Since this
+// content is served from its own origin (ADR-0007), the isolation that
+// matters — no access to the console's DOM, cookie or API — comes from
+// origin separation, so allow-same-origin is GRANTED here: a previewed app
+// keeps its own cookies, localStorage and service workers and behaves
+// exactly as it would standalone.
 //
-// The iframe sandbox attribute in the UI is not sufficient on its own,
-// because an operator can open /preview/<cell>/ directly in a tab.
-const untrustedContentCSP = "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+// What remains forbidden is what a framed page should never do regardless
+// of origin: navigate or replace the top-level console page. Applied as a
+// response header (not only the iframe attribute) so it also holds when an
+// operator opens the preview URL directly.
+const untrustedContentCSP = "sandbox allow-same-origin allow-scripts allow-forms " +
+	"allow-modals allow-popups allow-downloads"
 
 func (h *Handler) proxyTo(w http.ResponseWriter, r *http.Request, cellName, svc string, port int32, prefix string) {
 	h.proxyToURL(w, r, fmt.Sprintf("http://%s.%s.svc:%d", svc, ids.WorkloadNamespace(cellName), port), prefix)

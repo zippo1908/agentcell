@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '../api/client'
 import type { Cell } from '../api/types'
 
 /**
@@ -17,7 +19,18 @@ export function PreviewPane({
 }) {
   const [zone, setZone] = useState<'preview' | 'prod'>('preview')
   const frame = useRef<HTMLIFrameElement>(null)
-  const src = zone === 'prod' ? cell.productionPath : cell.previewPath
+  const { data: meta } = useQuery({
+    queryKey: ['meta'],
+    queryFn: api.meta,
+    refetchInterval: false,
+    staleTime: Infinity,
+  })
+  // Untrusted content lives on its own origin (ADR-0007); building these as
+  // relative paths would put it back on the console's origin and collapse
+  // the isolation.
+  const origin = meta?.previewOrigin ?? ''
+  const path = zone === 'prod' ? cell.productionPath : cell.previewPath
+  const src = path ? origin + path : ''
 
   // Follow-target changes mean a different working tree is being served.
   useEffect(() => {
@@ -65,14 +78,13 @@ export function PreviewPane({
           ref={frame}
           src={src}
           title="product preview"
-          // The previewed app is repo- and agent-authored: untrusted. Omitting
-          // allow-same-origin gives it an opaque origin, so its scripts cannot
-          // reach this page's DOM or call the control API with our cookie; the
-          // omitted top-navigation permissions stop it replacing the console.
-          // (celld sends the same policy as a CSP header, which also covers
-          // opening /preview directly.) Trade-off: an app relying on its own
-          // cookies/localStorage will degrade inside the preview.
-          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+          // The previewed app is untrusted, but it is served from its OWN
+          // origin (ADR-0007), so allow-same-origin is safe to grant and the
+          // app behaves exactly as it would standalone — cookies, storage
+          // and service workers all work. What stays denied is replacing or
+          // navigating this console page. celld sends the same policy as a
+          // CSP header so it also holds when the URL is opened directly.
+          sandbox="allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-downloads"
         />
       ) : (
         <div className="empty">正式区尚未发布。</div>

@@ -84,7 +84,8 @@ spec:
             readOnlyRootFilesystem: true
           ports:
             - {name: http, containerPort: 8080}
-            - {name: metrics, containerPort: 8081}
+            - {name: preview, containerPort: 8081}
+            - {name: metrics, containerPort: 8082}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
           volumeMounts:
@@ -115,6 +116,8 @@ spec:
   selector: {app: celld}
   ports:
     - {name: http, port: 80, targetPort: http}
+    # Untrusted Cell content is served on its own origin (ADR-0007).
+    - {name: preview, port: 8081, targetPort: preview}
 ---
 # git-broker: the only component that holds forge credentials (ADR-0005).
 apiVersion: v1

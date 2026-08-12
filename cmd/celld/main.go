@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,8 +30,12 @@ import (
 
 func main() {
 	var (
-		httpAddr    = flag.String("http-addr", ":8080", "UI/API/preview listen address")
-		metricsAddr = flag.String("metrics-addr", ":8081", "Prometheus metrics address")
+		httpAddr    = flag.String("http-addr", ":8080", "console (UI + API) listen address")
+		previewAddr = flag.String("preview-addr", ":8081",
+			"listen address for untrusted Cell content; MUST be a different origin from the console (ADR-0007)")
+		previewOrigin = flag.String("preview-origin", "",
+			"absolute origin browsers use for preview/app, e.g. https://preview.example.com (default: console host with the preview port)")
+		metricsAddr = flag.String("metrics-addr", ":8082", "Prometheus metrics address")
 		controlNS   = flag.String("control-namespace", envOr("AGENTCELL_NAMESPACE", "agentcell-system"),
 			"namespace holding Cell/Session CRs")
 		providersDir = flag.String("providers-dir", "/etc/agentcell/providers.d",
@@ -99,7 +104,11 @@ func main() {
 		log.Info("WARNING: HTTP surface is UNAUTHENTICATED (--allow-no-auth)")
 	}
 
-	ui := &webui.Handler{Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient}
+	_, previewPort, _ := net.SplitHostPort(*previewAddr)
+	ui := &webui.Handler{
+		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
+		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
+	}
 	mux := http.NewServeMux()
 	auth.LoginRoutes(mux)
 	mux.Handle("/", auth.Middleware(ui.Routes()))
@@ -114,13 +123,34 @@ func main() {
 			<-ctx.Done()
 			_ = srv.Close()
 		}()
-		log.Info("http listening", "addr", *httpAddr, "controlNamespace", *controlNS)
+		log.Info("console listening", "addr", *httpAddr, "controlNamespace", *controlNS)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}
 		return nil
 	})); err != nil {
 		log.Error(err, "add http runnable")
+		os.Exit(1)
+	}
+
+	// Untrusted Cell content is served on its own origin (ADR-0007) so a
+	// previewed app keeps full same-origin powers over itself while being
+	// unable to reach the console.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		pmux := http.NewServeMux()
+		pmux.Handle("/", auth.Middleware(ui.PreviewRoutes()))
+		srv := &http.Server{Addr: *previewAddr, Handler: pmux}
+		go func() {
+			<-ctx.Done()
+			_ = srv.Close()
+		}()
+		log.Info("preview listening", "addr", *previewAddr, "origin", *previewOrigin)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})); err != nil {
+		log.Error(err, "add preview runnable")
 		os.Exit(1)
 	}
 

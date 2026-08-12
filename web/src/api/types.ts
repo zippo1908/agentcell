@@ -73,6 +73,8 @@ export interface Diff {
 export interface Meta {
   runners: string[]
   providers: string[]
+  /** Absolute origin serving untrusted preview/app content (ADR-0007). */
+  previewOrigin: string
 }
 
 export interface DispatchInput {
