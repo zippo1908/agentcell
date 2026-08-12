@@ -109,7 +109,7 @@ func (s *server) handleForge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, status, err := s.forgeCall(&c, cred, req)
+	out, status, err := s.forgeCall(&c, cred, req, forgeKind(&c, secret.Data))
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return
@@ -118,11 +118,30 @@ func (s *server) handleForge(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// forgeKind selects the forge API dialect. An explicit `forge` key in the
+// git secret wins; otherwise github.com is GitHub and anything else is
+// assumed to be GitLab, which is what self-hosted/on-prem clusters run.
+func forgeKind(c *acv1.Cell, secret map[string][]byte) string {
+	if v := strings.TrimSpace(string(secret["forge"])); v != "" {
+		return strings.ToLower(v)
+	}
+	if u, err := url.Parse(c.Spec.Repo.URL); err == nil {
+		host := strings.ToLower(u.Hostname())
+		if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+			return "github"
+		}
+	}
+	return "gitlab"
+}
+
 // forgeCall performs one allow-listed operation against the forge.
-func (s *server) forgeCall(c *acv1.Cell, cred forgeCred, req forgeRequest) (*forgeResponse, int, error) {
+func (s *server) forgeCall(c *acv1.Cell, cred forgeCred, req forgeRequest, kind string) (*forgeResponse, int, error) {
 	base := c.Spec.Repo.Branch
 	if base == "" {
 		base = "main"
+	}
+	if kind == "gitlab" {
+		return s.gitlabCall(c.Spec.Repo.URL, base, cred, req)
 	}
 	owner, repo, err := ownerRepo(c.Spec.Repo.URL)
 	if err != nil {
@@ -235,6 +254,43 @@ func (s *server) forgeCall(c *acv1.Cell, cred forgeCred, req forgeRequest) (*for
 			http.StatusOK, nil
 	}
 	return nil, http.StatusBadRequest, fmt.Errorf("operation %q is not allowed", req.Op)
+}
+
+// forgeJSONHeaders is forgeJSON with explicit headers instead of basic
+// auth — GitLab authenticates its API with PRIVATE-TOKEN.
+func (s *server) forgeJSONHeaders(method, u string, headers map[string]string, body any, out any) error {
+	var rdr io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rdr = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(s.ctx(), method, u, rdr)
+	if err != nil {
+		return err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := s.creds.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("forge returned %d: %s", resp.StatusCode, truncate(string(raw), 300))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
 }
 
 func (s *server) forgeJSON(method, u string, cred forgeCred, body any, out any) error {
