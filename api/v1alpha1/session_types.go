@@ -33,6 +33,16 @@ type SessionSpec struct {
 	// TTLSeconds force-settles a session still running after this long.
 	// Defaults to 3600.
 	TTLSeconds int64 `json:"ttlSeconds,omitempty"`
+	// Resident keeps the slot alive after the agent finishes: the work runs
+	// inside a tmux server on the owner's private socket, so they can attach,
+	// look at what happened and keep going in the same context instead of
+	// dispatching a fresh session that has to rediscover everything.
+	//
+	// Off by default, because the one-shot shape is what the dispatch → settle
+	// → review loop is built on. A resident session still settles — on TTL, on
+	// an explicit request, or if its pod disappears — so nothing escapes the
+	// publication gate; what changes is who decides when.
+	Resident bool `json:"resident,omitempty"`
 	// FollowPreview points the Cell's resident preview at this session's
 	// worktree while it runs, so the user watches the work live.
 	FollowPreview bool `json:"followPreview,omitempty"`

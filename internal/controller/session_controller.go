@@ -294,6 +294,9 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
 		{Name: runtimeapi.EnvDescription, Value: cell.Spec.Description},
 	}
+	if sess.Spec.Resident {
+		env = append(env, corev1.EnvVar{Name: runtimeapi.EnvResident, Value: "1"})
+	}
 	for k, v := range r.Registry.SessionEnv(binding, "$("+runtimeapi.EnvAPIKey+")") {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
@@ -393,6 +396,9 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	}
 
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		// A resident slot ends the same way: its PID 1 returns when the owner
+		// kills the tmux window, and the pod finishing is still the signal to
+		// settle. What differs is that the agent exiting no longer ends it.
 		return r.startSettle(ctx, sess, cell, ns, id, "agent finished ("+string(pod.Status.Phase)+")")
 	}
 	if sess.Status.StartTime != nil && time.Since(sess.Status.StartTime.Time) > time.Duration(ttl)*time.Second {

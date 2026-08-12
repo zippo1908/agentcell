@@ -103,3 +103,16 @@ const GitSecretName = "agentcell-git"
 
 // SessionSecretName is the per-session model-credential secret.
 func SessionSecretName(id string) string { return "cred-" + id }
+
+// TmuxSocket is the owner's private tmux socket.
+//
+// Never tmux's default /tmp/tmux-<uid>/default: that path is derived from the
+// uid on a filesystem several users share, so it is exactly the place two
+// users can collide — and a tmux socket is an authority, not a name. Anything
+// that can open it can attach to that terminal.
+func TmuxSocket(uid int64) string {
+	return UserHome(uid) + "/tmux/agentcell.sock"
+}
+
+// TmuxWindow names a session's window inside its owner's tmux server.
+func TmuxWindow(id string) string { return "s-" + id }

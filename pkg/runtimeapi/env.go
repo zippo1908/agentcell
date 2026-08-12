@@ -18,6 +18,7 @@ const (
 	EnvRunner      = "AGENTCELL_RUNNER"
 	EnvBaseBranch  = "AGENTCELL_BASE_BRANCH"
 	EnvDescription = "AGENTCELL_DESCRIPTION" // the Cell's living product description
+	EnvResident    = "AGENTCELL_RESIDENT"    // "1" keeps the slot alive in tmux
 
 	// KnowledgePath is the persistent, session-shared knowledge directory
 	// on the workspace PVC (outside the git checkout). The anchor creates

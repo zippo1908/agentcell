@@ -6,6 +6,7 @@
 //	session  PID 1 of a session pod: create the worktree, run the agent
 //	settle   settle job: commit/push produced work, reclaim the worktree,
 //	         report {produced,branch} via the termination message
+//	tell     type another instruction into a resident session's tmux window
 //	askpass  git credential helper (reads GIT_USERNAME / GIT_TOKEN)
 package main
 
@@ -35,6 +36,8 @@ func main() {
 		err = runProdClone()
 	case "prod-serve":
 		err = runProdServe()
+	case "tell":
+		err = runTell(os.Args[2:])
 	case "askpass":
 		err = runAskpass(os.Args[2:])
 	default:
