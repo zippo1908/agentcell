@@ -7,3 +7,7 @@
 /dist/
 !web/dist/
 coverage.out
+/celld
+/git-broker
+/cellctl
+/cell-runtime

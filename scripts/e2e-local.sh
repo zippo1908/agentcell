@@ -35,16 +35,21 @@ fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*"; exit 1; }
 # http_ok retries a proxied URL until it returns a real application response
 # (2xx/3xx/4xx). A 5xx or 000 means the upstream isn't actually serving —
 # that is a failure, not "reachable". $1 url, $2 label.
+# http_ok retries until the URL serves the application. Only 2xx counts:
+# a 4xx would mean the app is reachable but the request was rejected (a
+# missing file, a failed auth), which must not pass as "serving".
+# $1 url, $2 label, $3.. extra curl args (e.g. cookie jar).
 http_ok() {
-  local url="$1" label="$2" code
+  local url="$1" label="$2"; shift 2
+  local code
   for _ in $(seq 1 30); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$url" || true)
+    code=$(curl -s -o /dev/null -w '%{http_code}' "$@" "$url" || true)
     case "$code" in
-      2??|3??|4??) echo "$label HTTP status: $code"; return 0 ;;
+      2??) echo "$label HTTP status: $code"; return 0 ;;
     esac
     sleep 3
   done
-  fail "$label never served a real response (last status: $code; 5xx/000 means the upstream app is down)"
+  fail "$label never returned 2xx (last status: $code)"
 }
 
 log "1/8 build binaries + images"
@@ -99,8 +104,28 @@ for i in $(seq 1 60); do
 done
 [ "$phase" = "Ready" ] || fail "Cell not Ready (phase=$phase)"
 
-log "6/8 preview actually serves through the authenticated proxy"
-http_ok "http://127.0.0.1:18080/preview/$CELL/README.md" "preview"
+log "6/8 preview serves on the untrusted-content origin (ticketed URL)"
+kubectl -n "$NS" port-forward svc/celld 18081:8081 >/tmp/e2e-pf-preview.log 2>&1 &
+PFP=$!; trap 'kill $PF $PFP >/dev/null 2>&1 || true' EXIT
+sleep 3
+# The console mints an absolute, single-use ticketed URL; follow it with a
+# cookie jar so the exchange + redirect works like a browser.
+prev_url=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:18080/api/cells/$CELL" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["cell"]["previewURL"])')
+[ -n "$prev_url" ] || fail "console did not return a previewURL"
+# Rewrite the advertised host to the port-forward.
+prev_local=$(python3 - "$prev_url" <<'PYEOF'
+import sys,urllib.parse as u
+p=u.urlsplit(sys.argv[1]); print(u.urlunsplit(("http","127.0.0.1:18081",p.path,p.query,"")))
+PYEOF
+)
+rm -f /tmp/e2e-cookies
+http_ok "$prev_local" "preview" -L -c /tmp/e2e-cookies -b /tmp/e2e-cookies
+# The console credential must NOT work on the untrusted origin.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:18081/preview/$CELL/README.md" || true)
+[ "$code" = "401" ] || fail "preview origin accepted the console credential ($code); it must be 401"
+echo "preview origin correctly rejects console credentials"
 
 log "7/8 dispatch a session and wait for a produced settle"
 # Capture THIS session's name from cellctl output; never assume items[0],
@@ -160,6 +185,15 @@ for i in $(seq 1 60); do
   sleep 5
 done
 [ -n "$pp" ] || fail "production path never set"
-http_ok "http://127.0.0.1:18080/app/$CELL/README.md" "production"
+prod_url=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:18080/api/cells/$CELL" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["cell"]["productionURL"])')
+[ -n "$prod_url" ] || fail "console did not return a productionURL"
+prod_local=$(python3 - "$prod_url" <<'PYEOF'
+import sys,urllib.parse as u
+p=u.urlsplit(sys.argv[1]); print(u.urlunsplit(("http","127.0.0.1:18081",p.path,p.query,"")))
+PYEOF
+)
+rm -f /tmp/e2e-cookies-prod
+http_ok "$prod_local" "production" -L -c /tmp/e2e-cookies-prod -b /tmp/e2e-cookies-prod
 
 log "E2E PASSED — auth, reconcile, preview served, dispatch→settle→branch, release served"

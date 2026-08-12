@@ -143,7 +143,7 @@ func main() {
 		pmux := http.NewServeMux()
 		// Untrusted content is authorized by a short-lived per-Cell ticket,
 		// never by the console credential (ADR-0007).
-		pmux.Handle("/", auth.PreviewMiddleware(webui.CellFromPreviewRequest, ui.PreviewRoutes()))
+		pmux.Handle("/", auth.PreviewMiddleware(ui.PreviewRoutes()))
 		srv := &http.Server{Addr: *previewAddr, Handler: pmux}
 		go func() {
 			<-ctx.Done()

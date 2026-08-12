@@ -52,7 +52,30 @@ type Handler struct {
 // previewBaseFor returns the origin serving a specific Cell's untrusted
 // content. With PreviewDomain each Cell gets its own host; without it they
 // share one origin, which is weaker — documented in ADR-0007.
-func (h *Handler) previewBaseFor(r *http.Request, cell string) string {
+// previewHostFor returns the host serving one Cell ZONE. Dev and prod get
+// distinct hosts so the agent's unreviewed work cannot read, share storage
+// with, or install a service worker over the released build (ADR-0007).
+func (h *Handler) previewHostFor(r *http.Request, cell string, zone Zone) string {
+	if h.PreviewDomain != "" {
+		return cell + "-" + string(zone) + "." + strings.TrimPrefix(h.PreviewDomain, ".")
+	}
+	// Without a preview domain every zone shares one host; the ticket and
+	// path-scoped cookie are then the only separation. Documented as a
+	// non-production configuration in ADR-0007.
+	return hostOnly(r) + portSuffix(h.PreviewPort)
+}
+
+func portSuffix(port string) string {
+	if port == "" || port == "80" || port == "443" {
+		return ""
+	}
+	return ":" + port
+}
+
+func (h *Handler) previewBaseFor(r *http.Request, cell string, zone Zone) string {
+	if h.PreviewOrigin != "" && h.PreviewDomain == "" {
+		return strings.TrimRight(h.PreviewOrigin, "/")
+	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
@@ -60,18 +83,21 @@ func (h *Handler) previewBaseFor(r *http.Request, cell string) string {
 	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
 		scheme = p
 	}
-	if h.PreviewDomain != "" {
-		return scheme + "://" + cell + "." + strings.TrimPrefix(h.PreviewDomain, ".")
-	}
-	return h.previewOriginFor(r)
+	return scheme + "://" + h.previewHostFor(r, cell, zone)
 }
 
-// previewURL builds a ready-to-open absolute URL carrying a fresh ticket.
-func (h *Handler) previewURL(r *http.Request, cell, path string) string {
+// previewURL builds a ready-to-open absolute URL carrying a fresh
+// single-use ticket bound to this Cell, zone and host.
+func (h *Handler) previewURL(r *http.Request, cell string, zone Zone, path string) string {
 	if path == "" || h.Auth == nil {
 		return ""
 	}
-	return h.previewBaseFor(r, cell) + path + "?" + previewTicketQS + "=" + h.Auth.MintPreviewTicket(cell)
+	base := h.previewBaseFor(r, cell, zone)
+	host := strings.TrimPrefix(strings.TrimPrefix(base, "https://"), "http://")
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	return base + path + "?" + previewTicketQS + "=" + h.Auth.MintPreviewTicket(cell, zone, host)
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -255,8 +281,8 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message,
 	}
-	v.PreviewURL = h.previewURL(r, c.Name, c.Status.PreviewPath)
-	v.ProductionURL = h.previewURL(r, c.Name, c.Status.ProductionPath)
+	v.PreviewURL = h.previewURL(r, c.Name, ZoneDev, c.Status.PreviewPath)
+	v.ProductionURL = h.previewURL(r, c.Name, ZoneProd, c.Status.ProductionPath)
 	return v
 }
 
@@ -489,6 +515,15 @@ func (h *Handler) proxyToURL(w http.ResponseWriter, r *http.Request, upstream, p
 		return
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		director(req)
+		// The upstream is repo- and agent-authored code. Refusing to ACCEPT
+		// platform credentials here is not enough — we must not HAND them
+		// over either, or the proxy itself becomes the leak. The previewed
+		// app keeps its own cookies; only platform-reserved names go.
+		stripPlatformCredentials(req)
+	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// Append rather than replace: multiple CSP headers are enforced as
 		// the intersection, so an upstream policy still applies and ours

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Preview and production content is untrusted and same-origin with the
@@ -178,22 +179,21 @@ func TestProxyStampsCSPOnUpstreamResponse(t *testing.T) {
 	}
 }
 
-// The preview origin must reject the console credential outright and only
-// honour a short-lived ticket for the exact Cell being viewed — otherwise
-// one Cell's untrusted content could browse another's (they may share a
-// host) or ride the operator's platform-wide cookie.
-func TestPreviewOriginRejectsConsoleCredential(t *testing.T) {
+// The preview origin must reject the console credential, bind every ticket
+// to one Cell AND zone AND host, and accept each ticket only once.
+func TestPreviewOriginAuthorization(t *testing.T) {
 	auth := NewAuthenticator("tok")
 	served := false
-	h := auth.PreviewMiddleware(CellFromPreviewRequest,
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			served = true
-			w.WriteHeader(http.StatusOK)
-		}))
+	h := auth.PreviewMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	const host = "shop-dev.preview.example.com"
 
-	req := func(path string, mutate func(*http.Request)) *httptest.ResponseRecorder {
+	req := func(path, reqHost string, mutate func(*http.Request)) *httptest.ResponseRecorder {
 		served = false
 		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Host = reqHost
 		if mutate != nil {
 			mutate(r)
 		}
@@ -202,88 +202,134 @@ func TestPreviewOriginRejectsConsoleCredential(t *testing.T) {
 		return rec
 	}
 
-	t.Run("console cookie is not accepted", func(t *testing.T) {
-		rec := req("/preview/shop/", func(r *http.Request) {
+	t.Run("console cookie and bearer are both rejected", func(t *testing.T) {
+		rec := req("/preview/shop/", host, func(r *http.Request) {
 			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "tok"})
 		})
 		if rec.Code != http.StatusUnauthorized || served {
-			t.Errorf("console cookie granted preview access: %d (served=%v)", rec.Code, served)
+			t.Errorf("console cookie granted access: %d", rec.Code)
 		}
-	})
-
-	t.Run("bearer token is not accepted", func(t *testing.T) {
-		rec := req("/preview/shop/", func(r *http.Request) {
+		rec = req("/preview/shop/", host, func(r *http.Request) {
 			r.Header.Set("Authorization", "Bearer tok")
 		})
 		if rec.Code != http.StatusUnauthorized || served {
-			t.Errorf("bearer granted preview access: %d", rec.Code)
+			t.Errorf("bearer granted access: %d", rec.Code)
 		}
 	})
 
-	t.Run("valid ticket is exchanged for a scoped cookie", func(t *testing.T) {
-		ticket := auth.MintPreviewTicket("shop")
-		rec := req("/preview/shop/?"+previewTicketQS+"="+ticket, nil)
+	t.Run("ticket exchanges once for a zone-scoped session", func(t *testing.T) {
+		tk := auth.MintPreviewTicket("shop", ZoneDev, host)
+		rec := req("/preview/shop/?"+previewTicketQS+"="+tk, host, nil)
 		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("ticket exchange = %d, want 303", rec.Code)
+			t.Fatalf("exchange = %d, want 303", rec.Code)
 		}
-		var scoped *http.Cookie
+		var sc *http.Cookie
 		for _, c := range rec.Result().Cookies() {
-			if c.Name == previewCookieName("shop") && c.Path == "/preview/shop/" {
-				scoped = c
+			if c.Name == previewCookieName("shop", ZoneDev) {
+				sc = c
 			}
 		}
-		if scoped == nil {
-			t.Fatal("no cookie scoped to this cell's path")
+		if sc == nil || sc.Path != "/preview/shop/" || !sc.HttpOnly {
+			t.Fatalf("session cookie wrong: %+v", sc)
 		}
-		if !scoped.HttpOnly {
-			t.Error("preview cookie must be HttpOnly")
+		// The cookie must outlive the short URL ticket, or the tab 401s.
+		if sc.MaxAge < int(previewSessionTTL.Seconds()) {
+			t.Errorf("cookie MaxAge %d shorter than the session it carries", sc.MaxAge)
 		}
-		// And it then authorizes the same cell.
-		if rec := req("/preview/shop/", func(r *http.Request) { r.AddCookie(scoped) }); rec.Code != 200 {
-			t.Errorf("scoped cookie did not authorize its own cell: %d", rec.Code)
+		if rec := req("/preview/shop/", host, func(r *http.Request) { r.AddCookie(sc) }); rec.Code != 200 {
+			t.Errorf("session cookie did not authorize its own zone: %d", rec.Code)
+		}
+		// Replay of the same single-use ticket must fail.
+		if rec := req("/preview/shop/?"+previewTicketQS+"="+tk, host, nil); rec.Code != http.StatusForbidden {
+			t.Errorf("ticket replay accepted: %d", rec.Code)
+		}
+		// A dev session must not open prod.
+		if rec := req("/app/shop/", "shop-prod.preview.example.com", func(r *http.Request) { r.AddCookie(sc) }); rec.Code == 200 {
+			t.Error("dev session opened the production zone")
 		}
 	})
 
-	t.Run("a ticket for one cell does not open another", func(t *testing.T) {
-		ticket := auth.MintPreviewTicket("shop")
-		rec := req("/preview/other/?"+previewTicketQS+"="+ticket, nil)
-		if rec.Code != http.StatusForbidden || served {
+	t.Run("tickets are bound to cell, zone and host", func(t *testing.T) {
+		devTicket := auth.MintPreviewTicket("shop", ZoneDev, host)
+		// wrong zone
+		if rec := req("/app/shop/?"+previewTicketQS+"="+devTicket, "shop-prod.preview.example.com", nil); rec.Code != http.StatusForbidden {
+			t.Errorf("dev ticket opened prod: %d", rec.Code)
+		}
+		// wrong cell
+		if rec := req("/preview/other/?"+previewTicketQS+"="+devTicket, host, nil); rec.Code != http.StatusForbidden {
 			t.Errorf("cross-cell ticket accepted: %d", rec.Code)
 		}
-		// Same for a cookie minted for another cell.
-		rec = req("/preview/other/", func(r *http.Request) {
-			r.AddCookie(&http.Cookie{Name: previewCookieName("other"), Value: ticket})
-		})
-		if rec.Code != http.StatusUnauthorized || served {
-			t.Errorf("cross-cell cookie accepted: %d", rec.Code)
+		// wrong host (captured ticket replayed elsewhere)
+		if rec := req("/preview/shop/?"+previewTicketQS+"="+devTicket, "evil.example.com", nil); rec.Code != http.StatusForbidden {
+			t.Errorf("ticket accepted on a foreign host: %d", rec.Code)
 		}
 	})
 
-	t.Run("forged and expired tickets are refused", func(t *testing.T) {
-		if rec := req("/preview/shop/?"+previewTicketQS+"=shop:9999999999:forged", nil); rec.Code != http.StatusForbidden {
-			t.Errorf("forged ticket = %d, want 403", rec.Code)
+	t.Run("expired and foreign-signed tickets are refused", func(t *testing.T) {
+		expired := auth.sign(ticket{
+			kind: "t", cell: "shop", zone: ZoneDev, host: host,
+			exp: time.Now().Add(-time.Second).Unix(), nonce: newNonce(),
+		})
+		if rec := req("/preview/shop/?"+previewTicketQS+"="+expired, host, nil); rec.Code != http.StatusForbidden {
+			t.Errorf("validly-signed but expired ticket accepted: %d", rec.Code)
 		}
-		other := NewAuthenticator("different-token")
-		if rec := req("/preview/shop/?"+previewTicketQS+"="+other.MintPreviewTicket("shop"), nil); rec.Code != http.StatusForbidden {
-			t.Errorf("ticket signed with another key = %d, want 403", rec.Code)
+		other := NewAuthenticator("different")
+		foreign := other.MintPreviewTicket("shop", ZoneDev, host)
+		if rec := req("/preview/shop/?"+previewTicketQS+"="+foreign, host, nil); rec.Code != http.StatusForbidden {
+			t.Errorf("foreign-signed ticket accepted: %d", rec.Code)
 		}
 	})
 }
 
-// Each Cell gets its own host when a preview domain is configured — the
-// only browser-level isolation between Cells.
-func TestPerCellPreviewHost(t *testing.T) {
+// Dev and prod must not share an origin: the agent's unreviewed work would
+// otherwise read, or install a service worker over, the released build.
+func TestDevAndProdHostsDiffer(t *testing.T) {
 	h := &Handler{PreviewDomain: "preview.example.com", Auth: NewAuthenticator("t")}
 	r := httptest.NewRequest(http.MethodGet, "/api/cells", nil)
 	r.Host = "console.example.com"
-	if got := h.previewBaseFor(r, "shop"); got != "http://shop.preview.example.com" {
-		t.Errorf("per-cell host = %q", got)
+	dev := h.previewBaseFor(r, "shop", ZoneDev)
+	prod := h.previewBaseFor(r, "shop", ZoneProd)
+	if dev == prod {
+		t.Fatalf("dev and prod share an origin: %s", dev)
 	}
-	if got := h.previewBaseFor(r, "other"); got == h.previewBaseFor(r, "shop") {
-		t.Error("two cells share an origin despite a preview domain")
+	if !strings.HasPrefix(dev, "http://shop-dev.") || !strings.HasPrefix(prod, "http://shop-prod.") {
+		t.Errorf("unexpected zone hosts: %s / %s", dev, prod)
 	}
-	url := h.previewURL(r, "shop", "/preview/shop/")
-	if !strings.Contains(url, "shop.preview.example.com") || !strings.Contains(url, previewTicketQS+"=") {
-		t.Errorf("preview URL missing host or ticket: %s", url)
+	if h.previewBaseFor(r, "other", ZoneDev) == dev {
+		t.Error("two cells share a dev origin")
+	}
+}
+
+// The proxy must never hand platform credentials to repo-controlled code.
+func TestProxyStripsPlatformCredentials(t *testing.T) {
+	var got *http.Request
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Clone(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/preview/shop/index.html", nil)
+	req.Header.Set("Authorization", "Bearer console-token")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "console-cookie"})
+	req.AddCookie(&http.Cookie{Name: previewCookieName("shop", ZoneDev), Value: "preview-ticket"})
+	req.AddCookie(&http.Cookie{Name: "casdoor_session", Value: "sso"})
+	req.AddCookie(&http.Cookie{Name: "app_session", Value: "keep-me"})
+
+	(&Handler{}).proxyToURL(httptest.NewRecorder(), req, upstream.URL, "/preview/shop")
+	if got == nil {
+		t.Fatal("upstream never saw the request")
+	}
+	if got.Header.Get("Authorization") != "" {
+		t.Error("Authorization forwarded to untrusted upstream")
+	}
+	for _, forbidden := range []string{sessionCookie, previewCookieName("shop", ZoneDev), "casdoor_session"} {
+		if c, err := got.Cookie(forbidden); err == nil {
+			t.Errorf("platform cookie %s leaked to upstream (value %q)", forbidden, c.Value)
+		}
+	}
+	// The previewed application keeps its own cookies.
+	if c, err := got.Cookie("app_session"); err != nil || c.Value != "keep-me" {
+		t.Error("the app's own cookie must be preserved")
 	}
 }

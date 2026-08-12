@@ -39,6 +39,11 @@ spec:
             {{- with (include "agentcell.brokerURL" .) }}
             - "--git-broker-url={{ . }}"
             {{- end }}
+            - "--preview-addr=:{{ .Values.preview.port }}"
+            - "--metrics-addr=:8082"
+            {{- with .Values.preview.domain }}
+            - "--preview-domain={{ . }}"
+            {{- end }}
             {{- if .Values.celld.auth.allowNoAuth }}
             - "--allow-no-auth"
             {{- end }}
@@ -48,7 +53,8 @@ spec:
             readOnlyRootFilesystem: true
           ports:
             - {name: http, containerPort: 8080}
-            - {name: metrics, containerPort: 8081}
+            - {name: preview, containerPort: {{ .Values.preview.port }}}
+            - {name: metrics, containerPort: 8082}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
           resources: {{- toYaml .Values.celld.resources | nindent 12 }}
@@ -88,6 +94,7 @@ spec:
   selector: {app: celld}
   ports:
     - {name: http, port: {{ .Values.celld.service.port }}, targetPort: http}
+    - {name: preview, port: {{ .Values.preview.port }}, targetPort: preview}
 {{- if .Values.ingress.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -116,4 +123,35 @@ spec:
               service:
                 name: celld
                 port: {number: {{ .Values.celld.service.port }}}
+{{- end }}
+
+{{- if and .Values.preview.ingress.enabled .Values.preview.domain }}
+---
+# Untrusted content: a wildcard host so每 Cell zone gets its own origin.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: celld-preview
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+  annotations: {{- toYaml .Values.preview.ingress.annotations | nindent 4 }}
+spec:
+  {{- with .Values.preview.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.preview.ingress.tls.enabled }}
+  tls:
+    - hosts: ["*.{{ .Values.preview.domain }}"]
+      secretName: {{ .Values.preview.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: "*.{{ .Values.preview.domain }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: celld
+                port: {number: {{ .Values.preview.port }}}
 {{- end }}
