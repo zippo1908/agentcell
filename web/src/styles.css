@@ -144,3 +144,14 @@ label.chk input { width: auto; }
 /* Login -------------------------------------------------------------- */
 .center { display: grid; place-items: center; height: 100vh; }
 .center form { width: 320px; display: flex; flex-direction: column; gap: 10px; }
+
+/* An advisory, not an error: the dispatch is allowed and will run. */
+.note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mut);
+  border-left: 2px solid var(--warn);
+  padding: 6px 0 6px 10px;
+  margin: 6px 0 0;
+}
+.note a { color: inherit; }

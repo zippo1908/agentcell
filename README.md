@@ -97,6 +97,8 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | **Runtime isolation**: per-user Unix uid (allocated, never recycled), `0700` private tree for worktrees / `$HOME` / CLI state / tmux socket | ✅ tested ([Run 5](docs/E2E_RESULTS.md), [ADR-0009](docs/adr/0009-runtime-isolation.md)) |
 | **Resident sessions**: slot outlives the agent, follow-ups continue the CLI's own conversation, settle still mandatory | ✅ tested ([Run 6](docs/E2E_RESULTS.md), [ADR-0010](docs/adr/0010-resident-sessions.md)) |
 | One tmux runtime per user hosting many sessions as windows; model key never in argv | ✅ tested ([Run 7](docs/E2E_RESULTS.md)) |
+| **Runners are data**: add or fix an agent CLI in `runners.d/*.yaml`, no release needed ([docs/RUNNERS.md](docs/RUNNERS.md)) | ✅ tested |
+| Dispatch form driven by the server catalogue: a runner narrows to the providers it can drive, defaults to its own vendor, offers that provider's models and accepts any other | ✅ |
 | Review queue · diff · approve→auto-PR · merge tracking (forge API via broker, celld holds no credential) | ✅ tested ([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
 | Helm chart + GHCR images + cloud presets (k3s / ACK / TKE) | ✅ `helm lint`-verified |
 | Terminal attach in the browser (tmux over WebSocket) — `kubectl exec … cell-runtime attach <id>` works today | ⬜ designed (M5) |

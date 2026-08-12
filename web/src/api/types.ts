@@ -73,10 +73,33 @@ export interface Diff {
   deletions?: number
 }
 
-export interface Meta {
-  runners: string[]
+export interface RunnerInfo {
+  name: string
+  display: string
+  vendor?: string
+  protocols: string[]
+  /** False means a follow-up starts a new conversation, not a continuation. */
+  resumable: boolean
+  /** Providers this runner can actually drive — computed server-side. */
   providers: string[]
-  /** Absolute origin serving untrusted preview/app content (ADR-0007). */
+  defaultProvider?: string
+}
+
+export interface ProviderInfo {
+  name: string
+  display: string
+  vendor?: string
+  region?: string
+  protocols: string[]
+  /** A starting list, never a closed set: providers ship models faster than
+   * this table is updated, so the form must accept one that is not here. */
+  models?: string[]
+  docs?: string
+}
+
+export interface Meta {
+  runners: RunnerInfo[]
+  providers: ProviderInfo[]
   previewOrigin: string
 }
 
@@ -87,4 +110,6 @@ export interface DispatchInput {
   model: string
   credentialSecret: string
   followPreview: boolean
+  /** Keep the slot alive after the agent finishes, in the owner's tmux. */
+  resident?: boolean
 }

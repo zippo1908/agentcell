@@ -333,3 +333,97 @@ func vendorNote(run Runner, providerName string, prov Provider) (bool, string) {
 			"The endpoint is provided for this; the CLI's licence terms are %s's to define — check both before relying on it.",
 		run.Name, run.Vendor, pv, run.Protocols[0], run.Vendor)
 }
+
+// RunnerInfo and ProviderInfo are the catalogue the UI needs to build a
+// dispatch form that cannot produce an invalid combination.
+//
+// The protocol intersection is computed here rather than in the browser: it
+// is the same rule Resolve enforces, and two implementations of one rule
+// drift. The UI's job is to render what it is given.
+type RunnerInfo struct {
+	Name      string   `json:"name"`
+	Display   string   `json:"display"`
+	Vendor    string   `json:"vendor,omitempty"`
+	Protocols []string `json:"protocols"`
+	// Resumable reports whether a follow-up continues the CLI's own
+	// conversation. When false the UI should say a follow-up starts fresh
+	// rather than let the user assume continuity.
+	Resumable bool `json:"resumable"`
+	// Providers this runner can actually bind to, and the one to select by
+	// default: the runner's own vendor when it is available, because that
+	// pairing raises no third-party licence question.
+	Providers       []string `json:"providers"`
+	DefaultProvider string   `json:"defaultProvider,omitempty"`
+}
+
+type ProviderInfo struct {
+	Name      string   `json:"name"`
+	Display   string   `json:"display"`
+	Vendor    string   `json:"vendor,omitempty"`
+	Region    string   `json:"region,omitempty"`
+	Protocols []string `json:"protocols"`
+	// Models is a starting list, not a closed set: providers add models far
+	// faster than this table is updated, so the UI must let a user type one
+	// that is not here.
+	Models []string `json:"models,omitempty"`
+	Docs   string   `json:"docs,omitempty"`
+}
+
+// Catalogue returns every runner with the providers it can drive.
+func (r *Registry) Catalogue() ([]RunnerInfo, []ProviderInfo) {
+	provs := make([]ProviderInfo, 0, len(r.providers))
+	for _, name := range r.Providers() {
+		p := r.providers[name]
+		protos := make([]string, 0, len(p.Protocols))
+		for proto := range p.Protocols {
+			protos = append(protos, proto)
+		}
+		sort.Strings(protos)
+		vendor := p.Vendor
+		if vendor == "" {
+			vendor = name
+		}
+		provs = append(provs, ProviderInfo{
+			Name: name, Display: p.DisplayName, Vendor: vendor, Region: p.Region,
+			Protocols: protos, Models: p.Models, Docs: p.Docs,
+		})
+	}
+
+	runs := make([]RunnerInfo, 0, len(runners))
+	for _, name := range Runners() {
+		run := runners[name]
+		info := RunnerInfo{
+			Name: name, Display: run.Display, Vendor: run.Vendor,
+			Protocols: run.Protocols, Resumable: run.ResumeArgv != nil,
+		}
+		if info.Display == "" {
+			info.Display = name
+		}
+		for _, p := range provs {
+			if !speaks(run.Protocols, p.Protocols) {
+				continue
+			}
+			info.Providers = append(info.Providers, p.Name)
+			// Same vendor first: it is the pairing with nothing to check.
+			if run.Vendor != "" && p.Vendor == run.Vendor {
+				info.DefaultProvider = p.Name
+			}
+		}
+		if info.DefaultProvider == "" && len(info.Providers) > 0 {
+			info.DefaultProvider = info.Providers[0]
+		}
+		runs = append(runs, info)
+	}
+	return runs, provs
+}
+
+func speaks(runnerProtos, providerProtos []string) bool {
+	for _, rp := range runnerProtos {
+		for _, pp := range providerProtos {
+			if rp == pp {
+				return true
+			}
+		}
+	}
+	return false
+}
