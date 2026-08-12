@@ -23,7 +23,10 @@ rules:
     resources: ["cells/status", "sessions/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
-    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods"]
+    # serviceaccounts: broker mode creates a per-role SA in every Cell
+    # namespace; without this the default install cannot reconcile a Cell at
+    # all. configmaps: the uid allocator's record (ADR-0009).
+    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods", "serviceaccounts", "configmaps"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["statefulsets", "deployments"]

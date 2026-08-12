@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/internal/useruid"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
@@ -417,9 +419,28 @@ func TestFollowPreviewFlipsCellTarget(t *testing.T) {
 	if cell.Spec.Preview.FollowSession != id {
 		t.Errorf("followSession = %q, want %q", cell.Spec.Preview.FollowSession, id)
 	}
-	// The anchor must now serve the session worktree.
-	if got := previewTargetDir(&cell); got != ids.WorktreePath(id) {
-		t.Errorf("previewTargetDir = %q, want worktree", got)
+	// The anchor keeps serving the shared checkout: a worktree is private to
+	// its owner and the anchor belongs to the project, not to a user. Live
+	// preview of a followed session is served by that session's own pod, and
+	// the preview Service points there instead (ADR-0009).
+	if got := previewTargetDir(&cell); got != ids.RepoPath {
+		t.Errorf("anchor previewTargetDir = %q, want the shared checkout", got)
+	}
+	// Reconciling the Cell is what repoints the preview Service.
+	cr := &CellReconciler{Client: c, ControlNamespace: controlNS}
+	for range 2 {
+		if _, err := cr.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var svc corev1.Service
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: ids.WorkloadNamespace("shop"), Name: ids.PreviewService}, &svc); err != nil {
+		t.Fatal(err)
+	}
+	if svc.Spec.Selector[ids.SessionLabelKey] != id {
+		t.Errorf("preview Service selector = %v, want the followed session pod", svc.Spec.Selector)
 	}
 }
 
@@ -633,5 +654,74 @@ func TestNoImagePullSecretLeavesAccountsUntouched(t *testing.T) {
 	}
 	if len(sa.ImagePullSecrets) != 0 {
 		t.Errorf("pull secrets appeared without the option: %v", sa.ImagePullSecrets)
+	}
+}
+
+// Two users working in the same Cell must not end up as the same Unix user.
+// The pod is the boundary and the uid is how the filesystem expresses it, so
+// this checks both: distinct uids, and private trees that cannot name each
+// other.
+func TestTwoUsersGetSeparateRuntimeIdentities(t *testing.T) {
+	alice, bob := "u-aaaa1111", "u-bbbb2222"
+	idA, idB := ids.NewSessionID(), ids.NewSessionID()
+	sessA := newSession(ids.SessionName(idA), "alice's work")
+	sessA.Spec.OwnerUserID = alice
+	sessB := newSession(ids.SessionName(idB), "bob's work")
+	sessB.Spec.OwnerUserID = bob
+
+	c := newFake(t, testCell(), credSecret("bailian-key"), sessA, sessB)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	reconcileSession(t, r, ids.SessionName(idA), 3)
+	reconcileSession(t, r, ids.SessionName(idB), 3)
+
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uidOf := func(session string) int64 {
+		t.Helper()
+		var pod corev1.Pod
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: session}, &pod); err != nil {
+			t.Fatal(err)
+		}
+		if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.RunAsUser == nil {
+			t.Fatalf("%s runs with no explicit uid", session)
+		}
+		return *pod.Spec.SecurityContext.RunAsUser
+	}
+	uidA, uidB := uidOf(ids.SessionName(idA)), uidOf(ids.SessionName(idB))
+	if uidA == uidB {
+		t.Fatalf("both users' sessions run as uid %d", uidA)
+	}
+	if uidA < useruid.FirstUID || uidB < useruid.FirstUID {
+		t.Fatalf("uids %d/%d are not from the allocated user range", uidA, uidB)
+	}
+	// Their private trees must not overlap, or the uid split buys nothing.
+	if strings.HasPrefix(ids.UserHome(uidA), ids.UserHome(uidB)) ||
+		strings.HasPrefix(ids.UserHome(uidB), ids.UserHome(uidA)) {
+		t.Errorf("private trees overlap: %s vs %s", ids.UserHome(uidA), ids.UserHome(uidB))
+	}
+	// fsGroup stays the project group: that is what still lets both users
+	// collaborate on the shared checkout.
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.SessionName(idA)}, &pod)
+	if pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != useruid.ProjectGID {
+		t.Error("fsGroup is not the project group; users could not share the checkout")
+	}
+}
+
+// Without an allocator nothing changes: one shared project identity.
+func TestNoAllocatorKeepsTheProjectIdentity(t *testing.T) {
+	id := ids.NewSessionID()
+	name := ids.SessionName(id)
+	c := newFake(t, testCell(), credSecret("bailian-key"), newSession(name, "t"))
+	r := sessionReconciler(t, c)
+	reconcileSession(t, r, name, 3)
+	var pod corev1.Pod
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: ids.WorkloadNamespace("shop"), Name: name}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if *pod.Spec.SecurityContext.RunAsUser != useruid.ProjectUID {
+		t.Errorf("uid = %d, want the project uid %d", *pod.Spec.SecurityContext.RunAsUser, useruid.ProjectUID)
 	}
 }

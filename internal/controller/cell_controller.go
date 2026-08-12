@@ -399,12 +399,17 @@ func (r *CellReconciler) ensurePVC(ctx context.Context, cell *acv1.Cell, ns stri
 	return err
 }
 
-// previewTargetDir resolves where the resident preview serves from: the
-// main checkout, or a followed session's worktree ("watch the agent work").
-func previewTargetDir(cell *acv1.Cell) string {
-	if s := cell.Spec.Preview.FollowSession; s != "" {
-		return ids.WorktreePath(s)
-	}
+// previewTargetDir is where the ANCHOR's preview serves from: always the
+// shared checkout.
+//
+// It used to serve a followed session's worktree so the user could watch the
+// agent work. That is no longer the anchor's job: a worktree is private to
+// its owner (ADR-0009), and the anchor — which belongs to the project, not
+// to a user — cannot read it. Live preview of a session is served by that
+// session's own pod, and the preview Service points there while a session is
+// followed. The capability is unchanged; what moved is which process holds
+// the file handle.
+func previewTargetDir(_ *acv1.Cell) string {
 	return ids.RepoPath
 }
 
@@ -510,7 +515,13 @@ func tcpReadiness(port int32) *corev1.Probe {
 func (r *CellReconciler) ensurePreviewService(ctx context.Context, cell *acv1.Cell, ns string) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.PreviewService}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		svc.Spec.Selector = map[string]string{ids.AnchorPodLabelKey: ids.AnchorPodLabelVal}
+		// While a session is followed, its own pod serves the preview: the
+		// worktree is private to its owner and the anchor cannot read it.
+		if f := cell.Spec.Preview.FollowSession; f != "" {
+			svc.Spec.Selector = map[string]string{ids.SessionLabelKey: f}
+		} else {
+			svc.Spec.Selector = map[string]string{ids.AnchorPodLabelKey: ids.AnchorPodLabelVal}
+		}
 		svc.Spec.Ports = []corev1.ServicePort{{Name: "preview", Port: previewPort(cell)}}
 		return nil
 	})

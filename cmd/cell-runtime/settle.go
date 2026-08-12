@@ -29,7 +29,7 @@ func runSettle() error {
 	if err := ensureAskpass(); err != nil {
 		return err
 	}
-	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(id), ids.SessionBranch(id), base, id,
+	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(int64(os.Getuid()), id), ids.SessionBranch(id), base, id,
 		effectiveGitURL(os.Getenv(runtimeapi.EnvRepoURL)))
 	raw, _ := json.Marshal(v)
 	// Termination message is the transport back to the controller; write it
