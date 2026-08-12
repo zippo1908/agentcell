@@ -118,6 +118,18 @@ func waitForRepo(timeout time.Duration) error {
 // would silently leave 0755 where the umask is the usual 022.
 func ensurePrivateHome(uid int64) error {
 	home := ids.UserHome(uid)
+	// The parent is project-layer infrastructure and must be created as
+	// such. Letting MkdirAll create it implicitly gives it the 0700 of
+	// whichever user arrives first and locks every other user out of the
+	// whole tree — a failure that only appears once two people work in one
+	// Cell, which is exactly when it matters.
+	//
+	// Sticky, because /workspace is world-writable: without it any user can
+	// delete another's private directory. They still cannot read it, but
+	// "cannot read" is not the whole property worth having.
+	if err := ensureSharedParent(filepath.Dir(home)); err != nil {
+		return err
+	}
 	for _, dir := range []string{home, filepath.Join(home, "worktrees"), filepath.Join(home, "home")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("private home %s: %w", dir, err)
@@ -130,4 +142,26 @@ func ensurePrivateHome(uid int64) error {
 	// credentials and transcripts under $HOME, and those are exactly the
 	// things that must not be shared.
 	return os.Setenv("HOME", filepath.Join(home, "home"))
+}
+
+// ensureSharedParent creates the directory that holds every user's private
+// tree: group-writable so each user can make their own, sticky so only the
+// owner can remove it.
+//
+// Chmod failures are tolerated: if the directory already exists and belongs
+// to the project identity, we are not its owner and cannot chmod it — but it
+// already has the mode we want, so there is nothing to fix.
+func ensureSharedParent(dir string) error {
+	if err := os.MkdirAll(dir, 0o775); err != nil {
+		return fmt.Errorf("users directory %s: %w", dir, err)
+	}
+	_ = os.Chmod(dir, 0o775|os.ModeSticky)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o070 == 0 {
+		return fmt.Errorf("users directory %s is %v — not group-writable, so other users cannot create their own trees", dir, info.Mode())
+	}
+	return nil
 }

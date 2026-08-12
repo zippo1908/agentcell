@@ -110,12 +110,14 @@ func main() {
 		Client: mgr.GetClient(), Registry: registry,
 		GitBrokerURL: *gitBrokerURL, Forge: forgeClient,
 	}
-	if *oidcIssuer != "" && *oidcClientID != "" {
-		// Per-user Unix identities only mean anything once users exist; with
-		// static tokens alone every caller is the same principal and the
-		// shared project identity is the honest representation of that.
-		sessionReconciler.UIDs = &useruid.Allocator{Client: mgr.GetClient(), Namespace: *controlNS}
-	}
+	// Always wired. Gating this on "is an IdP configured" would be exactly
+	// the `if multiUserEnabled` branch ADR-0008 argues against — and it was
+	// wrong in a way real-cluster testing caught: a Session can carry an
+	// owner without celld having minted it (kubectl, a migration, another
+	// controller), and that owner must be honoured. With no owner recorded
+	// the allocator returns the shared project identity, so single-principal
+	// deployments behave exactly as before.
+	sessionReconciler.UIDs = &useruid.Allocator{Client: mgr.GetClient(), Namespace: *controlNS}
 	if err := sessionReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup session controller")
 		os.Exit(1)

@@ -28,6 +28,14 @@ func runAnchor() error {
 	// The persistent, session-shared knowledge directory lives on the PVC
 	// outside the checkout; sessions read it and distill learnings back.
 	_ = os.MkdirAll(runtimeapi.KnowledgePath, 0o755)
+	// The anchor holds the project identity, so it is the right process to
+	// lay down the directory every user's private tree hangs off: created
+	// once, group-writable and sticky, rather than by whichever user happens
+	// to start first (which would give it that user's 0700). Sessions repair
+	// it if the anchor has not run yet, but this is where it belongs.
+	if err := ensureSharedParent(filepath.Dir(ids.UserHome(0))); err != nil {
+		fmt.Fprintf(os.Stderr, "anchor: %v\n", err)
+	}
 	go reapZombies()
 	go heartbeat()
 	go syncBase(os.Getenv(runtimeapi.EnvRepoBranch))
