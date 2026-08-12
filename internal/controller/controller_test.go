@@ -725,3 +725,71 @@ func TestNoAllocatorKeepsTheProjectIdentity(t *testing.T) {
 		t.Errorf("uid = %d, want the project uid %d", *pod.Spec.SecurityContext.RunAsUser, useruid.ProjectUID)
 	}
 }
+
+// A Cell's budget has to be enforced, not merely arithmetic. The slot count
+// bounds how many SESSIONS run; without a quota nothing bounds the namespace,
+// so one project's dev server can starve the node its neighbours were sized
+// for.
+func TestCellNamespaceIsCapped(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Spec.MaxSessions = 3
+	cellCR.Spec.SessionResources = acv1.ResourceBudget{CPU: "1", Memory: "2Gi"}
+	c := newFake(t, cellCR)
+	r := &CellReconciler{Client: c, ControlNamespace: controlNS}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var q corev1.ResourceQuota
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: ids.WorkloadNamespace("shop"), Name: "cell"}, &q); err != nil {
+		t.Fatalf("no quota on the cell namespace: %v", err)
+	}
+	// 3 slots x 1 CPU + anchor 2 + prod 2 + settle 1 = 8
+	if got := q.Spec.Hard[corev1.ResourceLimitsCPU]; got.String() != "8" {
+		t.Errorf("cpu ceiling = %s, want 8 (3 slots + anchor + prod + settle headroom)", got.String())
+	}
+	// 3 x 2Gi + 4Gi + 4Gi + 1Gi = 15Gi
+	if got := q.Spec.Hard[corev1.ResourceLimitsMemory]; got.String() != "15Gi" {
+		t.Errorf("memory ceiling = %s, want 15Gi", got.String())
+	}
+	// Requests are capped too: a namespace that can request more than it can
+	// limit would let the scheduler over-commit the node this Cell was sized
+	// for.
+	if _, ok := q.Spec.Hard[corev1.ResourceRequestsCPU]; !ok {
+		t.Error("quota caps limits but not requests")
+	}
+}
+
+// The resident pods must not be BestEffort: they are the first killed under
+// node pressure, and the anchor is the one pod in a Cell that must not die.
+func TestResidentWorkloadsDeclareResources(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Spec.Production = acv1.ProductionSpec{ReleaseID: ids.NewSessionID()}
+	c := newFake(t, cellCR)
+	r := &CellReconciler{Client: c, ControlNamespace: controlNS}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, ns := context.Background(), ids.WorkloadNamespace("shop")
+	var sts appsv1.StatefulSet
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.AnchorStatefulSet}, &sts); err != nil {
+		t.Fatal(err)
+	}
+	anchor := sts.Spec.Template.Spec.Containers[0].Resources
+	if anchor.Requests.Memory().IsZero() || anchor.Limits.Memory().IsZero() {
+		t.Error("the anchor is BestEffort: it will be the first thing killed under memory pressure")
+	}
+	var dep appsv1.Deployment
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.ProdDeployment}, &dep); err != nil {
+		t.Fatal(err)
+	}
+	if dep.Spec.Template.Spec.Containers[0].Resources.Requests.Cpu().IsZero() {
+		t.Error("the production pod asks the scheduler for nothing")
+	}
+}

@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -146,10 +148,15 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	if key == "" {
 		return fmt.Errorf("secret %q has no %q entry", sess.Spec.CredentialSecret, "key")
 	}
-	var env strings.Builder
-	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvAPIKey, key)
+	// One JSON object, not KEY=VALUE lines.
+	//
+	// Line-oriented framing forced a choice between mangling a task that
+	// contains a newline and refusing it — and refusing it was wrong, because
+	// the console offers a multi-line box. A briefing is prose; the transport
+	// has to carry prose.
+	vars := map[string]string{runtimeapi.EnvAPIKey: key}
 	for k, v := range r.Registry.SessionEnv(binding, key) {
-		fmt.Fprintf(&env, "%s=%s\n", k, v)
+		vars[k] = v
 	}
 	// The briefing values the worktree needs, carried as window environment
 	// so the applet reads them the same way the one-shot pod does.
@@ -157,24 +164,22 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	// this user's sessions — same runtime, same $HOME — would resume into
 	// each other's conversation.
 	if v := access.SessionHomeVar(sess.Spec.Runner); v != "" {
-		fmt.Fprintf(&env, "%s=%s\n", v, ids.SessionStateDir(uid, id))
+		vars[v] = ids.SessionStateDir(uid, id)
 	}
-	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvSessionID, id)
-	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvBaseBranch, cell.Spec.Repo.Branch)
-	// One line each, so a task containing a newline cannot inject another
-	// variable. Rejected rather than mangled: a briefing is not worth a
-	// credential-shaped hole.
-	if strings.ContainsAny(sess.Spec.Task, "\n\r") || strings.ContainsAny(cell.Spec.Description, "\n\r") {
-		return fmt.Errorf("task and description must be single-line to cross the exec channel")
+	vars[runtimeapi.EnvSessionID] = id
+	vars[runtimeapi.EnvBaseBranch] = cell.Spec.Repo.Branch
+	vars[runtimeapi.EnvTask] = sess.Spec.Task
+	vars[runtimeapi.EnvDescription] = cell.Spec.Description
+	env, err := json.Marshal(vars)
+	if err != nil {
+		return err
 	}
-	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvTask, sess.Spec.Task)
-	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvDescription, cell.Spec.Description)
 
 	cmd := append([]string{runtimeapi.RuntimeBin, "window-open", id}, argv...)
 	if restore {
 		cmd = []string{runtimeapi.RuntimeBin, "window-open", "-restore", id}
 	}
-	out, err := r.Exec(ctx, ns, ids.UserRuntimePod(uid), cmd, strings.NewReader(env.String()))
+	out, err := r.Exec(ctx, ns, ids.UserRuntimePod(uid), cmd, bytes.NewReader(env))
 	if err != nil {
 		return fmt.Errorf("open window: %v: %s", err, out)
 	}
@@ -263,6 +268,7 @@ func (r *SessionReconciler) recoverResident(ctx context.Context, sess *acv1.Sess
 	}
 	sess.Status.Recoveries++
 	sess.Status.PodName = ids.UserRuntimePod(uid)
+	sess.Status.RuntimeInstance = r.currentInstance(ctx, ns, uid)
 	sess.Status.Message = "runtime rebuilt; the conversation is where you left it"
 	if err := r.Status().Update(ctx, sess); err != nil {
 		return ctrl.Result{}, err
@@ -275,21 +281,24 @@ func (r *SessionReconciler) recoverResident(ctx context.Context, sess *acv1.Sess
 // Errors are NOT treated as death: an exec can fail because the API server
 // is busy or the pod is mid-restart, and settling a session on a transient
 // failure would destroy exactly what resident sessions exist to keep.
-func (r *SessionReconciler) windowAlive(ctx context.Context, sess *acv1.Session, ns, id string) (bool, error) {
+func (r *SessionReconciler) windowState(ctx context.Context, sess *acv1.Session, ns, id string) (alive, working bool, err error) {
 	if r.Exec == nil || sess.Status.PodName == "" {
-		return true, nil
+		return true, false, nil
 	}
-	out, err := r.Exec(ctx, ns, sess.Status.PodName,
+	out, execErr := r.Exec(ctx, ns, sess.Status.PodName,
 		[]string{runtimeapi.RuntimeBin, "window-status", id}, nil)
-	if err != nil {
+	if execErr != nil {
 		if strings.Contains(out, "alive=false") {
 			// The applet ran and reported honestly; the non-zero exit is its
 			// answer, not a failure to ask.
-			return false, nil
+			return false, false, nil
 		}
-		return true, err
+		return true, false, execErr
 	}
-	return strings.Contains(out, "alive=true"), nil
+	alive = strings.Contains(out, "alive=true")
+	// exit=- means the agent has not finished, i.e. it is still working.
+	working = alive && strings.Contains(out, "exit=-")
+	return alive, working, nil
 }
 
 // runtimeResources sizes a user's runtime for the sessions it can hold.
@@ -327,4 +336,36 @@ func runtimeResources(cell *acv1.Cell) corev1.ResourceRequirements {
 			corev1.ResourceMemory: limitMem,
 		},
 	}
+}
+
+// runtimeInstance identifies the container a runtime pod is currently
+// running, so a restart is distinguishable from a window someone closed.
+//
+// The container ID changes on every restart, which is exactly the property
+// needed; RestartCount would work too but resets if the pod is replaced,
+// and the ID does not have to be interpreted to be compared.
+func runtimeInstance(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == runtimeapi.UserRuntimeContainer {
+			if cs.ContainerID != "" {
+				return cs.ContainerID
+			}
+			// Before the ID is published, the start time still changes on a
+			// restart, which is enough to notice one.
+			if cs.State.Running != nil {
+				return cs.State.Running.StartedAt.String()
+			}
+		}
+	}
+	return ""
+}
+
+// currentInstance reads the runtime's container identity, best effort: a
+// blank value simply means the next reconcile records it instead.
+func (r *SessionReconciler) currentInstance(ctx context.Context, ns string, uid int64) string {
+	var pod corev1.Pod
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod); err != nil {
+		return ""
+	}
+	return runtimeInstance(&pod)
 }

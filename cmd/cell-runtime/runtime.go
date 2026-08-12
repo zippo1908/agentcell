@@ -1,13 +1,15 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -264,22 +266,35 @@ func sendCommand(sock, window string, argv []string, resetDone bool, sessionID, 
 	return nil
 }
 
-// readEnvFromStdin collects KEY=VALUE lines. Secrets travel this way rather
-// than in argv, and the reader stops at EOF so an empty stdin is fine.
+// readEnvFromStdin decodes the window's environment as one JSON object.
+//
+// It used to be KEY=VALUE lines, which meant a task containing a newline
+// either corrupted the next variable or had to be refused outright — and
+// refusing was wrong, because the console offers a multi-line box and a
+// briefing is prose. JSON carries prose, and secrets still travel here
+// rather than in argv, which /proc would expose to every other window.
 func readEnvFromStdin() ([]string, error) {
-	var out []string
-	sc := bufio.NewScanner(os.Stdin)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		if !strings.Contains(line, "=") {
-			return nil, fmt.Errorf("window-open: stdin must be KEY=VALUE lines")
-		}
-		out = append(out, line)
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return nil, err
 	}
-	return out, sc.Err()
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("window-open: stdin must be a JSON object of environment variables: %w", err)
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic, so a failure is reproducible
+	out := make([]string, 0, len(m))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return out, nil
 }
 
 func tmux(sock string, args ...string) (string, error) {

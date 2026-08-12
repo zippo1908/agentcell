@@ -28,7 +28,13 @@ import (
 const (
 	settleFinalizer = "agentcell.io/settle"
 	defaultTTL      = int64(3600)
-	pollInterval    = 10 * time.Second
+	// A resident session is a slot someone is using, so the clock that
+	// matters is IDLE time, not total age: killing one at the two-hour mark
+	// while its agent is mid-run would be the platform interrupting work it
+	// was built to host. Two hours of nothing happening is the default, and
+	// spec.ttlSeconds overrides it.
+	defaultResidentIdle = int64(7200)
+	pollInterval        = 10 * time.Second
 )
 
 // SessionReconciler drives dispatch → work → settle → reclaim. Settle is
@@ -206,6 +212,11 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 			return r.fail(ctx, sess, err)
 		}
 		sess.Status.PodName = ids.UserRuntimePod(uid)
+		// Remember which container the window lives in, so a later restart is
+		// recognisable as one, and start the idle clock from now.
+		sess.Status.RuntimeInstance = r.currentInstance(ctx, ns, uid)
+		opened := metav1.Now()
+		sess.Status.LastActivity = &opened
 	} else {
 		if err := r.copyCredential(ctx, sess, ns, id); err != nil {
 			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
@@ -429,6 +440,9 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	ttl := sess.Spec.TTLSeconds
 	if ttl == 0 {
 		ttl = defaultTTL
+		if sess.Spec.Resident {
+			ttl = defaultResidentIdle
+		}
 	}
 	host := ids.SessionName(id)
 	if sess.Spec.Resident {
@@ -457,7 +471,42 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		// settle. What differs is that the agent exiting no longer ends it.
 		return r.startSettle(ctx, sess, cell, ns, id, "agent finished ("+string(pod.Status.Phase)+")")
 	}
-	if sess.Status.StartTime != nil && time.Since(sess.Status.StartTime.Time) > time.Duration(ttl)*time.Second {
+	// The window is the session, not the pod — but a missing window has two
+	// very different causes, and settling the wrong one destroys work.
+	//
+	// A tmux server dies with its container, so a RESTART takes every window
+	// with it while the pod stays. That is the platform failing, not the user
+	// finishing, and the session should be handed back. Only when the
+	// container is the same one the window was opened in does "no window"
+	// mean somebody closed it.
+	if sess.Spec.Resident {
+		if inst := runtimeInstance(&pod); inst != "" && sess.Status.RuntimeInstance != "" && inst != sess.Status.RuntimeInstance {
+			return r.recoverResident(ctx, sess, cell, ns, id)
+		}
+		alive, working, err := r.windowState(ctx, sess, ns, id)
+		if err == nil && !alive {
+			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
+		}
+		// An agent that is still running IS activity: the idle clock must not
+		// tick through a long build.
+		if working {
+			now := metav1.Now()
+			sess.Status.LastActivity = &now
+			if err := r.Status().Update(ctx, sess); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
+
+	// One-shot sessions age out; resident ones idle out. The reference point
+	// is the last thing that happened — a follow-up typed, a window opened,
+	// or the agent observed working — so an active session is never the one
+	// reclaimed.
+	since := sess.Status.StartTime
+	if sess.Spec.Resident && sess.Status.LastActivity != nil {
+		since = sess.Status.LastActivity
+	}
+	if since != nil && time.Since(since.Time) > time.Duration(ttl)*time.Second {
 		if !sess.Spec.Resident {
 			if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
@@ -469,16 +518,6 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		return r.startSettle(ctx, sess, cell, ns, id, "TTL exceeded")
 	}
 
-	// The window is the session, not the pod. A runtime that answers exec may
-	// still have lost this window: the owner can close it, and a restarted
-	// runtime container keeps the pod while taking every window with it.
-	// Observing the pod alone reported all of that as Running.
-	if sess.Spec.Resident {
-		alive, err := r.windowAlive(ctx, sess, ns, id)
-		if err == nil && !alive {
-			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
-		}
-	}
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
@@ -564,6 +603,7 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, sess *acv1.Sess
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{runtimeapi.RuntimeBin, "settle"},
 						SecurityContext: containerSecurity(),
+						Resources:       settleResources(),
 						Env:             settleEnv,
 						VolumeMounts:    settleMounts,
 					}},
