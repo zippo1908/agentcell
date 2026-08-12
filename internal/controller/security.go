@@ -3,7 +3,48 @@ package controller
 import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
+
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
+
+// brokerTokenVolume is an audience-bound projected ServiceAccount token
+// (ADR-0005 hardening): scoped to the broker so it cannot be replayed
+// against the apiserver, and 1h-lived.
+func brokerTokenVolume() corev1.Volume {
+	return corev1.Volume{
+		Name: runtimeapi.BrokerTokenVolume,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{{
+					ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+						Audience:          runtimeapi.BrokerAudience,
+						ExpirationSeconds: ptr.To[int64](3600),
+						Path:              "token",
+					},
+				}},
+			},
+		},
+	}
+}
+
+func brokerTokenMount() corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      runtimeapi.BrokerTokenVolume,
+		MountPath: runtimeapi.BrokerTokenMount,
+		ReadOnly:  true,
+	}
+}
+
+// withBrokerClientLabel marks a pod as permitted to reach the broker; the
+// NetworkPolicy egress rule selects on it.
+func withBrokerClientLabel(labels map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range labels {
+		out[k] = v
+	}
+	out[runtimeapi.BrokerClientLabelKey] = runtimeapi.BrokerClientLabelVal
+	return out
+}
 
 // Every pod the platform renders — anchor, session, settle, prod — runs
 // non-root with the same hardened defaults. The devbox image ships a

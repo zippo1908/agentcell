@@ -26,3 +26,5 @@ func gitWorkloadEnv(brokerURL, cellName, secretName string) []corev1.EnvVar {
 func brokerMode(brokerURL string, cell *acv1.Cell) bool {
 	return brokerURL != "" && cell.Spec.Repo.SecretName != ""
 }
+
+func ptrFalse() *bool { b := false; return &b }

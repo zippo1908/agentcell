@@ -71,6 +71,17 @@ GitHub / GitLab(真实 remote,443)
 - **失/成本**:多一个必须部署的组件(可选,直连模式保底);git 操作多一跳(内网,可忽略);broker 是高价值目标,必须按 celld 同规格加固(非 root、只读根 FS、最小 RBAC:TokenReview + 读 Cell/Secret、无 shell)。
 - **里程碑**:独立于当前功能线,作为一个"安全加固"批次;v1 可与现有直连模式并存,真机 e2e 增加一条 broker 模式跑通的断言后,再在 install.yaml 默认开启。
 
+## 加固(v1.1,已实现)
+
+在"令牌不进容器"之上做纵深防御,把 broker 的信任从"命名空间级"收紧到"角色+会话级":
+
+1. **专用 ServiceAccount**:anchor/settle/prod 各用独立 SA(cell 命名空间内,零 RBAC),broker 据此区分角色——**只有 settle 角色能 push**,anchor/prod 只能 fetch。
+2. **Session Pod 无令牌**:会话 Pod(跑不可信 agent+仓库代码)设 `automountServiceAccountToken: false`,根本不挂任何 SA token——它本就不碰 git,push 由 settle job 做。
+3. **audience 绑定令牌**:workload 挂的是 audience=`agentcell-git-broker` 的**投影令牌**(1h TTL),不是默认 apiserver 令牌;broker 的 TokenReview 校验 audience,令牌无法跨用途重放。
+4. **NetworkPolicy 按标签**:只有带 `broker-client` 标签的 Pod(anchor/settle/prod)有到 broker 的 egress;会话 Pod 无标签无令牌,双重够不到 broker。
+5. **会话身份精确绑定**:settle 的 push ref 必须**恰好等于** `refs/heads/session/<session-id>`,其中 `<session-id>` 从 **settle Pod 名**(TokenReview 的 bound-token 声明,不可伪造)派生——一个 settle Pod 无法 push 到别的会话的分支,也无法碰 base 分支。
+6. **repo↔凭据不可伪造绑定**:git Secret 可声明 `repo_url`;broker 校验 Cell 的 repo.url 与之一致——建 Cell 的人无法把某凭据配到另一个(如攻击者的)URL 上,也无法用别人的令牌配自己的 URL。
+
 ## 实现清单(v1)
 
 1. `cmd/git-broker`:smart-HTTP 反代 + TokenReview 鉴权 + namespace↔cell 校验 + Cell/Secret 查询;

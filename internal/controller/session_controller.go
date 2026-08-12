@@ -301,6 +301,10 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		pod.Spec = corev1.PodSpec{
 			RestartPolicy:   corev1.RestartPolicyNever,
 			SecurityContext: podSecurity(),
+			// The session pod runs the agent (untrusted repo + model code)
+			// and never talks to git or the broker — the settle job does.
+			// Give it no ServiceAccount token at all (ADR-0005 hardening).
+			AutomountServiceAccountToken: ptrFalse(),
 			// RWO PVC: sessions must land on the anchor's node.
 			Affinity: &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
@@ -386,6 +390,23 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 	if cell.Spec.Repo.SecretName != "" {
 		settleEnv = append(settleEnv, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)
 	}
+	podLabels := map[string]string{ids.SessionLabelKey: id}
+	settleMounts := []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}}
+	volumes := []corev1.Volume{{
+		Name: "workspace",
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: ids.WorkspacePVC},
+		},
+	}}
+	sa := ""
+	if r.GitBrokerURL != "" {
+		// settle is the only role permitted to push, and its pod name binds
+		// the push to this session's branch at the broker.
+		podLabels = withBrokerClientLabel(podLabels)
+		sa = runtimeapi.SASettle
+		settleMounts = append(settleMounts, brokerTokenMount())
+		volumes = append(volumes, brokerTokenVolume())
+	}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.SettleJobName(id)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, job, func() error {
 		if !job.CreationTimestamp.IsZero() {
@@ -395,10 +416,11 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 		job.Spec = batchv1.JobSpec{
 			BackoffLimit: &backoff,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{ids.SessionLabelKey: id}},
+				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 				Spec: corev1.PodSpec{
-					RestartPolicy:   corev1.RestartPolicyNever,
-					SecurityContext: podSecurity(),
+					RestartPolicy:      corev1.RestartPolicyNever,
+					ServiceAccountName: sa,
+					SecurityContext:    podSecurity(),
 					Affinity: &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
 						RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
 							LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
@@ -414,14 +436,9 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 						Command:         []string{runtimeapi.RuntimeBin, "settle"},
 						SecurityContext: containerSecurity(),
 						Env:             settleEnv,
-						VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+						VolumeMounts:    settleMounts,
 					}},
-					Volumes: []corev1.Volume{{
-						Name: "workspace",
-						VolumeSource: corev1.VolumeSource{
-							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: ids.WorkspacePVC},
-						},
-					}},
+					Volumes: volumes,
 				},
 			},
 		}

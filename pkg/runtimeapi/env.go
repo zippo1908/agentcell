@@ -45,12 +45,34 @@ const (
 	// <broker>/<cell>/… and the broker binds it to the pod's namespace.
 	EnvCellName = "AGENTCELL_CELL"
 
-	// SATokenPath is where Kubernetes projects the pod's ServiceAccount
-	// token; in broker mode cell-runtime sends it as the git password.
-	SATokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	// SATokenPath is an audience-bound projected ServiceAccount token
+	// (audience BrokerAudience), mounted only into anchor/settle/prod pods.
+	// cell-runtime sends it as the git password in broker mode. It is NOT
+	// the default kube-apiserver token: a token scoped to the broker cannot
+	// be replayed against the apiserver, and vice-versa.
+	SATokenPath = "/var/run/secrets/agentcell/git-broker/token"
+	// BrokerAudience is the audience the broker requires on the SA token.
+	BrokerAudience = "agentcell-git-broker"
 	// BrokerGitUser is the fixed basic-auth username workloads present to
 	// the broker; the password carries the SA token.
 	BrokerGitUser = "x-access-token"
+
+	// Dedicated ServiceAccount names per git role, so the broker can tell
+	// anchor/prod (fetch only) from settle (the only role allowed to push).
+	SAAnchor = "anchor"
+	SASettle = "settle"
+	SAProd   = "prod"
+
+	// BrokerClientLabel marks pods permitted to reach the broker; the
+	// NetworkPolicy egress rule selects on it, so session pods (which lack
+	// it and have no token) cannot reach the broker at all.
+	BrokerClientLabelKey = "agentcell.io/broker-client"
+	BrokerClientLabelVal = "true"
+
+	// BrokerTokenVolume is the projected-token volume name.
+	BrokerTokenVolume = "git-broker-token"
+	// BrokerTokenMount is where that volume is mounted.
+	BrokerTokenMount = "/var/run/secrets/agentcell/git-broker"
 
 	// Production (正式区) container: fresh shallow clone per release,
 	// on an emptyDir — never the dev-zone PVC.

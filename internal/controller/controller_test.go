@@ -183,11 +183,19 @@ func TestBrokerModeStripsForgeCredentialsFromWorkloads(t *testing.T) {
 	ctx := context.Background()
 	ns := ids.WorkloadNamespace("shop")
 
+	// Dedicated per-role ServiceAccounts exist.
+	for _, sa := range []string{runtimeapi.SAAnchor, runtimeapi.SASettle, runtimeapi.SAProd} {
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: sa}, &corev1.ServiceAccount{}); err != nil {
+			t.Errorf("service account %q: %v", sa, err)
+		}
+	}
+
 	var sts appsv1.StatefulSet
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.AnchorStatefulSet}, &sts); err != nil {
 		t.Fatal(err)
 	}
-	anchor := envMap(sts.Spec.Template.Spec.Containers[0].Env)
+	anchorPod := sts.Spec.Template.Spec
+	anchor := envMap(anchorPod.Containers[0].Env)
 	if _, has := anchor["GIT_TOKEN"]; has {
 		t.Error("anchor holds a forge token in broker mode")
 	}
@@ -196,6 +204,15 @@ func TestBrokerModeStripsForgeCredentialsFromWorkloads(t *testing.T) {
 	}
 	if anchor[runtimeapi.EnvCellName].Value != "shop" {
 		t.Errorf("anchor cell name = %q", anchor[runtimeapi.EnvCellName].Value)
+	}
+	if anchorPod.ServiceAccountName != runtimeapi.SAAnchor {
+		t.Errorf("anchor SA = %q, want %q", anchorPod.ServiceAccountName, runtimeapi.SAAnchor)
+	}
+	if sts.Spec.Template.Labels[runtimeapi.BrokerClientLabelKey] != runtimeapi.BrokerClientLabelVal {
+		t.Error("anchor pod not labeled broker-client")
+	}
+	if !hasBrokerTokenVolume(anchorPod) {
+		t.Error("anchor missing audience-bound broker token volume")
 	}
 
 	var dep appsv1.Deployment
@@ -210,21 +227,43 @@ func TestBrokerModeStripsForgeCredentialsFromWorkloads(t *testing.T) {
 		t.Error("prod-clone missing broker URL")
 	}
 
-	// The egress policy must permit reaching the broker.
-	var eg netv1.NetworkPolicy
-	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "allow-egress"}, &eg); err != nil {
-		t.Fatal(err)
+	// A dedicated broker-egress policy, scoped to broker-client pods only.
+	var bpol netv1.NetworkPolicy
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "allow-broker-egress"}, &bpol); err != nil {
+		t.Fatalf("allow-broker-egress: %v", err)
 	}
-	foundBroker := false
-	for _, rule := range eg.Spec.Egress {
-		for _, p := range rule.Ports {
-			if p.Port != nil && p.Port.IntValue() == 8080 {
-				foundBroker = true
+	if bpol.Spec.PodSelector.MatchLabels[runtimeapi.BrokerClientLabelKey] != runtimeapi.BrokerClientLabelVal {
+		t.Error("broker-egress policy is not scoped to broker-client pods")
+	}
+}
+
+func hasBrokerTokenVolume(spec corev1.PodSpec) bool {
+	for _, v := range spec.Volumes {
+		if v.Projected != nil {
+			for _, s := range v.Projected.Sources {
+				if s.ServiceAccountToken != nil && s.ServiceAccountToken.Audience == runtimeapi.BrokerAudience {
+					return true
+				}
 			}
 		}
 	}
-	if !foundBroker {
-		t.Error("egress policy does not allow reaching the broker on 8080")
+	return false
+}
+
+// The session pod runs untrusted code and must carry no SA token.
+func TestSessionPodHasNoServiceAccountToken(t *testing.T) {
+	id := ids.NewSessionID()
+	name := ids.SessionName(id)
+	c := newFake(t, testCell(), credSecret("bailian-key"), newSession(name, "t"))
+	r := sessionReconciler(t, c)
+	r.GitBrokerURL = "http://git-broker:8080"
+	reconcileSession(t, r, name, 3)
+	var pod corev1.Pod
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ids.WorkloadNamespace("shop"), Name: name}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Error("session pod must set automountServiceAccountToken=false")
 	}
 }
 

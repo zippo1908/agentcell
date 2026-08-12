@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	authnv1 "k8s.io/api/authentication/v1"
 )
 
 // pkt encodes one git pkt-line.
@@ -23,14 +25,20 @@ func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
 const flushPkt = "0000"
 
 func TestParseAndCheckRefPolicy(t *testing.T) {
+	const sess = "01xyz"
 	cases := []struct {
 		name    string
 		body    string
 		wantErr bool
 	}{
 		{
-			name: "session branch allowed",
+			name: "own session branch allowed",
 			body: pkt("0000000000000000000000000000000000000000 abcdef0000000000000000000000000000000001 refs/heads/session/01xyz\x00report-status") + flushPkt,
+		},
+		{
+			name:    "another session's branch rejected",
+			body:    pkt("dead00 beef11 refs/heads/session/other\x00report-status") + flushPkt,
+			wantErr: true,
 		},
 		{
 			name:    "base branch rejected",
@@ -38,18 +46,8 @@ func TestParseAndCheckRefPolicy(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "arbitrary ref rejected",
-			body:    pkt("dead00 beef11 refs/heads/hack") + flushPkt,
-			wantErr: true,
-		},
-		{
-			name:    "delete of session branch rejected",
-			body:    pkt("abc123 0000000000000000000000000000000000000000 refs/heads/session/gone") + flushPkt,
-			wantErr: true,
-		},
-		{
-			name:    "mixed session + base rejected",
-			body:    pkt("a b refs/heads/session/ok") + pkt("c d refs/heads/main") + flushPkt,
+			name:    "delete of own branch rejected",
+			body:    pkt("abc123 0000000000000000000000000000000000000000 refs/heads/session/01xyz") + flushPkt,
 			wantErr: true,
 		},
 		{
@@ -64,7 +62,7 @@ func TestParseAndCheckRefPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			err = checkRefPolicy(cmds)
+			err = checkRefPolicy(cmds, sess)
 			if c.wantErr && err == nil {
 				t.Errorf("expected policy rejection, got none (cmds=%v)", cmds)
 			}
@@ -75,11 +73,63 @@ func TestParseAndCheckRefPolicy(t *testing.T) {
 	}
 }
 
+func TestAuthorizeRolesAndSettleSessionID(t *testing.T) {
+	cellNS := "cell-shop"
+	// namespace binding
+	if err := authorize(identity{namespace: "cell-other", saName: "anchor"}, "shop", false); err == nil {
+		t.Error("wrong namespace must be rejected")
+	}
+	// anchor/prod may not push
+	if err := authorize(identity{namespace: cellNS, saName: "anchor"}, "shop", true); err == nil {
+		t.Error("anchor must not push")
+	}
+	if err := authorize(identity{namespace: cellNS, saName: "prod"}, "shop", true); err == nil {
+		t.Error("prod must not push")
+	}
+	// anchor may fetch
+	if err := authorize(identity{namespace: cellNS, saName: "anchor"}, "shop", false); err != nil {
+		t.Errorf("anchor fetch should be allowed: %v", err)
+	}
+	// unknown SA rejected
+	if err := authorize(identity{namespace: cellNS, saName: "default"}, "shop", false); err == nil {
+		t.Error("unknown service account must be rejected")
+	}
+	// settle session id derived from bound pod name
+	id, err := settleSessionID(identity{saName: "settle", podName: "settle-01hxyz-ab12z"})
+	if err != nil || id != "01hxyz" {
+		t.Errorf("settleSessionID = %q, %v; want 01hxyz", id, err)
+	}
+	// non-settle role cannot push
+	if _, err := settleSessionID(identity{saName: "anchor", podName: "x"}); err == nil {
+		t.Error("only settle derives a push session")
+	}
+	// missing bound identity rejected
+	if _, err := settleSessionID(identity{saName: "settle"}); err == nil {
+		t.Error("missing pod name must be rejected")
+	}
+}
+
+func TestIdentityFromReview(t *testing.T) {
+	u := userInfo("system:serviceaccount:cell-shop:settle", map[string][]string{
+		"authentication.kubernetes.io/pod-name": {"settle-01h-abc"},
+	})
+	id, err := identityFromReview(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.namespace != "cell-shop" || id.saName != "settle" || id.podName != "settle-01h-abc" {
+		t.Errorf("identity = %+v", id)
+	}
+	if _, err := identityFromReview(userInfo("alice", nil)); err == nil {
+		t.Error("non-SA username must be rejected")
+	}
+}
+
 func TestEnforcePushPolicyForwardsOriginalBytesAndHandlesGzip(t *testing.T) {
 	body := pkt("0000000000000000000000000000000000000000 abc refs/heads/session/x\x00report-status") + flushPkt + "PACKDATA"
 
 	// plain
-	out, err := enforcePushPolicy(strings.NewReader(body), false)
+	out, err := enforcePushPolicy(strings.NewReader(body), false, "x")
 	if err != nil {
 		t.Fatalf("plain: %v", err)
 	}
@@ -94,7 +144,7 @@ func TestEnforcePushPolicyForwardsOriginalBytesAndHandlesGzip(t *testing.T) {
 	_, _ = zw.Write([]byte(body))
 	_ = zw.Close()
 	raw := gz.Bytes()
-	out, err = enforcePushPolicy(bytes.NewReader(raw), true)
+	out, err = enforcePushPolicy(bytes.NewReader(raw), true, "x")
 	if err != nil {
 		t.Fatalf("gzip: %v", err)
 	}
@@ -108,9 +158,20 @@ func TestEnforcePushPolicyForwardsOriginalBytesAndHandlesGzip(t *testing.T) {
 	zw = gzip.NewWriter(&bad)
 	_, _ = zw.Write([]byte(pkt("a b refs/heads/main") + flushPkt))
 	_ = zw.Close()
-	if _, err := enforcePushPolicy(bytes.NewReader(bad.Bytes()), true); err == nil {
+	if _, err := enforcePushPolicy(bytes.NewReader(bad.Bytes()), true, "x"); err == nil {
 		t.Error("expected rejection of gzipped push to main")
 	}
+}
+
+func userInfo(username string, extra map[string][]string) authnv1.UserInfo {
+	u := authnv1.UserInfo{Username: username}
+	if extra != nil {
+		u.Extra = map[string]authnv1.ExtraValue{}
+		for k, v := range extra {
+			u.Extra[k] = authnv1.ExtraValue(v)
+		}
+	}
+	return u
 }
 
 func TestSplitCellPath(t *testing.T) {

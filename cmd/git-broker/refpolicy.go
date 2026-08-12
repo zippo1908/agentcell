@@ -79,15 +79,19 @@ type refPolicyError struct{ reason string }
 
 func (e *refPolicyError) Error() string { return e.reason }
 
-// checkRefPolicy applies the session-branch-only rule to a set of commands.
-func checkRefPolicy(cmds []refUpdate) error {
+// checkRefPolicy binds a push to exactly one branch: the caller's own
+// session. Every command must target refs/heads/session/<sessionID> (no
+// other ref, no deletions). sessionID is derived from the unforgeable pod
+// identity, so a settle pod cannot push to another session's branch.
+func checkRefPolicy(cmds []refUpdate, sessionID string) error {
 	if len(cmds) == 0 {
 		return &refPolicyError{"push contained no ref updates"}
 	}
+	want := "refs/heads/session/" + sessionID
 	for _, c := range cmds {
-		if !strings.HasPrefix(c.Ref, "refs/heads/session/") {
+		if c.Ref != want {
 			return &refPolicyError{fmt.Sprintf(
-				"ref %q is not permitted: the broker only accepts pushes to refs/heads/session/*", c.Ref)}
+				"ref %q is not permitted: this session may push only %q", c.Ref, want)}
 		}
 		if isZeroOID(c.New) {
 			return &refPolicyError{fmt.Sprintf("deleting %q is not permitted", c.Ref)}
@@ -97,9 +101,10 @@ func checkRefPolicy(cmds []refUpdate) error {
 }
 
 // enforcePushPolicy reads a receive-pack body (handling gzip), validates its
-// commands, and returns a replacement body that streams the ORIGINAL bytes
-// unchanged so the proxy forwards a byte-identical request.
-func enforcePushPolicy(body io.Reader, gzipped bool) (io.Reader, error) {
+// commands against the caller's session id, and returns a replacement body
+// that streams the ORIGINAL bytes unchanged so the proxy forwards a
+// byte-identical request.
+func enforcePushPolicy(body io.Reader, gzipped bool, sessionID string) (io.Reader, error) {
 	raw, err := io.ReadAll(io.LimitReader(body, maxPushInspectBytes+1))
 	if err != nil {
 		return nil, err
@@ -121,7 +126,7 @@ func enforcePushPolicy(body io.Reader, gzipped bool) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkRefPolicy(cmds); err != nil {
+	if err := checkRefPolicy(cmds, sessionID); err != nil {
 		return nil, err
 	}
 	return bytes.NewReader(raw), nil

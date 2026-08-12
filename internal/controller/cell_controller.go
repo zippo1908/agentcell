@@ -65,6 +65,11 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.ensureNetworkPolicies(ctx, ns, cell.Namespace); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("network policies: %w", err))
 	}
+	if r.GitBrokerURL != "" {
+		if err := r.ensureServiceAccounts(ctx, ns); err != nil {
+			return r.fail(ctx, &cell, fmt.Errorf("service accounts: %w", err))
+		}
+	}
 	// In broker mode the forge secret must NOT be copied into the workload
 	// namespace — it stays readable only by the broker (ADR-0005). Only
 	// direct mode needs a per-namespace copy for the askpass helper.
@@ -187,6 +192,20 @@ func (r *CellReconciler) finalize(ctx context.Context, cell *acv1.Cell) (ctrl.Re
 	return ctrl.Result{}, nil
 }
 
+// ensureServiceAccounts creates the dedicated per-role ServiceAccounts the
+// broker distinguishes (ADR-0005 hardening): anchor and prod may only
+// fetch; settle is the only role permitted to push. They carry no RBAC —
+// their only use is identity at the broker.
+func (r *CellReconciler) ensureServiceAccounts(ctx context.Context, ns string) error {
+	for _, name := range []string{runtimeapi.SAAnchor, runtimeapi.SASettle, runtimeapi.SAProd} {
+		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *CellReconciler) ensureNamespace(ctx context.Context, name, cellName string) error {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
@@ -226,32 +245,45 @@ func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, ns, controlN
 	broker := intstr.FromInt(8080)
 	egress := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "allow-egress"}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, egress, func() error {
-		rules := []netv1.NetworkPolicyEgressRule{
-			{Ports: []netv1.NetworkPolicyPort{
-				{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns},
-			}},
-			{Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &https}}},
-		}
-		if r.GitBrokerURL != "" {
-			// Reaching the git-broker in the control namespace on 8080. (443
-			// stays open for session pods calling model APIs.)
-			rules = append(rules, netv1.NetworkPolicyEgressRule{
-				To: []netv1.NetworkPolicyPeer{{
-					NamespaceSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
-					},
-				}},
-				Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &broker}},
-			})
-		}
 		egress.Spec = netv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{},
 			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
-			Egress:      rules,
+			Egress: []netv1.NetworkPolicyEgressRule{
+				{Ports: []netv1.NetworkPolicyPort{
+					{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns},
+				}},
+				{Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &https}}},
+			},
 		}
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	// Broker egress is granted ONLY to pods labeled broker-client
+	// (anchor/settle/prod). Session pods lack the label and have no token,
+	// so they cannot reach the broker at all (ADR-0005 hardening).
+	if r.GitBrokerURL != "" {
+		bpol := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "allow-broker-egress"}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, bpol, func() error {
+			bpol.Spec = netv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{runtimeapi.BrokerClientLabelKey: runtimeapi.BrokerClientLabelVal},
+				},
+				PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+				Egress: []netv1.NetworkPolicyEgressRule{{
+					To: []netv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
+						},
+					}},
+					Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &broker}},
+				}},
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 
 	// Ingress to preview/prod is allowed only from the control-plane
@@ -344,20 +376,37 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 		env = append(env, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)
 	}
 
-	labels := map[string]string{
+	selector := map[string]string{
 		ids.CellLabelKey:      cell.Name,
 		ids.AnchorPodLabelKey: ids.AnchorPodLabelVal,
 	}
+	mounts := []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}}
+	volumes := []corev1.Volume{{
+		Name: "workspace",
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: ids.WorkspacePVC},
+		},
+	}}
+	podLabels := selector
+	sa := ""
+	if r.GitBrokerURL != "" {
+		podLabels = withBrokerClientLabel(selector)
+		sa = runtimeapi.SAAnchor
+		mounts = append(mounts, brokerTokenMount())
+		volumes = append(volumes, brokerTokenVolume())
+	}
+
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.AnchorStatefulSet}}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		one := int32(1)
 		sts.Spec.Replicas = &one
 		sts.Spec.ServiceName = ids.PreviewService
-		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: selector}
 		sts.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 			Spec: corev1.PodSpec{
-				SecurityContext: podSecurity(),
+				ServiceAccountName: sa,
+				SecurityContext:    podSecurity(),
 				Containers: []corev1.Container{{
 					Name:            "anchor",
 					Image:           cell.Spec.Image,
@@ -368,21 +417,10 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 					Ports: []corev1.ContainerPort{{
 						Name: "preview", ContainerPort: previewPort(cell),
 					}},
-					// Readiness = the preview is actually serving. Without
-					// this, the pod (and Cell) reports Ready the instant the
-					// container starts — before the clone finishes and the
-					// dev server binds — and the proxy 502s on early hits.
-					// Only gated when a preview command exists; otherwise the
-					// anchor idles and never binds the port.
 					ReadinessProbe: previewReadiness(cell),
-					VolumeMounts:   []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+					VolumeMounts:   mounts,
 				}},
-				Volumes: []corev1.Volume{{
-					Name: "workspace",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: ids.WorkspacePVC},
-					},
-				}},
+				Volumes: volumes,
 			},
 		}
 		return nil
@@ -486,19 +524,33 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 		{Name: runtimeapi.EnvProdCmd, Value: string(cmdJSON)},
 		{Name: runtimeapi.EnvProdReleaseID, Value: cell.Spec.Production.ReleaseID},
 	}
-	labels := map[string]string{
+	selector := map[string]string{
 		ids.CellLabelKey:      cell.Name,
 		ids.AnchorPodLabelKey: ids.ProdPodLabelVal,
+	}
+	cloneMounts := []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}}
+	volumes := []corev1.Volume{{
+		Name:         "prodspace",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}}
+	podLabels := selector
+	sa := ""
+	if r.GitBrokerURL != "" {
+		podLabels = withBrokerClientLabel(selector)
+		sa = runtimeapi.SAProd
+		cloneMounts = append(cloneMounts, brokerTokenMount())
+		volumes = append(volumes, brokerTokenVolume())
 	}
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.ProdDeployment}}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		one := int32(1)
 		dep.Spec.Replicas = &one
-		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: selector}
 		dep.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 			Spec: corev1.PodSpec{
-				SecurityContext: podSecurity(),
+				ServiceAccountName: sa,
+				SecurityContext:    podSecurity(),
 				InitContainers: []corev1.Container{{
 					Name:            "clone",
 					Image:           cell.Spec.Image,
@@ -506,7 +558,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					Command:         []string{runtimeapi.RuntimeBin, "prod-clone"},
 					SecurityContext: containerSecurity(),
 					Env:             cloneEnv,
-					VolumeMounts:    []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
+					VolumeMounts:    cloneMounts,
 				}},
 				Containers: []corev1.Container{{
 					Name:            "prod",
@@ -517,13 +569,10 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					Env:             serveEnv,
 					Ports:           []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
 					ReadinessProbe:  tcpReadiness(prodPort(cell)),
-					// emptyDir only: structurally impossible to share dev state.
+					// emptyDir only + no git env: cannot share dev state or creds.
 					VolumeMounts: []corev1.VolumeMount{{Name: "prodspace", MountPath: "/prodspace"}},
 				}},
-				Volumes: []corev1.Volume{{
-					Name:         "prodspace",
-					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-				}},
+				Volumes: volumes,
 			},
 		}
 		return nil
@@ -533,7 +582,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 	}
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.ProdService}}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		svc.Spec.Selector = labels
+		svc.Spec.Selector = selector
 		svc.Spec.Ports = []corev1.ServicePort{{Name: "prod", Port: prodPort(cell)}}
 		return nil
 	})
