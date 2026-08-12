@@ -1,0 +1,99 @@
+# Casdoor — registration, login and the user store for AgentCell.
+#
+# Apache-2.0; deployed as a separate service (see THIRD_PARTY.md). Swap it
+# for Keycloak or a corporate IdP by pointing --oidc-issuer elsewhere;
+# nothing in AgentCell is Casdoor-specific.
+#
+# This manifest is a STARTING POINT, not a production deployment. Before
+# real use: give Casdoor an external database (the default is a file-backed
+# SQLite that dies with the pod), terminate TLS in front of it, and replace
+# the built-in admin password.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: casdoor-data
+  namespace: identity
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: casdoor-admin
+  namespace: identity
+stringData:
+  # CHANGE THIS before exposing Casdoor to anyone.
+  password: "change-me-before-first-login"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casdoor
+  namespace: identity
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: casdoor}
+  template:
+    metadata:
+      labels: {app: casdoor}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: casdoor
+          # Official image from the Casdoor project — deliberately not a
+          # Bitnami repackage (see THIRD_PARTY.md).
+          image: casbin/casdoor:v1.885.0
+          imagePullPolicy: IfNotPresent
+          args: ["--createDatabase=true"]
+          env:
+            - name: RUNNING_IN_DOCKER
+              value: "true"
+            - name: httpport
+              value: "8000"
+            - name: INIT_DATA_FILE
+              value: /data/init_data.json
+            - name: initialAdminPassword
+              valueFrom:
+                secretKeyRef: {name: casdoor-admin, key: password}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          ports:
+            - {name: http, containerPort: 8000}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: casdoor-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: casdoor
+  namespace: identity
+spec:
+  selector: {app: casdoor}
+  ports:
+    - {name: http, port: 80, targetPort: http}

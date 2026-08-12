@@ -49,6 +49,28 @@ preview:
       enabled: false
       secretName: ""   # must cover *.<preview.domain>
 
+# User identity (ADR-0008). With an issuer configured, every Session records
+# its creator, another user's running session is invisible, and a model
+# credential can only be spent by its owner. Without one, AgentCell runs as a
+# single shared principal exactly as before.
+#
+# celld verifies the ID token itself, so ANY standards-compliant provider
+# works and no gateway is required. See deploy/identity/ for a Casdoor +
+# Apache APISIX® path.
+oidc:
+  issuer: ""             # e.g. https://casdoor.example.com
+  clientID: ""
+  # Secret holding key `clientSecret`. Never put the secret in values.
+  existingSecret: ""
+  # Absolute callback URL; empty derives it from the console's own origin,
+  # which is right for port-forward, ingress and gateway alike.
+  redirectURL: ""
+
+# Signing material for preview tickets. Leave empty and celld generates it
+# per process — correct, but preview links stop working across a restart or
+# a second replica. Point at a Secret with key `previewKey` to pin it.
+previewKeySecret: ""
+
 gitBroker:
   enabled: true
   replicas: 1

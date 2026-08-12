@@ -25,6 +25,7 @@ import (
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/internal/controller"
 	"github.com/zippo1908/agentcell/internal/forge"
+	"github.com/zippo1908/agentcell/internal/identity"
 	"github.com/zippo1908/agentcell/internal/version"
 	"github.com/zippo1908/agentcell/internal/webui"
 )
@@ -47,6 +48,12 @@ func main() {
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		imagePullSecret = flag.String("image-pull-secret", os.Getenv("AGENTCELL_IMAGE_PULL_SECRET"),
 			"name of a docker-registry Secret in the control namespace, mirrored into each Cell namespace so private-registry images can be pulled")
+		oidcIssuer = flag.String("oidc-issuer", os.Getenv("AGENTCELL_OIDC_ISSUER"),
+			"OIDC issuer URL (e.g. https://casdoor.example.com); enables user identity")
+		oidcClientID = flag.String("oidc-client-id", os.Getenv("AGENTCELL_OIDC_CLIENT_ID"),
+			"OIDC client id for the console")
+		oidcRedirect = flag.String("oidc-redirect-url", os.Getenv("AGENTCELL_OIDC_REDIRECT_URL"),
+			"absolute callback URL; empty derives it from the console's own origin")
 		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
 			"file of API access tokens (whitespace-separated); enables auth when present")
 		trustForwarded = flag.Bool("trust-forwarded-headers", false,
@@ -108,6 +115,23 @@ func main() {
 
 	auth := webui.NewAuthenticator(readTokenFile(*tokenFile))
 	auth.TrustForwardedHeaders = *trustForwarded
+	if *oidcIssuer != "" && *oidcClientID != "" {
+		auth.OIDC = &identity.OIDC{
+			IssuerURL:    strings.TrimRight(*oidcIssuer, "/"),
+			ClientID:     *oidcClientID,
+			ClientSecret: os.Getenv("AGENTCELL_OIDC_CLIENT_SECRET"),
+			RedirectURL:  *oidcRedirect,
+			Scopes:       []string{"profile", "email"},
+		}
+		// Discovery is lazy, so this line is the only startup evidence that
+		// identity is on; a wrong issuer surfaces at the first login.
+		log.Info("user identity enabled", "issuer", auth.OIDC.IssuerURL, "clientID", auth.OIDC.ClientID)
+	} else if len(readTokenFile(*tokenFile)) > 0 {
+		log.Info("NOTE: running with static tokens only — every caller is the same principal; configure --oidc-issuer for per-user ownership")
+	}
+	// Preview tickets must not be signed with a key derived from an empty
+	// token list, which is a publicly computable constant.
+	auth.SetKeyMaterial([]byte(os.Getenv("AGENTCELL_PREVIEW_KEY")))
 	if !auth.Enabled() {
 		if !*allowNoAuth {
 			log.Error(nil, "no API tokens found and --allow-no-auth not set; refusing to expose an unauthenticated control plane",

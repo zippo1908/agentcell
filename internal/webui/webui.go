@@ -20,6 +20,7 @@ import (
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/internal/forge"
+	"github.com/zippo1908/agentcell/internal/identity"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/web"
 )
@@ -330,6 +331,10 @@ func (h *Handler) getCell(w http.ResponseWriter, r *http.Request) {
 		if s.Spec.Cell != name {
 			continue
 		}
+		// Another user's session is invisible until it settles.
+		if !visible(r.Context(), s) {
+			continue
+		}
 		sv := sessionView{
 			Name: s.Name, Task: s.Spec.Task, Runner: s.Spec.Runner, Provider: s.Spec.Provider,
 			Phase: string(s.Status.Phase), Branch: s.Status.Branch, Produced: s.Status.Produced,
@@ -396,6 +401,11 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	// A caller may only spend a model credential it owns.
+	if err := h.checkCredentialOwnership(r, req.CredentialSecret); err != nil {
+		writeErr(w, 404, err)
+		return
+	}
 	id := ids.NewSessionID()
 	sess := &acv1.Session{}
 	sess.Namespace = h.Namespace
@@ -403,6 +413,7 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	sess.Spec = acv1.SessionSpec{
 		Cell: cellName, Task: req.Task, Runner: req.Runner, Provider: req.Provider,
 		Model: req.Model, CredentialSecret: req.CredentialSecret, FollowPreview: req.FollowPreview,
+		OwnerUserID: identity.FromContext(r.Context()).ID(),
 	}
 	if err := h.Client.Create(r.Context(), sess); err != nil {
 		writeErr(w, 500, err)
@@ -412,10 +423,11 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) settleSession(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("session")
-	sess := &acv1.Session{}
-	sess.Namespace = h.Namespace
-	sess.Name = name
+	sess, err := h.ownedSession(r, r.PathValue("session"))
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
 	if err := h.Client.Delete(r.Context(), sess); err != nil {
 		writeErr(w, 404, err)
 		return

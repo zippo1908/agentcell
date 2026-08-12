@@ -69,10 +69,17 @@ func (u *usedTickets) consume(nonce string, exp time.Time) bool {
 	return true
 }
 
-// previewKey derives the signing key from the configured access tokens:
-// stable across restarts with the same config, invalidated when they rotate.
+// previewKey derives the signing key from the configured access tokens plus
+// dedicated key material: stable across restarts with the same config,
+// invalidated when tokens rotate.
+//
+// The key material is not optional. With OIDC there may be no static tokens
+// at all, and the digest of an empty token list is a constant anyone can
+// compute — every preview ticket would be forgeable.
 func (a *Authenticator) previewKey() []byte {
 	h := sha256.New()
+	_, _ = h.Write(a.keyMaterial)
+	_, _ = h.Write([]byte{0})
 	for _, t := range a.sortedTokens() {
 		_, _ = h.Write([]byte(t))
 		_, _ = h.Write([]byte{0})
