@@ -6,6 +6,12 @@
 //	session  PID 1 of a session pod: create the worktree, run the agent
 //	settle   settle job: commit/push produced work, reclaim the worktree,
 //	         report {produced,branch} via the termination message
+//	runtime  PID 1 of a user's runtime pod: one tmux server for all their
+//	         sessions in this Cell
+//	window-open / window-close
+//	         start or end one session inside that runtime
+//	attach   attach to this resident session's tmux window (interactive)
+//	tell     type another instruction into a resident session's tmux window
 //	askpass  git credential helper (reads GIT_USERNAME / GIT_TOKEN)
 package main
 
@@ -35,6 +41,16 @@ func main() {
 		err = runProdClone()
 	case "prod-serve":
 		err = runProdServe()
+	case "runtime":
+		err = runUserRuntime()
+	case "window-open":
+		err = runWindowOpen(os.Args[2:])
+	case "window-close":
+		err = runWindowClose(os.Args[2:])
+	case "attach":
+		err = runAttach(os.Args[2:])
+	case "tell":
+		err = runTell(os.Args[2:])
 	case "askpass":
 		err = runAskpass(os.Args[2:])
 	default:

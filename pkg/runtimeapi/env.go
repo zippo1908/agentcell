@@ -18,11 +18,18 @@ const (
 	EnvRunner      = "AGENTCELL_RUNNER"
 	EnvBaseBranch  = "AGENTCELL_BASE_BRANCH"
 	EnvDescription = "AGENTCELL_DESCRIPTION" // the Cell's living product description
+	EnvResident    = "AGENTCELL_RESIDENT"    // "1" keeps the slot alive in tmux
 
 	// KnowledgePath is the persistent, session-shared knowledge directory
 	// on the workspace PVC (outside the git checkout). The anchor creates
 	// it; every session's TASK.md points the agent at it.
 	KnowledgePath = "/workspace/knowledge"
+
+	// DoneMarker is where a resident session records that its agent returned,
+	// and with what status. An absolute path in the pod's own filesystem, so
+	// anything exec'ing in can read it without knowing the worktree, the uid
+	// or the session id — none of which an exec inherits.
+	DoneMarker = "/tmp/agentcell-agent.done"
 
 	// Session credential indirection: the pod defines EnvAPIKey from a
 	// per-session Secret, and protocol variables reference it via the
@@ -90,7 +97,16 @@ const (
 	// RuntimeBin is where images bake the static cell-runtime binary.
 	RuntimeBin = "/agentcell/cell-runtime"
 
+	// UserRuntimeContainer is the container name in a user's runtime pod.
+	UserRuntimeContainer = "runtime"
+
 	// TerminationMessagePath JSON emitted by the settle applet:
 	// {"produced":bool,"branch":string,"message":string}.
 	SettleResultPath = "/dev/termination-log"
 )
+
+// DoneMarkerFor names the completion marker of one session. A user runtime
+// holds several windows, so the marker cannot be a single fixed path.
+func DoneMarkerFor(sessionID string) string {
+	return "/tmp/agentcell-" + sessionID + ".done"
+}

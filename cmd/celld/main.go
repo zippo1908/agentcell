@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -25,6 +26,8 @@ import (
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/internal/controller"
 	"github.com/zippo1908/agentcell/internal/forge"
+	"github.com/zippo1908/agentcell/internal/identity"
+	"github.com/zippo1908/agentcell/internal/useruid"
 	"github.com/zippo1908/agentcell/internal/version"
 	"github.com/zippo1908/agentcell/internal/webui"
 )
@@ -47,6 +50,12 @@ func main() {
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		imagePullSecret = flag.String("image-pull-secret", os.Getenv("AGENTCELL_IMAGE_PULL_SECRET"),
 			"name of a docker-registry Secret in the control namespace, mirrored into each Cell namespace so private-registry images can be pulled")
+		oidcIssuer = flag.String("oidc-issuer", os.Getenv("AGENTCELL_OIDC_ISSUER"),
+			"OIDC issuer URL (e.g. https://casdoor.example.com); enables user identity")
+		oidcClientID = flag.String("oidc-client-id", os.Getenv("AGENTCELL_OIDC_CLIENT_ID"),
+			"OIDC client id for the console")
+		oidcRedirect = flag.String("oidc-redirect-url", os.Getenv("AGENTCELL_OIDC_REDIRECT_URL"),
+			"absolute callback URL; empty derives it from the console's own origin")
 		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
 			"file of API access tokens (whitespace-separated); enables auth when present")
 		trustForwarded = flag.Bool("trust-forwarded-headers", false,
@@ -98,16 +107,50 @@ func main() {
 		os.Exit(1)
 	}
 	forgeClient := forge.New(*gitBrokerURL)
-	if err := (&controller.SessionReconciler{
+	kubeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		log.Error(err, "kubernetes client")
+		os.Exit(1)
+	}
+	sessionReconciler := &controller.SessionReconciler{
 		Client: mgr.GetClient(), Registry: registry,
 		GitBrokerURL: *gitBrokerURL, Forge: forgeClient,
-	}).SetupWithManager(mgr); err != nil {
+		// Resident sessions are windows in a user's runtime pod, which holds
+		// no API credential of its own — so the control plane reaches in.
+		Exec: webui.ExecIn(mgr.GetConfig(), kubeClient),
+	}
+	// Always wired. Gating this on "is an IdP configured" would be exactly
+	// the `if multiUserEnabled` branch ADR-0008 argues against — and it was
+	// wrong in a way real-cluster testing caught: a Session can carry an
+	// owner without celld having minted it (kubectl, a migration, another
+	// controller), and that owner must be honoured. With no owner recorded
+	// the allocator returns the shared project identity, so single-principal
+	// deployments behave exactly as before.
+	sessionReconciler.UIDs = &useruid.Allocator{Client: mgr.GetClient(), Namespace: *controlNS}
+	if err := sessionReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup session controller")
 		os.Exit(1)
 	}
 
 	auth := webui.NewAuthenticator(readTokenFile(*tokenFile))
 	auth.TrustForwardedHeaders = *trustForwarded
+	if *oidcIssuer != "" && *oidcClientID != "" {
+		auth.OIDC = &identity.OIDC{
+			IssuerURL:    strings.TrimRight(*oidcIssuer, "/"),
+			ClientID:     *oidcClientID,
+			ClientSecret: os.Getenv("AGENTCELL_OIDC_CLIENT_SECRET"),
+			RedirectURL:  *oidcRedirect,
+			Scopes:       []string{"profile", "email"},
+		}
+		// Discovery is lazy, so this line is the only startup evidence that
+		// identity is on; a wrong issuer surfaces at the first login.
+		log.Info("user identity enabled", "issuer", auth.OIDC.IssuerURL, "clientID", auth.OIDC.ClientID)
+	} else if len(readTokenFile(*tokenFile)) > 0 {
+		log.Info("NOTE: running with static tokens only — every caller is the same principal; configure --oidc-issuer for per-user ownership")
+	}
+	// Preview tickets must not be signed with a key derived from an empty
+	// token list, which is a publicly computable constant.
+	auth.SetKeyMaterial([]byte(os.Getenv("AGENTCELL_PREVIEW_KEY")))
 	if !auth.Enabled() {
 		if !*allowNoAuth {
 			log.Error(nil, "no API tokens found and --allow-no-auth not set; refusing to expose an unauthenticated control plane",
@@ -129,6 +172,7 @@ func main() {
 	_, previewPort, _ := net.SplitHostPort(*previewAddr)
 	ui := &webui.Handler{
 		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
+		RESTConfig: mgr.GetConfig(), Kube: kubeClient,
 		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
 		PreviewDomain: *previewDomain, Auth: auth,
 	}

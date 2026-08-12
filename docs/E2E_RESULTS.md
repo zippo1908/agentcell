@@ -142,3 +142,146 @@ attempts after the first were correctly refused with 403 - the run now asserts
 that replay is refused. And the first hit answers 303, not 200, because the
 ticket is exchanged for a session cookie and the URL rewritten without it; the
 check accepts 3xx there rather than treating the design as a failure.
+
+## Run 5 - two users in one Cell (ADR-0009)
+
+Runs 1-4 all had a single principal, so the entire runtime ran as one Unix
+user and nothing about isolation was exercised. Run 5 puts two owners in one
+Cell and checks the property that matters: neither can read the other's
+work, both can still use the project.
+
+Environment: the same internal k3s and self-hosted GitLab as Run 4; celld at
+`iso2`, runtime image at `iso5`.
+
+| Check | Result |
+| --- | --- |
+| Two owned Sessions both settle, concurrently | PASS |
+| Allocator records distinct uids | PASS, 100000 / 100001 |
+| uids come from the reserved user range | PASS |
+| The pods really ran as those uids | PASS, settle pods 100000 / 100001 |
+| fsGroup is still the project group | PASS, 1000 |
+| Private tree is 0700 and owned by its user | PASS |
+| The other user's pod is refused by the kernel | PASS, `Permission denied` |
+| Both users still read the project checkout | PASS |
+
+`passed=8 failed=0`.
+
+Three real defects surfaced here that no unit test reached, all of them
+consequences of per-user uids:
+
+**One user's private tree locked out every other user.** `MkdirAll` creates
+the parent with the child's mode, so `/workspace/users` became 0700 owned by
+whichever user started first, and the second user's session could not start
+at all. The anchor — which holds the project identity — now creates that
+directory group-writable and **sticky**: `/workspace` is world-writable, so
+without the sticky bit any user could delete a peer's private directory.
+Being unable to read it is not the whole property worth having.
+
+**git refused the shared checkout.** Sessions run as their owner while the
+checkout belongs to the project identity, so `git worktree add` failed with
+"detected dubious ownership". Trust is now granted for that exact path, never
+the `*` wildcard.
+
+**The shared object store was unwritable by anyone but its creator.** git
+creates object directories 0755, so the first uid to create a prefix
+directory owned it and everyone else hit "insufficient permission for adding
+an object to repository database". It fails by luck of the object hash, so it
+presents as an intermittent flake — in the first run of this suite alice
+settled and bob did not, with identical code. `core.sharedRepository=group`
+is the mechanism for exactly this, applied at clone and repaired on every
+anchor start so Cells created before per-user uids are fixed too.
+
+A fourth finding was in the harness, not the product: the fixture reused
+fixed session ids, which collided with the branch its own previous run had
+pushed. Real session ids are ULIDs.
+
+Settle also stopped swallowing failure causes. "autosave commit failed" with
+no reason attached is what made the object-store bug look intermittent; the
+verdict now carries the error onto the Session status.
+
+## Run 6 - resident sessions (ADR-0010)
+
+A one-shot session is verified by Runs 1-5. Run 6 checks the other shape: a
+slot that outlives its agent, so the owner can look at the result and keep
+going in the same context.
+
+Environment: the same internal k3s and self-hosted GitLab; celld `res4`,
+runtime image `res3`.
+
+| Check | Result |
+| --- | --- |
+| Resident session accepted and started | PASS, HTTP 201 |
+| Slot stays alive after the agent finishes | PASS, phase still `Running` |
+| State reports the agent finished, with its exit status | PASS, `working:false exitCode:"0"` |
+| Attach command is printed and self-contained | PASS |
+| A follow-up instruction reaches the live session | PASS, HTTP 200 |
+| It lands in the SAME worktree | PASS, `AGENT_RAN.md` + `FOLLOWUP.md` |
+| Explicit settle still publishes | PASS, branch pushed to GitLab |
+
+That last row is the one that matters most. The point of a resident slot is
+that the user decides when it ends — and mandatory settle has to survive
+that, or the model has traded a real guarantee for convenience. It does not:
+ending the session ran settle, which committed the follow-up work and pushed
+the branch.
+
+Two defects surfaced, both in the seam between the pod and the console:
+
+**The completion marker was unreadable from outside.** It was written
+relative to the worktree, but an exec starts in the image's working directory
+and inherits neither the worktree path, the uid, nor the session id. The
+marker moved to an absolute path in the pod's own filesystem. Before the fix
+a finished agent reported `working:true` forever.
+
+**`cell-runtime` is not on `$PATH`.** The console execs it by name; images
+bake it at `/agentcell/cell-runtime`. Now referenced through the constant
+that already existed for exactly this.
+
+A third finding was about failing clearly rather than correctly: the e2e image
+had no tmux, so a resident session simply failed and the Session reported
+"agent finished (Failed)" — which points at the agent rather than at the
+image. The runtime now checks for tmux up front and says so in a sentence an
+operator can act on.
+
+## Run 7 - one tmux per user (ADR-0010 §6)
+
+Run 6 gave each resident session its own pod and its own tmux server. That
+was one layer too many: the agent CLIs manage conversations themselves, so a
+process per conversation is a second, worse copy of their bookkeeping. Run 7
+verifies the corrected shape — a user's sessions in a Cell are windows in one
+runtime pod.
+
+| Check | Result |
+| --- | --- |
+| Two resident sessions dispatched concurrently | PASS |
+| Both hosted by ONE runtime pod | PASS, `runtime-100002` |
+| No per-session pod exists | PASS |
+| Exactly one window per session, no duplicates | PASS |
+| The tmux socket is 0700 and owned by its user | PASS |
+| The window environment file is removed after sourcing | PASS |
+
+Four defects, all of them in the seam between a cache-backed controller and a
+real cluster, and none reachable without one:
+
+**Reading a pod straight back after creating it can miss.** The client reads
+through an informer cache, so a just-created runtime looks absent. Treating
+that as an error failed the first session of every runtime with
+`Pod "runtime-100002" not found`.
+
+**Two sessions starting together both create it.** Losing that race is the
+runtime existing, which is the goal; treating `already exists` as an error
+failed one of the two.
+
+**Reaping was too eager.** "In use" was Running-or-Queued, so a session that
+had not been given a phase yet — precisely the one being started — did not
+count, and its runtime was deleted out from under it.
+
+**The status host was overwritten.** A resident session recorded its runtime
+as host, and the next line set it to the session's own name unconditionally,
+pointing state, follow-ups and attach at a pod that does not exist. It made a
+resident session quietly behave like a one-shot.
+
+And one thing this run caught that contradicted its own design: the model key
+was being passed as `tmux new-window -e KEY=VALUE`, which puts it in the tmux
+client's argv and therefore in `/proc` for every other window the user has
+open — the exact exposure the stdin channel exists to avoid. The environment
+now goes through a `0600` file the window sources and unlinks.

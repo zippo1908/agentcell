@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/oklog/ulid/v2"
@@ -75,12 +76,55 @@ func SessionBranch(id string) string { return "session/" + id }
 // RepoPath is where the anchor clones the project inside the shared PVC.
 const RepoPath = "/workspace/repo"
 
-// WorktreePath is the per-session git worktree, on the same PVC so it
-// shares the object store with RepoPath.
-func WorktreePath(id string) string { return "/workspace/.cells/" + id }
+// UserHome is a user's private tree on the shared project volume. The
+// directory is created 0700 and owned by that user's UID, so a peer's pod —
+// running as a different UID, in a different pod — cannot read it even
+// though the volume is shared (ADR-0009).
+//
+// CLI configuration, transcripts, checkpoints and tmux sockets all belong
+// here rather than in a shared location.
+func UserHome(uid int64) string {
+	return "/workspace/users/" + strconv.FormatInt(uid, 10)
+}
+
+// WorktreePath is the per-session git worktree. It lives inside the owner's
+// private tree, not in a shared directory: an unpublished worktree is the
+// user's own working state, and settle is what makes work visible to the
+// project.
+//
+// It stays on the same volume as RepoPath so the worktree shares the object
+// store — a git worktree cannot span filesystems.
+func WorktreePath(uid int64, id string) string {
+	return UserHome(uid) + "/worktrees/" + id
+}
 
 // GitSecretName is the workload-namespace copy of the forge credential.
 const GitSecretName = "agentcell-git"
 
 // SessionSecretName is the per-session model-credential secret.
 func SessionSecretName(id string) string { return "cred-" + id }
+
+// TmuxSocket is the owner's private tmux socket.
+//
+// Never tmux's default /tmp/tmux-<uid>/default: that path is derived from the
+// uid on a filesystem several users share, so it is exactly the place two
+// users can collide — and a tmux socket is an authority, not a name. Anything
+// that can open it can attach to that terminal.
+func TmuxSocket(uid int64) string {
+	return UserHome(uid) + "/tmux/agentcell.sock"
+}
+
+// TmuxWindow names a session's window inside its owner's tmux server.
+func TmuxWindow(id string) string { return "s-" + id }
+
+// UserRuntimeLabelKey marks a pod as one user's runtime for a Cell.
+const UserRuntimeLabelKey = "agentcell.io/user"
+
+// TmuxHolder is the session that keeps the server alive when no work is
+// open: a tmux server with nothing in it exits.
+const TmuxHolder = "agentcell"
+
+// UserRuntimePod is the pod holding one user's tmux server for one Cell.
+// One per user, not one per session — the agent CLIs manage conversations
+// themselves, so a process per conversation buys nothing.
+func UserRuntimePod(uid int64) string { return "runtime-" + strconv.FormatInt(uid, 10) }

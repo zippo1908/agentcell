@@ -54,6 +54,29 @@ spec:
             {{- if .Values.celld.auth.allowNoAuth }}
             - "--allow-no-auth"
             {{- end }}
+            {{- with .Values.oidc.issuer }}
+            - "--oidc-issuer={{ . }}"
+            {{- end }}
+            {{- with .Values.oidc.clientID }}
+            - "--oidc-client-id={{ . }}"
+            {{- end }}
+            {{- with .Values.oidc.redirectURL }}
+            - "--oidc-redirect-url={{ . }}"
+            {{- end }}
+          {{- if or .Values.oidc.existingSecret .Values.previewKeySecret }}
+          env:
+            {{- with .Values.oidc.existingSecret }}
+            # The client secret is read from a Secret, never from values.
+            - name: AGENTCELL_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ . }}, key: clientSecret}
+            {{- end }}
+            {{- with .Values.previewKeySecret }}
+            - name: AGENTCELL_PREVIEW_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ . }}, key: previewKey}
+            {{- end }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}

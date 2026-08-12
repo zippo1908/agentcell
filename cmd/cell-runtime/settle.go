@@ -29,7 +29,13 @@ func runSettle() error {
 	if err := ensureAskpass(); err != nil {
 		return err
 	}
-	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(id), ids.SessionBranch(id), base, id,
+	if err := ensurePrivateHome(int64(os.Getuid())); err != nil {
+		return err
+	}
+	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+		return err
+	}
+	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(int64(os.Getuid()), id), ids.SessionBranch(id), base, id,
 		effectiveGitURL(os.Getenv(runtimeapi.EnvRepoURL)))
 	raw, _ := json.Marshal(v)
 	// Termination message is the transport back to the controller; write it
@@ -75,7 +81,12 @@ func settleWorktree(repoPath, wt, branch, base, id, pushURL string) (verdict, er
 	if status != "" {
 		if err := git(wt, "-c", "user.name=agentcell", "-c", "user.email=agentcell@local",
 			"commit", "-m", "agentcell: session "+id+" autosave"); err != nil {
-			return verdict{Branch: branch, Message: "autosave commit failed"}, fmt.Errorf("git commit: %w", err)
+			// Carry the cause into the verdict: this surfaces on the
+			// Session status, and "autosave commit failed" alone sent this
+			// exact bug (an unwritable shared object store) looking like an
+			// intermittent flake.
+			return verdict{Branch: branch, Message: "autosave commit failed: " + err.Error()},
+				fmt.Errorf("git commit: %w", err)
 		}
 	}
 

@@ -9,6 +9,16 @@ import (
 type SessionSpec struct {
 	// Cell names the Cell CR (same namespace as this Session CR).
 	Cell string `json:"cell"`
+	// OwnerUserID is the principal that created this Session (ADR-0008). It
+	// is set once and never changes — the CRD enforces that, so it holds for
+	// kubectl edits too, not just for writes through the API.
+	//
+	// A Session is a user-private execution and memory boundary: transcript,
+	// checkpoint and worktree belong to this user alone. Sessions created
+	// before ownership existed have an empty value and are visible only to
+	// the static-token principal; guessing an owner that was never recorded
+	// would hand one user another user's work.
+	OwnerUserID string `json:"ownerUserID,omitempty"`
 	// Task is the work order handed to the agent.
 	Task string `json:"task"`
 	// Runner is the agent CLI: claude | codex | pi.
@@ -23,6 +33,16 @@ type SessionSpec struct {
 	// TTLSeconds force-settles a session still running after this long.
 	// Defaults to 3600.
 	TTLSeconds int64 `json:"ttlSeconds,omitempty"`
+	// Resident keeps the slot alive after the agent finishes: the work runs
+	// inside a tmux server on the owner's private socket, so they can attach,
+	// look at what happened and keep going in the same context instead of
+	// dispatching a fresh session that has to rediscover everything.
+	//
+	// Off by default, because the one-shot shape is what the dispatch → settle
+	// → review loop is built on. A resident session still settles — on TTL, on
+	// an explicit request, or if its pod disappears — so nothing escapes the
+	// publication gate; what changes is who decides when.
+	Resident bool `json:"resident,omitempty"`
 	// FollowPreview points the Cell's resident preview at this session's
 	// worktree while it runs, so the user watches the work live.
 	FollowPreview bool `json:"followPreview,omitempty"`
@@ -60,6 +80,13 @@ type SessionStatus struct {
 	Phase     SessionPhase `json:"phase,omitempty"`
 	SessionID string       `json:"sessionID,omitempty"`
 	PodName   string       `json:"podName,omitempty"`
+	// RunnerSessionID names the conversation inside the agent CLI, where that
+	// CLI lets the caller choose one. It is what makes "keep going" continue
+	// the same conversation instead of starting one that has to rediscover
+	// everything. The CLIs already do this well; the platform's job is to
+	// name the conversation and give it a private $HOME (ADR-0009), not to
+	// reimplement transcripts.
+	RunnerSessionID string `json:"runnerSessionID,omitempty"`
 	// Branch is the settled output branch (session/<id>) when Produced.
 	Branch    string       `json:"branch,omitempty"`
 	Produced  bool         `json:"produced,omitempty"`
