@@ -1,0 +1,49 @@
+# Values for the internal (on-prem) AgentCell deployment.
+#
+# This file is CONFIGURATION ONLY. Secrets — API tokens, forge PATs, model
+# keys — are created with `kubectl create secret` on the cluster and are
+# never committed here. See README.md in this directory.
+
+controlNamespace: agentcell-system
+
+image:
+  # Point at wherever the internal registry mirrors the images; with
+  # locally imported images IfNotPresent keeps them from being re-pulled.
+  registry: ghcr.io/zippo1908
+  pullPolicy: IfNotPresent
+
+celld:
+  replicas: 1          # no leader election yet — keep at 1
+  auth:
+    existingSecret: celld-tokens   # created out-of-band
+  service:
+    type: ClusterIP
+
+# Untrusted Cell content gets its own origin per Cell AND zone (ADR-0007).
+# Requires a wildcard DNS record and certificate for *.<domain>. Prefer a
+# registrable domain that is NOT a parent/sibling of the console's, so no
+# subdomain cookie relationship exists.
+preview:
+  domain: ""           # e.g. agentcell-preview.internal — fill in
+  port: 8081
+  ingress:
+    enabled: false     # set true once DNS + wildcard cert exist
+    className: nginx
+    tls:
+      enabled: false
+      secretName: ""   # must cover *.<preview.domain>
+
+gitBroker:
+  enabled: true
+  enforceRefPolicy: true
+
+ingress:
+  enabled: false       # console; fill host + TLS when fronted by the gateway
+  className: nginx
+  host: ""
+  tls: {enabled: false, secretName: ""}
+
+storage:
+  # Single node: local-path. Multi-node needs RWX (NFS/Ceph/NAS) or a Cell
+  # cannot move between nodes.
+  className: local-path
