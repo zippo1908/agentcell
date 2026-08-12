@@ -116,3 +116,15 @@ func TmuxSocket(uid int64) string {
 
 // TmuxWindow names a session's window inside its owner's tmux server.
 func TmuxWindow(id string) string { return "s-" + id }
+
+// UserRuntimeLabelKey marks a pod as one user's runtime for a Cell.
+const UserRuntimeLabelKey = "agentcell.io/user"
+
+// TmuxHolder is the session that keeps the server alive when no work is
+// open: a tmux server with nothing in it exits.
+const TmuxHolder = "agentcell"
+
+// UserRuntimePod is the pod holding one user's tmux server for one Cell.
+// One per user, not one per session — the agent CLIs manage conversations
+// themselves, so a process per conversation buys nothing.
+func UserRuntimePod(uid int64) string { return "runtime-" + strconv.FormatInt(uid, 10) }

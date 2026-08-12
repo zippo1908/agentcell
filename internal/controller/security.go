@@ -2,9 +2,11 @@ package controller
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
 	"github.com/zippo1908/agentcell/internal/useruid"
+	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
@@ -101,4 +103,17 @@ func gitCredEnv(secretName string) []corev1.EnvVar {
 		{Name: "GIT_USERNAME", ValueFrom: ref("username")},
 		{Name: "GIT_TOKEN", ValueFrom: ref("password")},
 	}
+}
+
+// anchorAffinity pins a pod to the anchor's node. The workspace PVC is
+// ReadWriteOnce, so anything that needs the checkout has to land there.
+func anchorAffinity() *corev1.Affinity {
+	return &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				ids.AnchorPodLabelKey: ids.AnchorPodLabelVal,
+			}},
+			TopologyKey: "kubernetes.io/hostname",
+		}},
+	}}
 }

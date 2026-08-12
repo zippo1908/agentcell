@@ -1,6 +1,9 @@
 package access
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+)
 
 func mustLoad(t *testing.T) *Registry {
 	t.Helper()
@@ -110,4 +113,77 @@ func TestHeadlessArgv(t *testing.T) {
 	if _, err := HeadlessArgv("nope", "x"); err == nil {
 		t.Fatal("unknown runner must error")
 	}
+}
+
+// The agent CLIs keep their own conversations. The platform's job is to name
+// one and be able to address it again — not to reimplement transcripts.
+func TestRunnerConversationLifecycle(t *testing.T) {
+	t.Run("claude takes an id we choose, and it must be a UUID", func(t *testing.T) {
+		sid := NewRunnerSession("claude")
+		if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(sid) {
+			t.Fatalf("session id %q is not a v4 UUID; Claude Code rejects anything else", sid)
+		}
+		if sid == NewRunnerSession("claude") {
+			t.Error("two conversations got the same id")
+		}
+		start, err := StartArgvFor("claude", "do the thing", sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(start, "--session-id") || !contains(start, sid) {
+			t.Errorf("start does not name the conversation: %v", start)
+		}
+		resume, err := ResumeArgvFor("claude", "and now this", sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(resume, "--resume") || !contains(resume, sid) {
+			t.Errorf("resume does not address the conversation: %v", resume)
+		}
+	})
+
+	t.Run("codex names its own, so we resume the last one", func(t *testing.T) {
+		if NewRunnerSession("codex") != "" {
+			t.Error("codex does not accept a caller-chosen id")
+		}
+		// Starting falls back to the one-shot form rather than inventing a flag.
+		start, err := StartArgvFor("codex", "do the thing", "")
+		if err != nil || contains(start, "--session-id") {
+			t.Errorf("codex start = %v (%v)", start, err)
+		}
+		resume, err := ResumeArgvFor("codex", "and now this", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(resume, "resume") {
+			t.Errorf("codex resume = %v", resume)
+		}
+	})
+
+	t.Run("a runner that cannot resume says so", func(t *testing.T) {
+		if Resumable("pi") {
+			if _, err := ResumeArgvFor("pi", "x", ""); err != nil {
+				t.Errorf("pi claims to resume but refuses: %v", err)
+			}
+			return
+		}
+		if _, err := ResumeArgvFor("pi", "x", ""); err == nil {
+			t.Error("a non-resumable runner silently accepted a resume")
+		}
+	})
+
+	t.Run("unknown runners are refused, not defaulted", func(t *testing.T) {
+		if _, err := StartArgvFor("nope", "x", ""); err == nil {
+			t.Error("unknown runner accepted")
+		}
+	})
+}
+
+func contains(argv []string, want string) bool {
+	for _, a := range argv {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }

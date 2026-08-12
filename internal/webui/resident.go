@@ -1,19 +1,14 @@
 package webui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
-
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
+	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
@@ -29,28 +24,16 @@ import (
 // so it could report its own status would trade a real security property for
 // a status field.
 
-// execInPod runs a command in a session pod and returns its combined output.
+// execInPod runs a command in a session's host pod.
+//
+// The container name is resolved from the pod itself rather than assumed: a
+// one-shot session runs in its own pod, a resident one is a window inside its
+// owner's runtime, and callers should not have to know which.
 func (h *Handler) execInPod(ctx context.Context, ns, pod string, argv []string) (string, error) {
-	if h.RESTConfig == nil {
+	if h.RESTConfig == nil || h.Kube == nil {
 		return "", fmt.Errorf("exec is not configured")
 	}
-	req := h.Kube.CoreV1().RESTClient().Post().
-		Resource("pods").Namespace(ns).Name(pod).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "session",
-			Command:   argv,
-			Stdout:    true,
-			Stderr:    true,
-		}, scheme.ParameterCodec)
-	exe, err := remotecommand.NewSPDYExecutor(h.RESTConfig, http.MethodPost, req.URL())
-	if err != nil {
-		return "", err
-	}
-	var out, errOut bytes.Buffer
-	if err := exe.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: &errOut}); err != nil {
-		return out.String() + errOut.String(), err
-	}
-	return out.String() + errOut.String(), nil
+	return execIn(ctx, h.RESTConfig, h.Kube, ns, pod, argv, nil)
 }
 
 type residentState struct {
@@ -73,16 +56,22 @@ func (h *Handler) sessionState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, id := ids.WorkloadNamespace(sess.Spec.Cell), sess.Status.SessionID
+	host := sess.Status.PodName
+	if host == "" {
+		host = ids.SessionName(id)
+	}
 	st := residentState{
 		Resident: true,
 		// cell-runtime derives the socket and window inside the pod, so the
 		// command works as printed and reveals no private paths.
-		Attach: fmt.Sprintf("kubectl -n %s exec -it %s -- %s attach", ns, ids.SessionName(id), runtimeapi.RuntimeBin),
+		Attach: fmt.Sprintf("kubectl -n %s exec -it %s -- %s attach %s", ns, host, runtimeapi.RuntimeBin, id),
 	}
 	// The marker file is written by the shell after the agent returns, so its
 	// presence (and contents) is the exit status; its absence means working.
-	out, err := h.execInPod(r.Context(), ns, ids.SessionName(id),
-		[]string{"sh", "-c", "cat " + runtimeapi.DoneMarker + " 2>/dev/null || true"})
+	// The marker is per window, so it is named by session: one runtime holds
+	// several of them.
+	out, err := h.execInPod(r.Context(), ns, host,
+		[]string{"sh", "-c", "cat " + runtimeapi.DoneMarkerFor(id) + " 2>/dev/null || true"})
 	if err != nil {
 		// The pod may be gone or starting; that is not an error for a status
 		// question, it just means there is nothing live to report.
@@ -124,17 +113,33 @@ func (h *Handler) continueSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, fmt.Errorf("session is %s, not running", sess.Status.Phase))
 		return
 	}
+	// Continue the CLI's OWN conversation where it can. Typing the text at a
+	// bare shell would start a fresh agent run that has to rediscover
+	// everything the last one learned — which is exactly the waste resident
+	// sessions exist to remove.
+	argv, err := access.ResumeArgvFor(sess.Spec.Runner, body.Text, sess.Status.RunnerSessionID)
+	if err != nil {
+		// A runner with no resume of its own still gets the text; it just
+		// starts a new conversation in the same worktree, and saying so is
+		// better than pretending continuity we do not have.
+		argv, err = access.HeadlessArgv(sess.Spec.Runner, body.Text)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	}
 	ns, id := ids.WorkloadNamespace(sess.Spec.Cell), sess.Status.SessionID
-	// Passed as a single argv element, never interpolated into a shell string:
-	// the text is user input and tmux would otherwise happily run whatever a
-	// semicolon introduces.
-	out, err := h.execInPod(r.Context(), ns, ids.SessionName(id),
-		[]string{runtimeapi.RuntimeBin, "tell", body.Text})
+	host := sess.Status.PodName
+	if host == "" {
+		host = ids.SessionName(id)
+	}
+	// Each element stays a separate argv element the whole way down, so a
+	// semicolon in the text is a semicolon and not a second command.
+	out, err := h.execInPod(r.Context(), ns, host,
+		append([]string{runtimeapi.RuntimeBin, "tell", id}, argv...))
 	if err != nil {
 		writeErr(w, 502, fmt.Errorf("%v: %s", err, out))
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": "sent"})
 }
-
-var _ = rest.Config{}

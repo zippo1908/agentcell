@@ -107,9 +107,17 @@ func main() {
 		os.Exit(1)
 	}
 	forgeClient := forge.New(*gitBrokerURL)
+	kubeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		log.Error(err, "kubernetes client")
+		os.Exit(1)
+	}
 	sessionReconciler := &controller.SessionReconciler{
 		Client: mgr.GetClient(), Registry: registry,
 		GitBrokerURL: *gitBrokerURL, Forge: forgeClient,
+		// Resident sessions are windows in a user's runtime pod, which holds
+		// no API credential of its own — so the control plane reaches in.
+		Exec: webui.ExecIn(mgr.GetConfig(), kubeClient),
 	}
 	// Always wired. Gating this on "is an IdP configured" would be exactly
 	// the `if multiUserEnabled` branch ADR-0008 argues against — and it was
@@ -162,11 +170,6 @@ func main() {
 	}
 
 	_, previewPort, _ := net.SplitHostPort(*previewAddr)
-	kubeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
-	if err != nil {
-		log.Error(err, "kubernetes client")
-		os.Exit(1)
-	}
 	ui := &webui.Handler{
 		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
 		RESTConfig: mgr.GetConfig(), Kube: kubeClient,

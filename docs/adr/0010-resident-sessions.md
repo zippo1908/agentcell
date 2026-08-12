@@ -91,17 +91,34 @@ on demand.
   behaviour ("one tmux takes one thread"), but it means `maxSessions` now
   bounds concurrent *people*, not concurrent agent runs.
 
+### 6. One tmux server per user, not per session
+
+A user's sessions in a Cell are windows in one runtime pod.
+
+The reason is the CLIs themselves: Claude Code takes a conversation id the
+caller chooses, Codex keeps its own. **They already manage sessions.** A
+process — let alone a pod — per conversation would be a second, worse layer
+of the same bookkeeping. What the platform owes them is a private `$HOME` to
+keep that state in (ADR-0009) and a terminal that outlives any one agent run.
+
+So the runner abstraction grew to match: a runner can mint a conversation id,
+start a *named* conversation, and resume one. "Keep going" now continues the
+CLI's own conversation instead of typing at a bare shell — which is the
+difference between adding a sentence and starting over.
+
+The runtime holds no credential. Model keys arrive per window over the exec
+channel, because argv is readable from `/proc` by every other window the user
+has open: same user, but a session is still the boundary a key is scoped to.
+
+The slot is reclaimed when the user has nothing open in the Cell — "a tmux
+takes one slot; log off and it is reclaimed" — not when any one agent
+finishes.
+
 ## What this does not yet do
 
-The rest of the original sketch:
-
-- **One runtime per user, many sessions inside it.** Today each resident
-  session is still its own pod with its own tmux server. The user-level tmux
-  server that hosts several windows is the next step.
-- **Resume.** The three tiers — attach a live tmux, resume the CLI from its
-  own state, rebuild from a checkpoint — need the CLI-native state to be
-  captured deliberately. Today it lands in the private `$HOME` because that
-  is where the CLIs write it, which makes tier 2 possible but does not
-  implement it.
-- **A terminal in the browser.** Attaching is a `kubectl exec` today. The API
-  surface that a web terminal needs is the same exec path.
+- **Resume across a runtime restart.** Tier 1 (attach a live window) works,
+  and tier 2 is now reachable: the CLI conversation is named and its state is
+  in the private `$HOME`. Re-opening a window against a conversation whose
+  runtime pod has been replaced is not wired up.
+- **A terminal in the browser.** Attaching is a `kubectl exec` today, over
+  the same exec path a web terminal would use.

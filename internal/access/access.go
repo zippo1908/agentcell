@@ -10,6 +10,7 @@
 package access
 
 import (
+	"crypto/rand"
 	"fmt"
 	"sort"
 
@@ -91,6 +92,63 @@ type Runner struct {
 	Protocols []string
 	// HeadlessArgv builds the one-shot dispatch command for a task.
 	HeadlessArgv func(task string) []string
+
+	// The agent CLIs keep their own conversations, with their own ids, under
+	// $HOME. AgentCell should not reimplement that — a platform-side replay
+	// of a transcript is a worse copy of what the tool already does well.
+	// What the platform owes them is a private $HOME (ADR-0009) and a stable
+	// id to name the conversation by.
+
+	// NewRunnerSessionID mints an id in whatever shape this CLI requires,
+	// when the CLI lets the caller choose one. Nil means it does not, and
+	// resume has to work from the CLI's own bookkeeping instead.
+	NewRunnerSessionID func() string
+	// StartArgv runs a task in a NAMED conversation, so a later resume can
+	// address it. Nil falls back to HeadlessArgv.
+	StartArgv func(task, runnerSessionID string) []string
+	// ResumeArgv continues an existing conversation with more instructions.
+	// Nil means this runner cannot resume and a follow-up starts fresh.
+	ResumeArgv func(task, runnerSessionID string) []string
+}
+
+// Resumable reports whether a runner can continue its own conversation.
+func Resumable(runner string) bool {
+	r, ok := runners[runner]
+	return ok && r.ResumeArgv != nil
+}
+
+// NewRunnerSession mints the CLI-side conversation id for a runner, or "" if
+// that CLI does not accept one from the caller.
+func NewRunnerSession(runner string) string {
+	r, ok := runners[runner]
+	if !ok || r.NewRunnerSessionID == nil {
+		return ""
+	}
+	return r.NewRunnerSessionID()
+}
+
+// StartArgvFor builds the command that begins a named conversation.
+func StartArgvFor(runner, task, runnerSessionID string) ([]string, error) {
+	r, ok := runners[runner]
+	if !ok {
+		return nil, fmt.Errorf("unknown runner %q", runner)
+	}
+	if r.StartArgv == nil || runnerSessionID == "" {
+		return r.HeadlessArgv(task), nil
+	}
+	return r.StartArgv(task, runnerSessionID), nil
+}
+
+// ResumeArgvFor builds the command that continues one.
+func ResumeArgvFor(runner, task, runnerSessionID string) ([]string, error) {
+	r, ok := runners[runner]
+	if !ok {
+		return nil, fmt.Errorf("unknown runner %q", runner)
+	}
+	if r.ResumeArgv == nil {
+		return nil, fmt.Errorf("runner %q cannot resume a conversation", runner)
+	}
+	return r.ResumeArgv(task, runnerSessionID), nil
 }
 
 var runners = map[string]Runner{
@@ -100,6 +158,16 @@ var runners = map[string]Runner{
 		HeadlessArgv: func(task string) []string {
 			return []string{"claude", "--dangerously-skip-permissions", "-p", task}
 		},
+		// Claude Code accepts a caller-chosen session id, and it must be a
+		// UUID — our ULIDs are not, so the conversation gets its own id and
+		// the Session records it.
+		NewRunnerSessionID: newUUIDv4,
+		StartArgv: func(task, sid string) []string {
+			return []string{"claude", "--dangerously-skip-permissions", "--session-id", sid, "-p", task}
+		},
+		ResumeArgv: func(task, sid string) []string {
+			return []string{"claude", "--dangerously-skip-permissions", "--resume", sid, "-p", task}
+		},
 	},
 	"codex": {
 		Name:      "codex",
@@ -108,6 +176,15 @@ var runners = map[string]Runner{
 			// The container is the boundary; Codex's inner sandbox must yield
 			// to it (ADR appendix A).
 			return []string{"codex", "exec", "--sandbox", "danger-full-access", task}
+		},
+		// Codex names its own sessions, so there is no id to hand it up
+		// front. It can continue the most recent one, and because each
+		// session has its own worktree and its own $HOME, "most recent here"
+		// is unambiguous — the isolation from ADR-0009 is what makes this
+		// safe rather than a race between users.
+		ResumeArgv: func(task, _ string) []string {
+			return []string{"codex", "exec", "resume", "--last",
+				"--sandbox", "danger-full-access", task}
 		},
 	},
 	"pi": {
@@ -211,4 +288,18 @@ func HeadlessArgv(runner, task string) ([]string, error) {
 		return nil, fmt.Errorf("unknown runner %q", runner)
 	}
 	return run.HeadlessArgv(task), nil
+}
+
+// newUUIDv4 builds the id shape Claude Code requires. Small enough to do
+// here rather than take a dependency for.
+func newUUIDv4() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A guessable conversation id would let a later resume address
+		// somebody else's; there is no safe degraded value.
+		panic("access: crypto/rand unavailable: " + err.Error())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
