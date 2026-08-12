@@ -123,3 +123,14 @@ export interface SessionState {
   exitCode?: string
   attach: string
 }
+
+/** The principal this console is acting as. `shared` means a static token:
+ * everyone is the same subject, so nothing is private from anyone else
+ * holding it. */
+export interface Me {
+  subject: string
+  name: string
+  email?: string
+  kind: string
+  shared: boolean
+}

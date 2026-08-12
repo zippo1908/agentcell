@@ -170,13 +170,21 @@ func CellFromPreviewRequest(r *http.Request) string {
 // hard reload of it should be answered with index.html. Anything else —
 // unknown API paths, missing assets, other prefixes — must NOT be masked
 // as a 200 HTML page.
+// isClientRoute lists the paths the SPA router owns, so a hard reload of one
+// is answered with index.html.
+//
+// It is an allow-list rather than a catch-all because answering 200 HTML for
+// an unknown /api path or a mistyped asset turns a programming error into a
+// silently "successful" response. The cost is that a new page must be added
+// here — a real trap, and the reason the test below enumerates them.
 func isClientRoute(p string) bool {
-	switch {
-	case p == "/" || p == "/cells" || p == "/reviews":
+	switch p {
+	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities":
 		return true
-	case strings.HasPrefix(p, "/cells/"):
+	}
+	if rest, ok := strings.CutPrefix(p, "/cells/"); ok {
 		// /cells/<name> only; no deeper synthetic paths.
-		return !strings.Contains(strings.TrimPrefix(p, "/cells/"), "/")
+		return !strings.Contains(rest, "/")
 	}
 	return false
 }

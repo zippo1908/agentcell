@@ -3,6 +3,7 @@ import type {
   CellDetail,
   Diff,
   DispatchInput,
+  Me,
   Meta,
   SessionState,
   Review,
@@ -42,7 +43,14 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   meta: () => req<Meta>('/api/meta'),
+
+  /** Who am I acting as — and is this a shared principal? */
+  me: () => req<Me>('/api/me'),
   cells: () => req<Cell[]>('/api/cells'),
+
+  /** Onboard a project from the console. */
+  createCell: (body: Record<string, unknown>) =>
+    req<{ cell: string }>('/api/cells', { method: 'POST', body: JSON.stringify(body) }),
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
 
   saveDescription: (name: string, description: string) =>

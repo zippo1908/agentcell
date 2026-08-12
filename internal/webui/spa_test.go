@@ -104,3 +104,26 @@ func TestSPAFallbackDoesNotMaskErrors(t *testing.T) {
 		}
 	})
 }
+
+// Every route the SPA router owns must survive a hard reload. The allow-list
+// is deliberate (an unknown path must not be answered with HTML), which
+// makes forgetting to add a new page a real and easy mistake — so the list
+// is asserted rather than assumed.
+func TestEveryClientRouteSurvivesAReload(t *testing.T) {
+	for _, p := range []string{
+		"/", "/dashboard", "/cells", "/cells/new", "/cells/shop", "/reviews", "/capabilities",
+	} {
+		if !isClientRoute(p) {
+			t.Errorf("%s would 404 on a hard reload", p)
+		}
+	}
+	// And nothing else is swallowed: an unknown path or a mistyped asset has
+	// to fail visibly.
+	for _, p := range []string{
+		"/api/cells", "/api/nope", "/cells/shop/sessions", "/assets/index-xyz.js", "/nope",
+	} {
+		if isClientRoute(p) {
+			t.Errorf("%s was treated as a client route; errors would render as a 200 page", p)
+		}
+	}
+}

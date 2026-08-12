@@ -6,6 +6,10 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import './styles.css'
 import { Shell } from './components/Shell'
 import { CellsPage } from './pages/CellsPage'
+import { CellNewPage } from './pages/CellNewPage'
+import { CapabilitiesPage } from './pages/CapabilitiesPage'
+import { DashboardPage } from './pages/DashboardPage'
+import { ToastProvider } from './ui/primitives'
 import { CellPage } from './pages/CellPage'
 import { ReviewsPage } from './pages/ReviewsPage'
 
@@ -22,8 +26,11 @@ const router = createBrowserRouter([
   {
     element: <Shell />,
     children: [
-      { path: '/', element: <Navigate to="/cells" replace /> },
+      { path: '/', element: <Navigate to="/dashboard" replace /> },
+      { path: '/dashboard', element: <DashboardPage /> },
       { path: '/cells', element: <CellsPage /> },
+      { path: '/cells/new', element: <CellNewPage /> },
+      { path: '/capabilities', element: <CapabilitiesPage /> },
       { path: '/cells/:name', element: <CellPage /> },
       { path: '/reviews', element: <ReviewsPage /> },
     ],
@@ -33,7 +40,9 @@ const router = createBrowserRouter([
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 )
