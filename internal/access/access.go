@@ -29,12 +29,14 @@ type Endpoint struct {
 }
 
 type Provider struct {
-	DisplayName string              `yaml:"display_name"`
-	Region      string              `yaml:"region"`
-	Protocols   map[string]Endpoint `yaml:"protocols"`
-	AuthEnv     string              `yaml:"auth_env"`
-	Models      []string            `yaml:"models"`
-	Docs        string              `yaml:"docs"`
+	DisplayName string `yaml:"display_name"`
+	// Vendor publishes the models. Defaults to the provider's own key.
+	Vendor    string              `yaml:"vendor"`
+	Region    string              `yaml:"region"`
+	Protocols map[string]Endpoint `yaml:"protocols"`
+	AuthEnv   string              `yaml:"auth_env"`
+	Models    []string            `yaml:"models"`
+	Docs      string              `yaml:"docs"`
 }
 
 type providersFile struct {
@@ -102,6 +104,8 @@ type Runner struct {
 	Name string
 	// Display is the human label shown in the UI.
 	Display string
+	// Vendor publishes this CLI.
+	Vendor string
 	// Protocols in preference order; first intersecting protocol wins.
 	Protocols []string
 	// HeadlessArgv builds the one-shot dispatch command for a task.
@@ -219,6 +223,18 @@ type Binding struct {
 	// AuthEnv is the provider-native key variable (informational; SessionEnv
 	// already maps the key onto protocol variables).
 	AuthEnv string
+	// CrossVendor is set when the CLI and the model come from different
+	// vendors — e.g. Anthropic's Claude Code driving Moonshot's Kimi through
+	// Moonshot's Anthropic-compatible endpoint.
+	//
+	// This is a statement of fact, not a verdict. The combination works, and
+	// model providers publish these endpoints precisely so it does; whether
+	// a given CLI's licence permits it is that vendor's to define and the
+	// operator's to check. AgentCell surfaces the pairing rather than
+	// deciding it, and never picks one by default.
+	CrossVendor bool
+	// Advisory is a one-line, neutral note for the UI when CrossVendor.
+	Advisory string
 }
 
 // Resolve validates a triple and picks the protocol: the runner's first
@@ -234,10 +250,12 @@ func (r *Registry) Resolve(runner, provider, model string) (Binding, error) {
 	}
 	for _, proto := range run.Protocols {
 		if ep, ok := prov.Protocols[proto]; ok {
-			return Binding{
+			b := Binding{
 				Runner: runner, Provider: provider, Model: model,
 				Protocol: proto, BaseURL: ep.BaseURL, AuthEnv: prov.AuthEnv,
-			}, nil
+			}
+			b.CrossVendor, b.Advisory = vendorNote(run, provider, prov)
+			return b, nil
 		}
 	}
 	return Binding{}, fmt.Errorf(
@@ -291,4 +309,27 @@ func HeadlessArgv(runner, task string) ([]string, error) {
 		return nil, fmt.Errorf("unknown runner %q", runner)
 	}
 	return run.HeadlessArgv(task), nil
+}
+
+// vendorNote reports whether a binding pairs one vendor's CLI with another
+// vendor's models, and says so in one neutral line.
+//
+// This combination is normal and well-supported: model providers publish
+// protocol-compatible endpoints precisely so that established CLIs can drive
+// their models, and for teams who cannot reach a foreign API it is often the
+// only workable shape. What AgentCell must not do is imply it has checked
+// the CLI vendor's licence terms — that is the vendor's to define and the
+// operator's to read. So: state the pairing, name both sides, and stop.
+func vendorNote(run Runner, providerName string, prov Provider) (bool, string) {
+	pv := prov.Vendor
+	if pv == "" {
+		pv = providerName
+	}
+	if run.Vendor == "" || run.Vendor == pv {
+		return false, ""
+	}
+	return true, fmt.Sprintf(
+		"%s is published by %s and is being pointed at %s's models over the %s-compatible endpoint. "+
+			"The endpoint is provided for this; the CLI's licence terms are %s's to define — check both before relying on it.",
+		run.Name, run.Vendor, pv, run.Protocols[0], run.Vendor)
 }

@@ -20,8 +20,13 @@ import (
 
 // runnerPreset is one entry of runners.yaml.
 type runnerPreset struct {
-	DisplayName string   `yaml:"display_name"`
-	Protocols   []string `yaml:"protocols"`
+	DisplayName string `yaml:"display_name"`
+	// Vendor is who publishes this CLI. Used to tell a caller when they are
+	// pairing one vendor's client with another vendor's model — a common and
+	// well-supported thing to do, and one whose terms are the operator's to
+	// check, not ours to assume.
+	Vendor    string   `yaml:"vendor"`
+	Protocols []string `yaml:"protocols"`
 	// Headless is the one-shot form. Required.
 	Headless []string `yaml:"headless"`
 	// Start names a conversation the caller chose an id for; Resume
@@ -90,6 +95,7 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 	r := Runner{
 		Name:           name,
 		Display:        p.DisplayName,
+		Vendor:         p.Vendor,
 		Protocols:      p.Protocols,
 		SessionHomeEnv: p.SessionHomeEnv,
 		HeadlessArgv:   func(task string) []string { return render(p.Headless, task, "") },

@@ -44,9 +44,37 @@ reach, and the agent asks for the few it is allowed to have.
 
 ### 1. `gitd` — one local git authority per Cell
 
-A pod per Cell, running as its own uid (`ProjectUID`, distinct from every
-user uid), owning `/workspace/repo` at mode `0700`. Nobody else can read the
-object store — not another user, not the agent, not the settle Job.
+A pod per Cell, running as **its own uid, distinct from every user uid AND
+from the project identity**, owning `/workspace/repo` at mode `0700`. Nobody
+else can read the object store — not another user, not the agent, not the
+settle Job, **not the anchor**.
+
+That last exclusion is the point, and the first draft of this ADR got it
+wrong by saying `gitd` would run as `ProjectUID`. `ProjectUID` is what the
+anchor runs as, so `0700` would have excluded everyone except the one process
+that most needs excluding:
+
+> **The anchor executes repo-authored code today, as the uid that owns the
+> object store.** Its preview command is whatever `spec.preview.command`
+> says — `npm run dev`, a Makefile target, anything the repository defines —
+> and it runs as `ProjectUID` in the pod that holds `/workspace/repo` with
+> write access.
+
+So this is not only a new boundary; it closes an exposure that already
+exists. `gitd` gets `GitUID`, and the anchor becomes a *consumer* of
+materialized files exactly like a session: it asks `gitd` for the base
+checkout and serves that, with no repository of its own.
+
+**Why not fold `gitd` into the anchor**, which already clones and refreshes
+the repo and would cost no extra pod: precisely because the anchor runs
+repo-authored code. Putting git authority in that process means compromising
+a `preview.command` compromises the object store. The extra pod is the price
+of not co-locating an authority with attacker-controlled code.
+
+**Why per Cell and not per node or per cluster**: the blast radius of a
+compromised `gitd` should be one project. It is also where the data already
+is — the workspace PVC is ReadWriteOnce, so everything for a Cell lands on
+one node regardless.
 
 It exposes exactly four operations over a unix socket in each user's private
 tree, mounted read-write for that user alone:
@@ -106,9 +134,17 @@ the working directory.
   can read every branch in the project. It holds no forge credential — the
   broker still owns that — so compromising it yields the code, not the
   ability to publish.
-- **A new failure mode**: `gitd` down means no session can start or settle.
-  It must be as boring as the anchor, and sessions already tolerate a slow
-  start (they wait for the clone today).
+- **A new failure mode**: `gitd` down means no session can start or settle,
+  and no preview either, since the anchor now gets its files from it. It must
+  be as boring as the anchor: it holds no state of its own (the PVC does), so
+  a restart is cheap, and sessions already tolerate a slow start today while
+  waiting for the clone.
+
+- **The anchor loses its repository.** Cloning and fetching move into `gitd`;
+  the anchor serves a materialized directory. This is a bigger change than
+  "sessions get plain directories" and belongs in the same migration, because
+  leaving the anchor with a writable object store would leave the exposure
+  above open while claiming it was closed.
 - **Latency**: `materialize` is a checkout, which is what worktree creation
   already costs. `status`/`diff` become RPCs rather than local commands —
   negligible against an agent's turn.

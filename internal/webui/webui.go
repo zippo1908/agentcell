@@ -404,7 +404,8 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Fail fast on an invalid binding before creating anything.
-	if _, err := h.Registry.Resolve(req.Runner, req.Provider, req.Model); err != nil {
+	binding, err := h.Registry.Resolve(req.Runner, req.Provider, req.Model)
+	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -432,7 +433,13 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 201, map[string]string{"session": sess.Name})
+	out := map[string]string{"session": sess.Name}
+	if binding.CrossVendor {
+		// Returned, not blocked: the operator chose this pairing and it
+		// works. Saying so once, where they can see it, beats a footnote.
+		out["advisory"] = binding.Advisory
+	}
+	writeJSON(w, 201, out)
 }
 
 func (h *Handler) settleSession(w http.ResponseWriter, r *http.Request) {

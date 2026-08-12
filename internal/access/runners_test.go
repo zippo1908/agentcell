@@ -188,3 +188,56 @@ func containsArg(list []string, want string) bool {
 	}
 	return false
 }
+
+// Pairing one vendor's CLI with another vendor's models is normal, works,
+// and is often the only shape available to a team that cannot reach a
+// foreign API. AgentCell states the pairing; it does not adjudicate it.
+func TestCrossVendorPairingIsReportedNotBlocked(t *testing.T) {
+	reg, err := LoadWithRunners(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("claude against kimi models is allowed and noted", func(t *testing.T) {
+		b, err := reg.Resolve("claude", "moonshot", "kimi-k2-turbo-preview")
+		if err != nil {
+			t.Fatalf("the pairing was refused: %v", err)
+		}
+		if !b.CrossVendor || b.Advisory == "" {
+			t.Error("a cross-vendor pairing produced no note")
+		}
+		for _, want := range []string{"anthropic", "moonshot"} {
+			if !strings.Contains(strings.ToLower(b.Advisory), want) {
+				t.Errorf("the note does not name %s: %q", want, b.Advisory)
+			}
+		}
+		// It must not pretend to have decided anything.
+		for _, forbidden := range []string{"illegal", "not permitted", "violat", "prohibited"} {
+			if strings.Contains(strings.ToLower(b.Advisory), forbidden) {
+				t.Errorf("the note passes judgement it has no basis for: %q", b.Advisory)
+			}
+		}
+	})
+
+	t.Run("a vendor's own CLI and models get no note", func(t *testing.T) {
+		b, err := reg.Resolve("kimi", "moonshot", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.CrossVendor || b.Advisory != "" {
+			t.Errorf("same-vendor pairing was flagged: %q", b.Advisory)
+		}
+		if b2, err := reg.Resolve("claude", "anthropic", ""); err != nil || b2.CrossVendor {
+			t.Errorf("claude on anthropic was flagged (%v)", err)
+		}
+	})
+
+	t.Run("a runner with no declared vendor is never flagged", func(t *testing.T) {
+		b, err := reg.Resolve("pi", "moonshot", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.CrossVendor {
+			t.Error("a vendor-less runner was flagged")
+		}
+	})
+}
