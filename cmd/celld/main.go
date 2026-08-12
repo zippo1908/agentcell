@@ -33,6 +33,8 @@ func main() {
 		httpAddr    = flag.String("http-addr", ":8080", "console (UI + API) listen address")
 		previewAddr = flag.String("preview-addr", ":8081",
 			"listen address for untrusted Cell content; MUST be a different origin from the console (ADR-0007)")
+		previewDomain = flag.String("preview-domain", "",
+			"wildcard domain giving each Cell its OWN preview host (<cell>.<domain>) — required to isolate Cells from each other in the browser; see ADR-0007")
 		previewOrigin = flag.String("preview-origin", "",
 			"absolute origin browsers use for preview/app, e.g. https://preview.example.com (default: console host with the preview port)")
 		metricsAddr = flag.String("metrics-addr", ":8082", "Prometheus metrics address")
@@ -108,6 +110,7 @@ func main() {
 	ui := &webui.Handler{
 		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
 		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
+		PreviewDomain: *previewDomain, Auth: auth,
 	}
 	mux := http.NewServeMux()
 	auth.LoginRoutes(mux)
@@ -138,7 +141,9 @@ func main() {
 	// unable to reach the console.
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		pmux := http.NewServeMux()
-		pmux.Handle("/", auth.Middleware(ui.PreviewRoutes()))
+		// Untrusted content is authorized by a short-lived per-Cell ticket,
+		// never by the console credential (ADR-0007).
+		pmux.Handle("/", auth.PreviewMiddleware(webui.CellFromPreviewRequest, ui.PreviewRoutes()))
 		srv := &http.Server{Addr: *previewAddr, Handler: pmux}
 		go func() {
 			<-ctx.Done()

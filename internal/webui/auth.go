@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -28,6 +29,17 @@ func NewAuthenticator(raw string) *Authenticator {
 		}
 	}
 	return &Authenticator{tokens: tokens}
+}
+
+// sortedTokens returns the configured tokens in a stable order so derived
+// keys (e.g. the preview signing key) do not change between restarts.
+func (a *Authenticator) sortedTokens() []string {
+	out := make([]string, 0, len(a.tokens))
+	for t := range a.tokens {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Enabled reports whether any token is configured.

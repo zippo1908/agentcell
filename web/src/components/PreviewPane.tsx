@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { api } from '../api/client'
 import type { Cell } from '../api/types'
 
 /**
@@ -19,18 +17,10 @@ export function PreviewPane({
 }) {
   const [zone, setZone] = useState<'preview' | 'prod'>('preview')
   const frame = useRef<HTMLIFrameElement>(null)
-  const { data: meta } = useQuery({
-    queryKey: ['meta'],
-    queryFn: api.meta,
-    refetchInterval: false,
-    staleTime: Infinity,
-  })
-  // Untrusted content lives on its own origin (ADR-0007); building these as
-  // relative paths would put it back on the console's origin and collapse
-  // the isolation.
-  const origin = meta?.previewOrigin ?? ''
-  const path = zone === 'prod' ? cell.productionPath : cell.previewPath
-  const src = path ? origin + path : ''
+  // The server hands us absolute, ticketed URLs on the untrusted-content
+  // origin (ADR-0007). Composing them here from paths would put the content
+  // back on the console's origin and collapse the isolation.
+  const src = zone === 'prod' ? cell.productionURL : cell.previewURL
 
   // Follow-target changes mean a different working tree is being served.
   useEffect(() => {

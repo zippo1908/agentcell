@@ -51,8 +51,14 @@ design. In short:
   not degraded. A residual CSP `sandbox` still forbids one thing:
   navigating or replacing the top-level console page. See
   [ADR-0007](docs/adr/0007-preview-origin-separation.md).
-  **Deployment note:** cookies ignore port, so a same-host/different-port
-  split does not isolate cookies; use a distinct hostname in production.
+  **The console credential is never accepted there:** the console mints a
+  10-minute, per-Cell HMAC ticket into the preview URL, which the preview
+  listener exchanges for a cookie scoped to that Cell's path — so neither
+  the platform cookie nor a bearer token works against untrusted content.
+  **Deployment requirement:** set `--preview-domain` so every Cell gets its
+  own host (`<cell>.preview.example.com`). Without it all Cells share one
+  preview origin and one Cell's untrusted content could read another's;
+  path-scoped tickets narrow this but are not origin isolation.
 - **Cookie-authenticated writes require same-origin provenance.** Because
   untrusted preview content is *same-site* with the console, SameSite
   cookies provide no protection at all. Every state-changing request

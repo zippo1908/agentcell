@@ -39,6 +39,39 @@ type Handler struct {
 	PreviewOrigin string
 	// PreviewPort is used only when PreviewOrigin is empty.
 	PreviewPort string
+	// PreviewDomain, when set (e.g. "preview.example.com"), gives every
+	// Cell its OWN host — <cell>.<domain> — so one Cell's untrusted content
+	// is cross-origin to another's. This is the only way to isolate Cells
+	// from each other in the browser; see ADR-0007.
+	PreviewDomain string
+	// Auth mints the short-lived per-Cell tickets that authorize the
+	// preview origin (the console credential is never accepted there).
+	Auth *Authenticator
+}
+
+// previewBaseFor returns the origin serving a specific Cell's untrusted
+// content. With PreviewDomain each Cell gets its own host; without it they
+// share one origin, which is weaker — documented in ADR-0007.
+func (h *Handler) previewBaseFor(r *http.Request, cell string) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	}
+	if h.PreviewDomain != "" {
+		return scheme + "://" + cell + "." + strings.TrimPrefix(h.PreviewDomain, ".")
+	}
+	return h.previewOriginFor(r)
+}
+
+// previewURL builds a ready-to-open absolute URL carrying a fresh ticket.
+func (h *Handler) previewURL(r *http.Request, cell, path string) string {
+	if path == "" || h.Auth == nil {
+		return ""
+	}
+	return h.previewBaseFor(r, cell) + path + "?" + previewTicketQS + "=" + h.Auth.MintPreviewTicket(cell)
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -77,6 +110,22 @@ func (h *Handler) PreviewRoutes() http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 	return mux
+}
+
+// CellFromPreviewRequest extracts the Cell a preview request targets, from
+// the path (/preview/<cell>/…, /app/<cell>/…). Used to scope authorization
+// to exactly one Cell.
+func CellFromPreviewRequest(r *http.Request) string {
+	p := strings.TrimPrefix(r.URL.Path, "/")
+	for _, prefix := range []string{"preview/", "app/"} {
+		if rest, ok := strings.CutPrefix(p, prefix); ok {
+			if i := strings.IndexByte(rest, '/'); i > 0 {
+				return rest[:i]
+			}
+			return rest
+		}
+	}
+	return ""
 }
 
 // isClientRoute reports whether a path is one the SPA router owns, so a
@@ -189,19 +238,26 @@ type cellView struct {
 	MaxSessions    int32  `json:"maxSessions"`
 	PreviewPath    string `json:"previewPath"`
 	ProductionPath string `json:"productionPath"`
-	ReleaseRef     string `json:"releaseRef"`
-	FollowSession  string `json:"followSession"`
-	Message        string `json:"message"`
+	// Absolute, ticketed URLs on the untrusted-content origin. The UI must
+	// use these rather than composing paths against its own origin.
+	PreviewURL    string `json:"previewURL"`
+	ProductionURL string `json:"productionURL"`
+	ReleaseRef    string `json:"releaseRef"`
+	FollowSession string `json:"followSession"`
+	Message       string `json:"message"`
 }
 
-func toCellView(c *acv1.Cell) cellView {
-	return cellView{
+func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
+	v := cellView{
 		Name: c.Name, Phase: string(c.Status.Phase), Description: c.Spec.Description,
 		ActiveSessions: c.Status.ActiveSessions, MaxSessions: c.Spec.MaxSessions,
 		PreviewPath: c.Status.PreviewPath, ProductionPath: c.Status.ProductionPath,
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message,
 	}
+	v.PreviewURL = h.previewURL(r, c.Name, c.Status.PreviewPath)
+	v.ProductionURL = h.previewURL(r, c.Name, c.Status.ProductionPath)
+	return v
 }
 
 func (h *Handler) listCells(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +268,7 @@ func (h *Handler) listCells(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]cellView, 0, len(list.Items))
 	for i := range list.Items {
-		views = append(views, toCellView(&list.Items[i]))
+		views = append(views, h.toCellView(r, &list.Items[i]))
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
 	writeJSON(w, 200, views)
@@ -259,7 +315,7 @@ func (h *Handler) getCell(w http.ResponseWriter, r *http.Request) {
 		sessions = append(sessions, sv)
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].Name > sessions[j].Name })
-	writeJSON(w, 200, map[string]any{"cell": toCellView(&cell), "sessions": sessions})
+	writeJSON(w, 200, map[string]any{"cell": h.toCellView(r, &cell), "sessions": sessions})
 }
 
 func (h *Handler) putDescription(w http.ResponseWriter, r *http.Request) {

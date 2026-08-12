@@ -177,3 +177,113 @@ func TestProxyStampsCSPOnUpstreamResponse(t *testing.T) {
 		t.Error("expected a Referrer-Policy on untrusted content")
 	}
 }
+
+// The preview origin must reject the console credential outright and only
+// honour a short-lived ticket for the exact Cell being viewed — otherwise
+// one Cell's untrusted content could browse another's (they may share a
+// host) or ride the operator's platform-wide cookie.
+func TestPreviewOriginRejectsConsoleCredential(t *testing.T) {
+	auth := NewAuthenticator("tok")
+	served := false
+	h := auth.PreviewMiddleware(CellFromPreviewRequest,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			served = true
+			w.WriteHeader(http.StatusOK)
+		}))
+
+	req := func(path string, mutate func(*http.Request)) *httptest.ResponseRecorder {
+		served = false
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if mutate != nil {
+			mutate(r)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+
+	t.Run("console cookie is not accepted", func(t *testing.T) {
+		rec := req("/preview/shop/", func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "tok"})
+		})
+		if rec.Code != http.StatusUnauthorized || served {
+			t.Errorf("console cookie granted preview access: %d (served=%v)", rec.Code, served)
+		}
+	})
+
+	t.Run("bearer token is not accepted", func(t *testing.T) {
+		rec := req("/preview/shop/", func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer tok")
+		})
+		if rec.Code != http.StatusUnauthorized || served {
+			t.Errorf("bearer granted preview access: %d", rec.Code)
+		}
+	})
+
+	t.Run("valid ticket is exchanged for a scoped cookie", func(t *testing.T) {
+		ticket := auth.MintPreviewTicket("shop")
+		rec := req("/preview/shop/?"+previewTicketQS+"="+ticket, nil)
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("ticket exchange = %d, want 303", rec.Code)
+		}
+		var scoped *http.Cookie
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == previewCookieName("shop") && c.Path == "/preview/shop/" {
+				scoped = c
+			}
+		}
+		if scoped == nil {
+			t.Fatal("no cookie scoped to this cell's path")
+		}
+		if !scoped.HttpOnly {
+			t.Error("preview cookie must be HttpOnly")
+		}
+		// And it then authorizes the same cell.
+		if rec := req("/preview/shop/", func(r *http.Request) { r.AddCookie(scoped) }); rec.Code != 200 {
+			t.Errorf("scoped cookie did not authorize its own cell: %d", rec.Code)
+		}
+	})
+
+	t.Run("a ticket for one cell does not open another", func(t *testing.T) {
+		ticket := auth.MintPreviewTicket("shop")
+		rec := req("/preview/other/?"+previewTicketQS+"="+ticket, nil)
+		if rec.Code != http.StatusForbidden || served {
+			t.Errorf("cross-cell ticket accepted: %d", rec.Code)
+		}
+		// Same for a cookie minted for another cell.
+		rec = req("/preview/other/", func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: previewCookieName("other"), Value: ticket})
+		})
+		if rec.Code != http.StatusUnauthorized || served {
+			t.Errorf("cross-cell cookie accepted: %d", rec.Code)
+		}
+	})
+
+	t.Run("forged and expired tickets are refused", func(t *testing.T) {
+		if rec := req("/preview/shop/?"+previewTicketQS+"=shop:9999999999:forged", nil); rec.Code != http.StatusForbidden {
+			t.Errorf("forged ticket = %d, want 403", rec.Code)
+		}
+		other := NewAuthenticator("different-token")
+		if rec := req("/preview/shop/?"+previewTicketQS+"="+other.MintPreviewTicket("shop"), nil); rec.Code != http.StatusForbidden {
+			t.Errorf("ticket signed with another key = %d, want 403", rec.Code)
+		}
+	})
+}
+
+// Each Cell gets its own host when a preview domain is configured — the
+// only browser-level isolation between Cells.
+func TestPerCellPreviewHost(t *testing.T) {
+	h := &Handler{PreviewDomain: "preview.example.com", Auth: NewAuthenticator("t")}
+	r := httptest.NewRequest(http.MethodGet, "/api/cells", nil)
+	r.Host = "console.example.com"
+	if got := h.previewBaseFor(r, "shop"); got != "http://shop.preview.example.com" {
+		t.Errorf("per-cell host = %q", got)
+	}
+	if got := h.previewBaseFor(r, "other"); got == h.previewBaseFor(r, "shop") {
+		t.Error("two cells share an origin despite a preview domain")
+	}
+	url := h.previewURL(r, "shop", "/preview/shop/")
+	if !strings.Contains(url, "shop.preview.example.com") || !strings.Contains(url, previewTicketQS+"=") {
+		t.Errorf("preview URL missing host or ticket: %s", url)
+	}
+}

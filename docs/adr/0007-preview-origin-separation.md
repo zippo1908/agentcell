@@ -48,11 +48,33 @@ celld 监听两个端口:
 - 仍保留的 CSP `sandbox`(含 `allow-same-origin`)只禁止一件事:**导航或替换
   顶层控制台页面**——这与 origin 无关,任何被框内容都不该做。
 
+## 决策补充:每 Cell 独立 host + 预览专用票据
+
+单一预览 origin 仍有两个洞,必须一并堵:
+
+1. **Cell 之间同源**:所有 Cell 共用一个预览 origin 时,Cell A 的恶意预览代码
+   可以 `fetch('/preview/cell-B/')` 并**读到内容**——违背 ADR-0001 的"跨项目
+   强隔离"。
+   → `--preview-domain=preview.example.com` 时,每个 Cell 得到**自己的 host**
+   (`<cell>.preview.example.com`),彼此跨源。这是浏览器层面**唯一**能隔离
+   Cell 的手段,生产必须配置(需要泛域名与泛证书)。
+2. **控制台 cookie 会漏到预览 origin**(cookie 不区分端口)。
+   → 预览 origin **完全不接受控制台 cookie,也不接受 bearer**。控制台按 Cell
+   签发 **10 分钟有效的 HMAC 票据**(密钥由访问令牌派生,令牌轮换即失效),
+   随 iframe URL 传入;预览监听器校验后换成**按 Cell 路径与 host 限定**的
+   HttpOnly cookie 并重定向去掉 query。一个 Cell 的票据打不开另一个 Cell。
+
+因此 UI 不再自行拼预览地址:服务端在 `/api/cells` 响应里给出带票据的
+`previewURL` / `productionURL` 绝对地址。
+
 ## 后果与残留风险
 
-- **cookie 不区分端口**:同一主机的 `:8080` 与 `:8081` 共享 cookie,浏览器仍
-  会把控制台 cookie 发给预览 origin。写操作被 Origin 校验挡住、读响应被 CORS
-  挡住,但**生产部署应使用不同主机名**(如 `preview.example.com`)以获得真正
-  的 cookie 隔离;`--preview-origin` 就是为此准备的。文档已写明。
+- **未配置 `--preview-domain` 时,Cell 之间仍共享一个预览 origin**。此时保护
+  只剩"按 Cell 路径限定的票据 cookie":Cell A 的页面向 `/preview/cell-B/`
+  发请求不会带上 B 的 cookie(路径不匹配),但这依赖浏览器的 cookie 路径规则,
+  不是源隔离。**多租户或仓库不可信的部署必须配置 `--preview-domain`**,文档与
+  SECURITY.md 已写明。
+- 控制台 cookie 泄漏问题已由"预览 origin 不接受控制台凭据"根除,不再依赖
+  端口/主机差异。
 - 部署面多一个端口/Service 端口(chart 与 install.yaml 已含)。
 - 反代/Ingress 需要把预览主机指到 `preview` 端口——部署文档已给示例。
