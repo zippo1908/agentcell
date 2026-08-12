@@ -20,7 +20,6 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
-	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
@@ -43,7 +42,7 @@ type SessionReconciler struct {
 	GitBrokerURL string
 	// Forge opens/tracks PRs through the broker after review approval
 	// (ADR-0006). nil/disabled leaves review purely informational.
-	Forge *forge.Client
+	Forge ForgeClient
 }
 
 // settleResult is the JSON the settle applet writes to its termination log.

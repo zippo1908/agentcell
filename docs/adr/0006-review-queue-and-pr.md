@@ -62,8 +62,14 @@ kubectl 可见性、RBAC、watch,和现有 reconcile 循环同一套语义。
 
 ## 决策 3:批准即开 PR,合并状态靠对账
 
-- **approve** → Session controller 经 broker 开 PR(幂等:已有 PR 则复用),
-  写回 `prURL/prNumber`,`reviewState=Approved`。
+- **approve** → Session controller 经 broker 开 PR,写回 `prURL/prNumber`,
+  `reviewState=Approved`。
+
+  **幂等按"查—建—回查"实现**(仅靠 `PRNumber==0` 跳过是不够的):创建前先
+  `pull-find` 按 head 分支查已有 PR,有则**认领**;创建调用报错时**再查一次**
+  ——因为"PR 已经开出去了但响应/状态写入丢了"是真实故障窗口,不回查就会对着
+  一个回答 "already exists" 的 forge 无限重试,PR 明明存在平台却永远认不回来。
+  认领成功时清掉此前的失败备注。
 - **reject** → 记 `reviewState=Rejected` + `reviewNote`,不碰 forge。分支留在
   远端(证据不删),UI 提供"把驳回意见作为新任务派工"。
 - **merge 跟踪** → 已开 PR 且未终态的 Session,由 reconciler 以退避周期查询
