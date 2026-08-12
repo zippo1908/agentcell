@@ -1,254 +1,130 @@
+<div align="right">
+
+**English** · [中文](README.zh-CN.md)
+
+</div>
+
 # AgentCell
 
-**A workshop for AI coding agents: one resident Kubernetes-backed instance per project ("Cell"), disposable work sessions as slots inside it, a resident live product preview for the human to calibrate against, and an SDLC loop closed within the instance — dispatch → work → settle are implemented today; review queue → PR is on the roadmap (M7/M9).**
+**A workshop for AI coding agents.** One resident, Kubernetes-backed instance
+per project (a *Cell*); disposable work sessions as slots inside it; a live
+product preview to steer against; and an SDLC loop — dispatch → work → settle
+→ review → release — closed within the instance.
 
-> Status: **alpha — evaluate before trusting it with production apps.** The vertical slice (operator, runtime, resident preview, calibration UI, CLI) compiles, passes unit tests (including real-git settle tests), and passes a full 8-step end-to-end run on real single-node k3s (auth → reconcile → preview HTTP 200 → dispatch→settle→pushed branch → release → production HTTP 200; see [docs/E2E_RESULTS.md](docs/E2E_RESULTS.md)). Read the table below for exactly what is implemented vs designed.
+> **Status: alpha.** The full path passes an 8-step end-to-end run on real
+> single-node k3s (auth → reconcile → preview → dispatch → settle → pushed
+> branch → release → production, [E2E results](docs/E2E_RESULTS.md)). Not yet
+> a review/PR approval queue (roadmap). Evaluate before trusting it with
+> production apps — the table below says exactly what's implemented vs
+> designed.
+
+## Why
+
+- **Resident Cell, disposable Slot.** Ephemeral sandboxes pay a cold-start tax
+  per task; human workspaces don't manage agents. AgentCell keeps the project
+  environment warm while each session gets its own git worktree and resource
+  budget, and is *settled* on the way out — commits pushed to a `session/<id>`
+  branch, empty sessions discarded, nothing left behind.
+- **Watch while you steer.** Each Cell keeps the product's dev server running;
+  the UI puts the living product description next to the live preview so you
+  recalibrate against what the agent is building, in real time.
+- **Credentials stay out of reach.** Model keys are injected per session. With
+  the git-broker (default), **no workload pod holds the forge token** — pods
+  authenticate with an audience-scoped ServiceAccount token; only the settle
+  role may push, create-only, to its own branch.
+- **China-cloud friendly.** Providers are data, not code: Alibaba Bailian,
+  Tencent Hunyuan, DeepSeek, Moonshot, Zhipu work through their OpenAI-/
+  Anthropic-compatible endpoints with no proxy.
+
+## Core model
+
+```mermaid
+flowchart TB
+    subgraph CELL["Cell = project namespace + resident anchor + PVC (warm)"]
+        PID1["cell-runtime PID 1<br/>clone · preview · heartbeat"]
+        OBJ[("/workspace/repo")]
+        S1["Slot s01 — worktree + agent"]
+        S2["Slot s02 — vacant"]
+    end
+    D["dispatch"] --> S1
+    S1 -->|settle| BR["session/&lt;id&gt; branch → review → release"]
+    S1 -.->|shares| OBJ
+```
+
+Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## Implemented vs designed
 
 | Capability | State |
 |---|---|
-| Cell operator: namespace / PVC / anchor / preview Service | ✅ implemented, fake-client tested |
-| Session lifecycle: slot gate → pod → TTL → settle Job → reclaim | ✅ implemented, fake-client tested |
-| Settle data-safety (push-confirmed or fail-and-retry, worktree kept) | ✅ implemented, real-git tested |
-| Resident preview + calibration UI + `/preview` `/app` proxies | ✅ implemented, not yet cluster-verified |
-| Two-zone release (`/app`, emptyDir clone via credential-free serving container, branch/tag/SHA refs, resolved SHA recorded) | ✅ implemented; same namespace/network — NetworkPolicy pending |
-| Provider registry (Aliyun Bailian / Tencent Hunyuan / …) | ✅ implemented, unit tested |
-| Race-free slot admission (lease CAS on Cell status) | ✅ implemented, unit tested |
-| Non-root pods (runAsNonRoot, seccomp, drop-ALL caps) + non-root devbox image | ✅ implemented |
-| Git credentials kept from repo-controlled processes (prod init-container split; preview child env filtered) | ✅ implemented |
-| HTTP surface auth (bearer token / browser login cookie; refuses to start open) | ✅ implemented, unit tested |
-| NetworkPolicy per cell (default-deny + DNS/HTTPS egress + control-plane-only ingress) + PSS restricted | ✅ implemented, unit tested |
-| Real-cluster (k3s) e2e — all 8 steps incl. preview & production HTTP 200 | ✅ passed ([docs/E2E_RESULTS.md](docs/E2E_RESULTS.md) Run 3) |
-| Review queue, diff approval, auto-PR, merge tracking | ⬜ designed (M7/M9) |
+| Cell operator (namespace / PVC / anchor / preview) · Session lifecycle (slot gate → settle Job → reclaim) | ✅ tested |
+| Settle data-safety (push-confirmed-or-retry, worktree kept) | ✅ real-git tested |
+| Resident preview + calibration UI · two-zone release (`/app`, branch/tag/SHA, rollback) | ✅ |
+| Provider registry (Aliyun Bailian / Tencent Hunyuan / DeepSeek / …) | ✅ tested |
+| HTTP auth (bearer + login cookie; refuses to start open) · per-Cell NetworkPolicy · PSS restricted · non-root pods | ✅ |
+| Race-free slot leases (+ crash recovery) | ✅ tested |
+| **git-broker**: forge token in no workload pod; per-role SAs; audience-bound tokens; repo↔cred binding; push verified by pod uid+owner; create-only `session/<id>` | ✅ tested ([ADR-0005](docs/adr/0005-git-broker.md)) |
+| Real-cluster (k3s) e2e — all 8 steps incl. preview & production HTTP 200 | ✅ ([Run 3](docs/E2E_RESULTS.md)) |
+| Review queue · diff approval · auto-PR · merge tracking | ⬜ designed (M7/M9) |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
-| Git-token broker (forge token in no workload pod; SA-token auth; session-branch-only push policy; optional short-lived GitHub App tokens) | ✅ implemented (ADR-0005), default on |
-| Knowledge indexing / review-feedback distillation | ⬜ designed |
-| agent-sandbox substrate (ADR-0004 Phase 1) | ⬜ designed |
-
-[中文版在下面 ↓](#agentcell中文)
-
-## Why
-
-- **Resident Cell, disposable Slot.** Ephemeral sandboxes (E2B/Daytona-style) pay a cold-start tax on every task; workspaces for humans (Coder/Gitpod) don't manage agents. AgentCell keeps the project environment warm while each work session gets its own git worktree, pod-level resource budget, and a mandatory *settle* on the way out.
-- **Watch while you steer.** Every Cell keeps the product's dev server running for its whole life. The UI puts the living product description next to the live preview: dispatch a task, watch the agent's work render in real time, recalibrate the description, dispatch again.
-- **Nothing gets lost.** A session that produced commits settles into a `session/<id>` branch; the settle job succeeds only after the push is confirmed — otherwise it fails, retries, and keeps the worktree on disk (real-git tested). Review/approval of those branches is roadmap (M7/M9); today they wait on the forge.
-- **Session pods never see forge credentials.** Model keys are injected per session via secret indirection ($(VAR), literal never in the pod spec — unit-tested). Honest limitation: anchor, settle and production pods do receive the git token via env, and they execute repo-controlled commands — a host-side broker (the AIP pattern) is designed to close this.
-- **China-cloud friendly, first-class.** Providers are data, not code: Alibaba Cloud Bailian, Tencent Hunyuan, DeepSeek, Moonshot/Kimi, Zhipu work through their OpenAI-/Anthropic-compatible endpoints, no proxy on domestic servers ([ADR-0002](docs/adr/0002-provider-access-layer.md)).
-
-## What exactly is on one instance?
-
-Creating one `Cell` CR materializes, in its own namespace `cell-<name>`:
-
-| Piece | What it is | What it does |
-|---|---|---|
-| **Anchor pod** (StatefulSet ×1) | PID 1 is `cell-runtime anchor` | Clones/refreshes the repo, **keeps the resident product preview running** (supervised, backoff restart), maintains the knowledge directory, heartbeats, reaps zombies |
-| **Workspace PVC** | The Cell's warm state | Layout below — checkout, per-session worktrees, knowledge, runtime state |
-| **Preview Service** | ClusterIP → anchor | `celld` reverse-proxies it at `/preview/<cell>/` so the browser only ever talks to the platform |
-| **Session pods** (0…maxSessions) | PID 1 is `cell-runtime session` | One per active work session: creates its worktree, runs the agent CLI headless with per-session credentials, `resources.limits` = the slot budget |
-| **Settle jobs** | `cell-runtime settle` | The mandatory reckoning: autosave → push `session/<id>` if produced → reclaim worktree → verdict via termination message |
-| **Secrets** | `agentcell-git`, `cred-<session>` | Forge credential (anchor + settle only) and per-session model keys (that session only) |
-
-Workspace PVC layout:
-
-```
-/workspace
-├── repo/                  # main checkout — the shared git object store,
-│                          #   and what the preview serves by default
-├── .cells/<session-id>/   # one git worktree per active session (reclaimed at settle)
-│   └── .agentcell/
-│       ├── TASK.md        # this session's work order (+ pointers below)
-│       └── PRODUCT.md     # snapshot of the product description at dispatch
-├── knowledge/             # persistent, session-shared knowledge (see below)
-└── .agentcell/heartbeat   # anchor liveness
-```
-
-## Knowledge: what a Cell knows today
-
-Three layers, all real, all deliberately file-based (an agent's native food):
-
-1. **Product description** — lives on the Cell (`spec.description`), edited in the UI while watching the preview. Injected into **every** session as `.agentcell/PRODUCT.md`, so the agent always knows what the product is supposed to be.
-2. **The repository itself** — code, docs, and settled `session/*` branches are the ground truth that survives everything.
-3. **`/workspace/knowledge/`** — a persistent directory on the PVC, outside the checkout, shared across sessions. Every session's `TASK.md` tells the agent: read it before starting, distill reusable learnings (conventions, pitfalls, decisions) back into it as markdown. It survives session reclaim and even `cell rebuild` (it's on the PVC).
-
-Not built yet (roadmap): indexed retrieval over the knowledge directory for large corpora, automatic distillation of review feedback into knowledge, and cross-Cell shared knowledge. The file-based contract above is designed so those bolt on without changing the session contract.
-
-## Two zones: dev/test merged, production isolated
-
-Each Cell has exactly two zones — development and testing are deliberately one zone, and production is structurally out of its reach:
-
-| | Dev zone(开发区)`/preview/<cell>/` | Production(正式区)`/app/<cell>/` |
-|---|---|---|
-| What it serves | Main checkout or a followed session's worktree — live, messy, restartable | A release checkout, immutable until the next release |
-| Storage | Shared workspace PVC | **Own emptyDir, fresh `--depth 1` clone of the release ref** — never mounts the PVC |
-| Process | Anchor pod's supervised dev server | Separate Deployment + Service |
-| Changes when | Every commit, every followed session, every preview restart | **Only on an explicit release** (UI button / `cellctl release <cell> [--ref v1.2]` / API) |
-
-Because the prod pod shares no volume and no process with the dev zone, dev debugging — crashed previews, dirty worktrees, force-killed sessions — cannot change what production serves. Honest scope of that claim today: the isolation is **storage- and process-level**; both zones still share the namespace, the network and the devbox image (NetworkPolicy and a hardened prod image are on the roadmap). The git token exists only in the prod pod's clone init container — the serving container runs credential-free. `ref` accepts a branch, tag or commit SHA; the resolved SHA is recorded in `/prodspace/RELEASE_SHA` and the pod log. A release stamps a new `releaseID`, which rolls the prod pod, which re-clones the ref: rollback is `cellctl release <cell> --ref <previous-tag-or-sha>`.
-
-## Session lifecycle
-
-```mermaid
-flowchart LR
-    Q[Queued<br/>slots full] --> R[Running<br/>worktree + agent pod]
-    D[dispatch] --> R
-    R -->|agent exits / TTL / user settles / pod dies| S[Settling<br/>settle job]
-    S -->|commits produced| OK[Settled<br/>branch session/id pushed]
-    S -->|nothing produced| X[Discarded]
-    OK & X --> C[worktree + credentials reclaimed]
-```
-
-Deleting a Session CR is safe at any moment: a finalizer guarantees settle runs first.
-
-## Security model (and its current honest limits)
-
-- Namespace per project; session pods run with pod-level CPU/memory limits.
-- Model keys: per-session Secret + `$(VAR)` indirection — the literal never appears in a pod spec (unit-tested).
-- Forge tokens: with the **git-broker** on (default, [ADR-0005](docs/adr/0005-git-broker.md)), **no workload pod holds the forge token at all** — anchor / settle / prod-clone reach git through the broker and authenticate with their ServiceAccount token; the broker (the one component holding credentials) injects the real token and enforces a session-branch-only push policy. A leaked SA token only permits git on that cell's own repo, never the PAT. Session pods never touch git credentials in either mode.
-- **Trust model within a project:** all sessions of one Cell share the workspace PVC (that's what makes worktrees share one object store), so a session can read the main checkout, other worktrees, and the knowledge dir. Isolation is strong *between* projects (namespaces), advisory *within* one.
-- All platform-rendered pods run non-root (uid 1000, seccomp RuntimeDefault, drop-ALL caps, no privilege escalation); the stock devbox image sets `USER node`. Planned (M8+): NetworkPolicy per cell namespace, Pod Security restricted labels, optional RuntimeClass (Kata/gVisor) hard-isolation tier.
-
-## Providers out of the box
-
-`configs/providers.yaml`, overridable via `/etc/agentcell/providers.d/` — adding a cloud is YAML, not code:
-
-| Provider | Region | Protocols |
-|---|---|---|
-| Alibaba Cloud Bailian (Qwen) | cn | openai + anthropic (Claude Code proxy) |
-| Tencent Hunyuan | cn | openai |
-| DeepSeek | cn | openai + anthropic |
-| Moonshot Kimi | cn | openai + anthropic |
-| Zhipu GLM | cn | openai + anthropic |
-| Anthropic / OpenAI / OpenRouter | global | native |
-
-Runners: `claude`, `codex`, `pi`. A (runner, provider, model) binding is valid iff their protocol sets intersect — checked at dispatch time.
+| agent-sandbox substrate · Helm chart · multi-node RWX | ⬜ designed |
 
 ## Quick start
 
-For a production-oriented walkthrough (secrets, ingress/TLS, storage,
-multi-node, upgrades, troubleshooting) see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
-The condensed version:
-
 ```sh
-# 1. Build the images and import them into the cluster's containerd
-#    (k3s does not see your local podman storage)
+# 1. Build images and import them into the cluster (single node: k3s)
 make build build-runtime-static
-podman build -t ghcr.io/agentcell/celld  -f images/celld/Containerfile .
-podman build -t ghcr.io/agentcell/devbox -f images/devbox/Containerfile .
-podman save ghcr.io/agentcell/celld ghcr.io/agentcell/devbox \
-  | sudo k3s ctr images import -
+podman build -t ghcr.io/agentcell/celld      -f images/celld/Containerfile .
+podman build -t ghcr.io/agentcell/git-broker -f images/git-broker/Containerfile .
+podman build -t ghcr.io/agentcell/devbox     -f images/devbox/Containerfile .
+for i in celld git-broker devbox; do podman save ghcr.io/agentcell/$i | sudo k3s ctr images import -; done
 
-# 2. Install into any cluster (single machine: `curl -sfL https://get.k3s.io | sh -`)
+# 2. Install the control plane (curl -sfL https://get.k3s.io | sh - for k3s)
 kubectl apply -f config/crd/ -f config/install.yaml
 
-# 2b. Set an API access token (celld refuses to start unauthenticated
-#     unless --allow-no-auth). Rotate by putting several tokens in the file.
-kubectl -n agentcell-system create secret generic celld-tokens \
-  --from-literal=tokens="$(openssl rand -hex 24)"
-#     install.yaml mounts this at /etc/agentcell/auth/tokens.
-
-# 3. Create the credentials your sessions will burn
+# 3. Secrets: API token, git credential (bound to its repo), model key
+kubectl -n agentcell-system create secret generic celld-tokens --from-literal=tokens="$(openssl rand -hex 24)"
+kubectl -n agentcell-system create secret generic git-cred --type=kubernetes.io/basic-auth \
+  --from-literal=username=bot --from-literal=password=ghp_... \
+  --from-literal=repo_url=https://github.com/you/shop.git
 kubectl -n agentcell-system create secret generic bailian-key --from-literal=key=sk-...
-kubectl -n agentcell-system create secret generic git-cred \
-  --type=kubernetes.io/basic-auth --from-literal=username=bot --from-literal=password=ghp_... \
-  --from-literal=repo_url=https://github.com/you/shop.git   # required: binds the credential to this repo
+kubectl -n agentcell-system rollout restart deploy/celld
 
-# 4. A cell with a resident product preview
+# 4. A Cell with a resident preview, then dispatch and watch it live
 cellctl cell create shop --repo https://github.com/you/shop.git \
   --image ghcr.io/agentcell/devbox --secret git-cred \
-  --preview "npm run dev -- --host" --preview-port 5173 \
-  --description "极简版电商:商品列表 + 购物车"
+  --preview "npm run dev -- --host" --preview-port 5173 --description "极简电商"
+cellctl dispatch shop --task "把商品卡片改成两列" \
+  --runner claude --provider aliyun-bailian --model qwen3-coder-plus --cred bailian-key --follow
 
-# 5. Dispatch work and watch it live
-cellctl dispatch shop --task "把商品卡片改成两列布局" \
-  --runner claude --provider aliyun-bailian --model qwen3-coder-plus \
-  --cred bailian-key --follow
+# 5. Open the UI
+kubectl -n agentcell-system port-forward svc/celld 8080:80   # http://localhost:8080, log in with the token
 ```
 
-Open celld (`kubectl -n agentcell-system port-forward svc/celld 8080:80`) at `http://localhost:8080`.
+Production walkthrough (ingress/TLS, storage, upgrades, troubleshooting):
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ## Components
 
-- **`celld`** — controller-manager for the `Cell`/`Session` CRDs + HTTP surface (calibration UI, control API, preview reverse proxy).
-- **`cell-runtime`** — static multi-call binary baked into devbox images: `anchor`, `session`, `settle`, `askpass`.
-- **`cellctl`** — operator CLI: `cells`, `cell create`, `dispatch`, `sessions`, `settle`.
+- **`celld`** — operator for the `Cell`/`Session` CRDs + HTTP surface (UI,
+  API, preview/app reverse proxy).
+- **`git-broker`** — the only component holding forge credentials; an
+  authenticating git proxy.
+- **`cell-runtime`** — static multi-call binary, PID 1 of anchor/session/prod
+  pods.
+- **`cellctl`** — operator CLI.
 
-Deploy anywhere conformant: bring-your-own K8s (k3s single node = on-prem private cloud quick path) or managed K8s — Alibaba ACK / Tencent TKE presets planned in `deploy/presets/` ([ADR-0003](docs/adr/0003-kubernetes-foundation.md)).
+Deploy on any conformant Kubernetes: bring-your-own (single-node k3s for
+on-prem private cloud) or managed (Alibaba ACK / Tencent TKE), per
+[ADR-0003](docs/adr/0003-kubernetes-foundation.md).
 
 ## Docs
 
-- [Architecture](docs/ARCHITECTURE.md) — diagrams of the control plane, Cell, lifecycle, git-broker
-- [Deployment](docs/DEPLOYMENT.md) · [Roadmap](docs/ROADMAP.md) · [ADRs](docs/adr/) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Architecture](docs/ARCHITECTURE.md) · [Deployment](docs/DEPLOYMENT.md) ·
+[Roadmap](docs/ROADMAP.md) · [ADRs](docs/adr/) ·
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) ·
+[good first issues](https://github.com/zippo1908/agentcell/labels/good%20first%20issue)
 
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
-
----
-
-# AgentCell(中文)
-
-**AI 开发员工的车间:每个项目一个常驻实例(Cell),会话是实例内的一次性工位(Slot),实例自带常驻产品预览让人"边看边校准"。SDLC 环节中,派工 → 干活 → 清算(推 `session/*` 分支)→ 双区发布已实现;批阅队列 → PR 在路线图(M7/M9),与英文版状态表一致。**
-
-> 状态:**pre-alpha**。全链路纵切片(Operator、运行时、常驻预览、校准 UI、CLI)已完成并通过单测;当前里程碑是真机 e2e。详见 [docs/PLAN.md](docs/PLAN.md)。
-
-## 一个实例上到底有什么?
-
-建一个 `Cell` CR,就会在专属命名空间 `cell-<name>` 里长出:
-
-| 部件 | 是什么 | 干什么 |
-|---|---|---|
-| **锚点 Pod**(StatefulSet ×1) | PID 1 = `cell-runtime anchor` | 克隆/刷新仓库;**常驻跑产品 dev server**(监管+退避重启);维护知识目录;心跳;收僵尸进程 |
-| **workspace PVC** | Cell 的热状态 | 目录布局见下——主检出、各会话 worktree、知识库、运行时状态 |
-| **preview Service** | ClusterIP → 锚点 | `celld` 反代成 `/preview/<cell>/`,浏览器只跟平台打交道 |
-| **会话 Pod**(0…maxSessions 个) | PID 1 = `cell-runtime session` | 每单一个:建 worktree、带 per-session 凭据 headless 跑 agent CLI,`resources.limits` 就是槽位限额 |
-| **结算 Job** | `cell-runtime settle` | 强制清算:补提交 → 有产出推 `session/<id>` 分支 → 回收 worktree → 结论走 termination message 回报 |
-| **Secret** | `agentcell-git`、`cred-<会话>` | forge 凭据(只给锚点和结算)和模型 key(只给该会话) |
-
-workspace PVC 布局:
-
-```
-/workspace
-├── repo/                  # 主检出——共享 git 对象库,也是预览默认服务的目录
-├── .cells/<会话id>/        # 每个活跃会话一个 worktree(清算时回收)
-│   └── .agentcell/
-│       ├── TASK.md        # 本单工单(含下述指路)
-│       └── PRODUCT.md     # 派工时刻的产品描述快照
-├── knowledge/             # 持久知识目录,跨会话共享(见下节)
-└── .agentcell/heartbeat   # 锚点心跳
-```
-
-## 知识:现在一个 Cell 知道什么?
-
-三层,全部已实现,刻意做成纯文件(agent 的母语):
-
-1. **产品描述** —— 挂在 Cell 上(`spec.description`),你在 UI 里边看预览边改。**每单派工都注入**成会话里的 `.agentcell/PRODUCT.md`,agent 永远知道产品该长什么样。
-2. **仓库本身** —— 代码、文档、清算出的 `session/*` 分支,是什么都冲不掉的真相层。
-3. **`/workspace/knowledge/`** —— PVC 上、检出之外的持久目录,跨会话共享。每单的 `TASK.md` 都写明:开工前浏览,收工把可复用经验(约定、坑、决策)沉淀成 md 放回去。会话回收不影响它,`cell rebuild` 也不影响(它在 PVC 上)。
-
-尚未做(路线图):知识目录的索引检索(大语料)、批阅意见自动蒸馏进知识、跨 Cell 共享知识。文件契约是特意设计好的,这些能力叠上去不需要改会话协议。
-
-## 双区模型:开发测试合一,正式区结构性隔离
-
-每个 Cell 恰好两个区——开发和测试刻意合并成一个区,正式区在结构上就够不着它:
-
-| | 开发区 `/preview/<cell>/` | 正式区 `/app/<cell>/` |
-|---|---|---|
-| 服务内容 | 主检出或跟随中会话的 worktree——活的、乱的、随便重启 | 发布检出,到下次发布前不可变 |
-| 存储 | 共享 workspace PVC | **自己的 emptyDir,发布 ref 的全新浅克隆——永不挂 PVC** |
-| 进程 | 锚点 Pod 里被监管的 dev server | 独立 Deployment + Service |
-| 何时变化 | 每个提交、每次会话跟随、每次预览重启 | **仅显式发布时**(UI 按钮 / `cellctl release` / API) |
-
-正式区 Pod 与开发区零共享卷、零共享进程——预览崩了、worktree 脏了、会话被强杀,都改不了正式区在服务的东西。**当前隔离的诚实边界:是存储与进程级隔离;两区仍同 Namespace、同网络、同 devbox 镜像(NetworkPolicy、硬化镜像在路线图)。git 令牌只存在于 prod Pod 的克隆 init 容器,服务容器零凭据;`ref` 支持分支/标签/SHA,解析出的 SHA 记录在 `/prodspace/RELEASE_SHA`。**发布 = 盖一个新 `releaseID` → prod Pod 滚动 → 重新克隆 ref;回滚就是 `cellctl release <cell> --ref <上一个tag>`。
-
-## 会话生命周期
-
-派工(槽满则排队)→ 干活(worktree + agent Pod)→ 清算(agent 退出/TTL/手动结算/Pod 死亡都触发)→ 有产出=推 `session/<id>` 分支待批阅,无产出=丢弃 → worktree 与凭据回收。删除 Session CR 任何时刻都安全:finalizer 保证清算先跑。
-
-## 校准闭环(这个产品的核心体验)
-
-UI 左右分屏:左边是**产品描述编辑器 + 派工表单 + 会话列表**,右边是**常驻产品预览**。派工时勾"预览跟随这单",预览就切到该会话的 worktree——你实时看 agent 改到哪了,随手改描述,再派下一单。描述的每次校准都会进入后续所有会话的 `PRODUCT.md`。
-
-## 安全模型 / 服务商预置 / 快速上手 / 组件
-
-同英文版对应章节:凭据按会话经 Secret 间接注入(单测保证字面 key 不进 pod spec);git 令牌只经 askpass 进锚点与结算、不落 `.git/config`;阿里百炼/腾讯混元/DeepSeek/Kimi/智谱开箱即用,加新云=加一段 yaml;部署二选一——自带 K8s(单机 k3s)或云厂商托管(ACK/TKE 预置在路上)。
