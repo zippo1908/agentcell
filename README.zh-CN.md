@@ -61,7 +61,21 @@ flowchart TB
 | 终端 attach(tmux over WebSocket) | ⬜ 设计中(M5) |
 | agent-sandbox 底座 · Helm chart · 多节点 RWX | ⬜ 设计中 |
 
-## 快速上手
+## 一条命令安装
+
+镜像与 chart 都发布在 GHCR,集群能联网就无需本地构建:
+
+```sh
+helm install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
+  --namespace agentcell-system --create-namespace \
+  --set celld.auth.tokens="{$(openssl rand -hex 24)}"
+```
+
+k3s / 阿里 ACK / 腾讯 TKE 预置:`-f deploy/presets/<名字>.yaml`。装完按 chart
+输出的提示创建 git 凭据、模型 key 和第一个 Cell。完整说明见
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+
+## 从源码构建
 
 ```sh
 # 1. 构建镜像并导入集群(单机走 k3s)

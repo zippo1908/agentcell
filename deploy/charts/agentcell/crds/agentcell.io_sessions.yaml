@@ -1,0 +1,60 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sessions.agentcell.io
+spec:
+  group: agentcell.io
+  names:
+    kind: Session
+    listKind: SessionList
+    plural: sessions
+    singular: session
+    shortNames: [sess]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Cell
+          type: string
+          jsonPath: .spec.cell
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Branch
+          type: string
+          jsonPath: .status.branch
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [cell, task, runner, provider, credentialSecret]
+              properties:
+                cell: {type: string}
+                task: {type: string}
+                runner: {type: string}
+                provider: {type: string}
+                model: {type: string}
+                credentialSecret: {type: string}
+                ttlSeconds: {type: integer, format: int64, minimum: 60}
+                followPreview: {type: boolean}
+            status:
+              type: object
+              properties:
+                phase: {type: string}
+                sessionID: {type: string}
+                podName: {type: string}
+                branch: {type: string}
+                produced: {type: boolean}
+                startTime: {type: string, format: date-time}
+                message: {type: string}
+                reviewState: {type: string, enum: ["", "Pending", "Approved", "Rejected"]}
+                reviewNote: {type: string}
+                prURL: {type: string}
+                prNumber: {type: integer}
+                prState: {type: string}

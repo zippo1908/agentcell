@@ -1,0 +1,13 @@
+apiVersion: v2
+name: agentcell
+description: A workshop for AI coding agents — resident Cell per project, disposable session slots, SDLC loop closed in-instance
+type: application
+version: 0.1.0
+appVersion: "v0.1.0-alpha.3"
+home: https://github.com/zippo1908/agentcell
+sources:
+  - https://github.com/zippo1908/agentcell
+keywords: [ai, agents, kubernetes, operator, sdlc, coding-agent]
+maintainers:
+  - name: AgentCell authors
+    url: https://github.com/zippo1908/agentcell

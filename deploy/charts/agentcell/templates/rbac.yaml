@@ -1,0 +1,113 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.celldName }}
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+{{- if .Values.gitBroker.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.brokerName }}
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-celld
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells", "sessions"]
+    verbs: ["*"]
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells/status", "sessions/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods", "serviceaccounts"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "deployments"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-celld
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Name }}-celld}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.celldName }}
+    namespace: {{ .Values.controlNamespace }}
+{{- if .Values.gitBroker.enabled }}
+---
+# Cluster scope: TokenReview + read pods (uid/owner verification across
+# dynamic cell-* namespaces). Deliberately NO cluster-wide secret access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-git-broker
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-git-broker
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Name }}-git-broker}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.brokerName }}
+    namespace: {{ .Values.controlNamespace }}
+---
+# Namespaced: Cell CRs and forge Secrets only in the control namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-git-broker
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-git-broker
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-git-broker}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.brokerName }}
+    namespace: {{ .Values.controlNamespace }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,5 @@
+# Single-node k3s (on-prem private cloud quick path).
+storage:
+  className: local-path
+celld:
+  service: {type: ClusterIP}

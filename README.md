@@ -69,7 +69,22 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
 | agent-sandbox substrate · Helm chart · multi-node RWX | ⬜ designed |
 
-## Quick start
+## Install (one command)
+
+Published images and chart live on GHCR, so a cluster with internet access
+needs nothing built locally:
+
+```sh
+helm install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
+  --namespace agentcell-system --create-namespace \
+  --set celld.auth.tokens="{$(openssl rand -hex 24)}"
+```
+
+Presets for k3s / Alibaba ACK / Tencent TKE: `-f deploy/presets/<name>.yaml`.
+Then create the git credential + model key and your first Cell (the chart
+prints the exact commands). Full walkthrough: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+## Build from source
 
 ```sh
 # 1. Build images and import them into the cluster (single node: k3s)

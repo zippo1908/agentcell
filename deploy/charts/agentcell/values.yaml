@@ -1,0 +1,55 @@
+# AgentCell default values. See deploy/presets/ for k3s / ACK / TKE overlays.
+
+# Namespace holding the control plane and Cell/Session CRs.
+controlNamespace: agentcell-system
+
+image:
+  registry: ghcr.io/zippo1908
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+celld:
+  replicas: 1        # celld has no leader election — keep at 1
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  service:
+    type: ClusterIP
+    port: 80
+  # Access tokens for the HTTP surface. Either provide them here (they are
+  # written into a Secret) or set existingSecret to one you created.
+  auth:
+    tokens: []           # e.g. ["<random-hex>"]
+    existingSecret: ""   # Secret with key "tokens"
+    # Refuse-to-start is the default; only set for throwaway dev clusters.
+    allowNoAuth: false
+
+# git-broker: the only component holding forge credentials (ADR-0005).
+gitBroker:
+  enabled: true
+  replicas: 1
+  enforceRefPolicy: true   # pushes limited to create-only session/<id>
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tls:
+    enabled: false
+    secretName: ""
+  annotations: {}
+
+# Storage defaults applied to Cells that don't set their own.
+storage:
+  className: ""       # "" = cluster default; set an RWX class for multi-node
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  celldName: celld
+  brokerName: git-broker
