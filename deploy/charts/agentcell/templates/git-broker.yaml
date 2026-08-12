@@ -16,6 +16,10 @@ spec:
         {{- include "agentcell.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.brokerName }}
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

@@ -45,6 +45,8 @@ func main() {
 			"directory of provider preset overlays (*.yaml)")
 		gitBrokerURL = flag.String("git-broker-url", os.Getenv("AGENTCELL_GIT_BROKER"),
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
+		imagePullSecret = flag.String("image-pull-secret", os.Getenv("AGENTCELL_IMAGE_PULL_SECRET"),
+			"name of a docker-registry Secret in the control namespace, mirrored into each Cell namespace so private-registry images can be pulled")
 		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
 			"file of API access tokens (whitespace-separated); enables auth when present")
 		trustForwarded = flag.Bool("trust-forwarded-headers", false,
@@ -86,7 +88,12 @@ func main() {
 		log.Error(err, "new manager")
 		os.Exit(1)
 	}
-	if err := (&controller.CellReconciler{Client: mgr.GetClient(), GitBrokerURL: *gitBrokerURL}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.CellReconciler{
+		Client:           mgr.GetClient(),
+		GitBrokerURL:     *gitBrokerURL,
+		ControlNamespace: *controlNS,
+		ImagePullSecret:  *imagePullSecret,
+	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup cell controller")
 		os.Exit(1)
 	}
