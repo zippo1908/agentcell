@@ -79,10 +79,21 @@ func (r *SessionReconciler) ensureUserRuntime(ctx context.Context, cell *acv1.Ce
 		return nil
 	})
 	if err != nil {
-		return false, err
+		// Two sessions starting together both read "absent" from the cache
+		// and both create. Losing that race is the runtime existing, which is
+		// the goal — not a failure. Same family as the read-after-create miss
+		// below: this client is cache-backed, so absence is never proof.
+		if !apierrors.IsAlreadyExists(err) {
+			return false, err
+		}
 	}
 	var live corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &live); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Just created: the client reads through an informer cache, which
+			// has not seen it yet. Not an error — not ready yet.
+			return false, nil
+		}
 		return false, err
 	}
 	for _, c := range live.Status.ContainerStatuses {
@@ -163,7 +174,13 @@ func (r *SessionReconciler) reapUserRuntime(ctx context.Context, ns string, uid 
 		if s.Spec.Cell != cell || !s.Spec.Resident || s.DeletionTimestamp != nil {
 			continue
 		}
-		if s.Status.Phase == acv1.SessionRunning || s.Status.Phase == acv1.SessionQueued {
+		// In use is everything that is not finished — including a session that
+		// has no phase yet, which is precisely the one being started right
+		// now. Reaping on "not Running" killed a runtime out from under a
+		// session that was still coming up.
+		switch s.Status.Phase {
+		case acv1.SessionSettled, acv1.SessionDiscarded, acv1.SessionError:
+		default:
 			return nil // still in use
 		}
 	}

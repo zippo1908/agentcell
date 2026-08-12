@@ -167,3 +167,116 @@ func TestModelCredentialNeverAppearsInArgv(t *testing.T) {
 		t.Errorf("the task text did not cross the exec channel: %q", call.stdin)
 	}
 }
+
+// A runtime is reclaimed when its user has nothing open — but "nothing open"
+// has to include a session that is still starting. Reaping on "not Running"
+// deleted the runtime out from under a session that was coming up, and the
+// real cluster showed it as `Pod "runtime-100002" not found`.
+func TestRuntimeIsNotReapedWhileASessionIsStarting(t *testing.T) {
+	starting := residentSession("sess-a", "u-aaaa1111", "still coming up") // no phase yet
+	finished := residentSession("sess-b", "u-aaaa1111", "done")
+	finished.Status.Phase = acv1.SessionSettled
+	c := newFake(t, testCell(), credSecret("bailian-key"), starting, finished)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = (&recorder{}).exec
+
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, err := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reapUserRuntime(ctx, ns, uid, "shop"); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod); err != nil {
+		t.Fatalf("the runtime was reaped while a session was still starting: %v", err)
+	}
+
+	// Once every session has finished, it goes away.
+	starting.Status.Phase = acv1.SessionDiscarded
+	if err := c.Status().Update(ctx, starting); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reapUserRuntime(ctx, ns, uid, "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod); err == nil {
+		t.Error("the runtime outlived every session that needed it")
+	}
+}
+
+// The pod is created through a cache-backed client, so reading it straight
+// back can miss. That is "not ready yet", not a failure — treating it as one
+// failed the first session of every runtime.
+func TestFreshRuntimeIsNotReadyRatherThanMissing(t *testing.T) {
+	c := newFake(t, testCell(), credSecret("bailian-key"))
+	r := sessionReconciler(t, c)
+	ready, err := r.ensureUserRuntime(context.Background(), testCell(), ids.WorkloadNamespace("shop"), 100001)
+	if err != nil {
+		t.Fatalf("a just-created runtime reported an error: %v", err)
+	}
+	if ready {
+		t.Error("a runtime with no ready container reported ready")
+	}
+}
+
+// A resident session's host is its owner's runtime, and the status has to say
+// so: every later lookup — state, follow-ups, attach — goes through PodName.
+// Overwriting it with the session's own name pointed all of them at a pod
+// that does not exist, and the session quietly behaved like a one-shot.
+func TestResidentSessionRecordsItsRuntimeAsHost(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = (&recorder{}).exec
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	ns := ids.WorkloadNamespace("shop")
+	var pod corev1.Pod
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	for range 2 {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got acv1.Session
+	if err := c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.PodName != ids.UserRuntimePod(uid) {
+		t.Errorf("host = %q, want the user's runtime %q", got.Status.PodName, ids.UserRuntimePod(uid))
+	}
+}
+
+// Two of a user's sessions starting at once both read "no runtime" from the
+// cache and both create one. Losing that race is the runtime existing, which
+// is the goal — treating it as an error failed one of the two sessions with
+// `pods "runtime-100002" already exists`.
+func TestConcurrentStartsDoNotFailOnTheLosingCreate(t *testing.T) {
+	c := newFake(t, testCell(), credSecret("bailian-key"))
+	r := sessionReconciler(t, c)
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, 100002); err != nil {
+		t.Fatal(err)
+	}
+	// A second caller that did not see the first one's write.
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, 100002); err != nil {
+		t.Errorf("the second session failed on an existing runtime: %v", err)
+	}
+}

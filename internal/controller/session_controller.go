@@ -234,7 +234,13 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 
 	now := metav1.Now()
 	sess.Status.Phase = acv1.SessionRunning
-	sess.Status.PodName = ids.SessionName(id)
+	// Only a one-shot session has a pod of its own; a resident one already
+	// recorded the runtime that hosts its window, and overwriting that sent
+	// every later lookup — status, follow-ups, attach — to a pod that does
+	// not exist.
+	if !sess.Spec.Resident {
+		sess.Status.PodName = ids.SessionName(id)
+	}
 	sess.Status.StartTime = &now
 	sess.Status.Message = ""
 	if err := r.Status().Update(ctx, sess); err != nil {

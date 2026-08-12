@@ -250,7 +250,7 @@ func runTell(args []string) error {
 	}
 	id, args := args[0], args[1:]
 	sock := ids.TmuxSocket(int64(os.Getuid()))
-	if err := sendCommand(sock, ids.TmuxWindow(id), args, true, id); err != nil {
+	if err := sendCommand(sock, ids.TmuxWindow(id), args, true, id, ""); err != nil {
 		return err
 	}
 	fmt.Println("sent")

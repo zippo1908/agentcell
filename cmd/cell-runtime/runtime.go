@@ -109,17 +109,52 @@ func runWindowOpen(args []string) error {
 	}
 	sock := ids.TmuxSocket(uid)
 	window := ids.TmuxWindow(id)
-	open := []string{"new-window", "-d", "-t", ids.TmuxHolder, "-n", window, "-c", wt}
-	for _, kv := range env {
-		open = append(open, "-e", kv)
+	// Idempotent: a reconciler retries, and a second window for one session
+	// would run the agent twice against the same worktree.
+	if out, err := tmux(sock, "list-windows", "-a", "-F", "#{window_name}"); err == nil {
+		for _, name := range strings.Split(out, "\n") {
+			if strings.TrimSpace(name) == window {
+				fmt.Printf("window %s already open\n", window)
+				return nil
+			}
+		}
 	}
-	if out, err := tmux(sock, open...); err != nil {
+	// The environment goes through a 0600 file the window sources and then
+	// unlinks — NOT through `tmux new-window -e`, which would put the model
+	// key in the tmux client's argv and therefore in /proc for every other
+	// window this user has open. That is the exposure this whole path exists
+	// to avoid; putting it back one layer down would be pointless.
+	envFile := filepath.Join(ids.UserHome(uid), "env-"+id)
+	if err := writeEnvFile(envFile, env); err != nil {
+		return err
+	}
+	if out, err := tmux(sock, "new-window", "-d", "-t", ids.TmuxHolder, "-n", window, "-c", wt); err != nil {
+		_ = os.Remove(envFile)
 		return fmt.Errorf("tmux new-window: %v: %s", err, out)
 	}
-	if err := sendCommand(sock, window, argv, true, id); err != nil {
+	if err := sendCommand(sock, window, argv, true, id, envFile); err != nil {
 		return err
 	}
 	fmt.Printf("window %s opened in %s\n", window, wt)
+	return nil
+}
+
+// writeEnvFile lays down the window's environment, readable only by its
+// owner. Created with O_EXCL so a stale file from a previous attempt cannot
+// be silently reused, and 0600 before anything is written to it.
+func writeEnvFile(path string, env []string) error {
+	_ = os.Remove(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("window environment: %w", err)
+	}
+	defer f.Close()
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if _, err := fmt.Fprintf(f, "export %s=%s\n", k, shellQuote(v)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -138,11 +173,17 @@ func runWindowClose(args []string) error {
 
 // sendCommand types a command into a window. resetDone clears the completion
 // marker first, so "is it still working?" answers about this run.
-func sendCommand(sock, window string, argv []string, resetDone bool, sessionID string) error {
+func sendCommand(sock, window string, argv []string, resetDone bool, sessionID, envFile string) error {
 	line := shellJoin(argv)
 	if resetDone {
 		marker := shellQuote(runtimeapi.DoneMarkerFor(sessionID))
 		line = "rm -f " + marker + "; " + line + "; printf '%s' \"$?\" > " + marker
+	}
+	if envFile != "" {
+		// Sourced and unlinked in one go: the key lives in the window's
+		// environment, and nowhere on disk a moment longer than it must.
+		q := shellQuote(envFile)
+		line = ". " + q + "; rm -f " + q + "; " + line
 	}
 	// C-u first: never concatenate onto a half-typed line.
 	if out, err := tmux(sock, "send-keys", "-t", window, "C-u"); err != nil {
