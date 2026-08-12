@@ -1,11 +1,14 @@
 package webui
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/zippo1908/agentcell/internal/identity"
 )
 
 // Authenticator gates the HTTP surface with static bearer tokens. Tokens
@@ -16,6 +19,15 @@ import (
 // are a later layer that can wrap or replace this.
 type Authenticator struct {
 	tokens map[string]struct{}
+	// OIDC, when configured, is the real identity layer; static tokens are
+	// demoted to break-glass and CI (ADR-0008).
+	OIDC *identity.OIDC
+	// keyMaterial seeds the preview ticket key alongside the tokens. It
+	// exists because the tokens alone are not a safe seed once a deployment
+	// can authenticate with OIDC and configure no tokens at all: the digest
+	// of an empty token set is a publicly derivable constant, and preview
+	// tickets signed with it would be forgeable by anyone.
+	keyMaterial []byte
 	// TrustForwardedHeaders enables X-Forwarded-Proto/Host. Off by default:
 	// if celld is reachable without the proxy — or the proxy forwards
 	// client-supplied values instead of overwriting them — an attacker
@@ -36,7 +48,27 @@ func NewAuthenticator(raw string) *Authenticator {
 			tokens[t] = struct{}{}
 		}
 	}
-	return &Authenticator{tokens: tokens}
+	return &Authenticator{tokens: tokens, keyMaterial: freshKeyMaterial()}
+}
+
+// freshKeyMaterial backs the preview ticket key when nothing else does. It
+// is regenerated per process, so preview sessions do not survive a celld
+// restart — a deliberate trade: a forgeable ticket is a security bug, a
+// re-issued ticket is a redirect.
+func freshKeyMaterial() []byte {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("webui: crypto/rand unavailable: " + err.Error())
+	}
+	return b
+}
+
+// SetKeyMaterial pins the preview signing seed to operator-provided bytes so
+// tickets stay valid across restarts and across replicas.
+func (a *Authenticator) SetKeyMaterial(b []byte) {
+	if len(b) > 0 {
+		a.keyMaterial = b
+	}
 }
 
 // sortedTokens returns the configured tokens in a stable order so derived
@@ -50,8 +82,28 @@ func (a *Authenticator) sortedTokens() []string {
 	return out
 }
 
-// Enabled reports whether any token is configured.
-func (a *Authenticator) Enabled() bool { return len(a.tokens) > 0 }
+// Enabled reports whether the HTTP surface is gated at all — by static
+// tokens, by an identity provider, or both.
+func (a *Authenticator) Enabled() bool {
+	return len(a.tokens) > 0 || a.OIDC.Configured()
+}
+
+// resolve turns a presented credential into a principal. An OIDC token is
+// only ever accepted after full verification; a static token resolves to the
+// single shared break-glass identity.
+func (a *Authenticator) resolve(r *http.Request, presented string) (identity.Principal, bool) {
+	if a.OIDC.Configured() && identity.LooksLikeJWT(presented) {
+		p, err := a.OIDC.Verify(r.Context(), presented)
+		if err != nil {
+			return identity.Principal{}, false
+		}
+		return p, true
+	}
+	if a.valid(presented) {
+		return identity.StaticToken, true
+	}
+	return identity.Principal{}, false
+}
 
 // forwarded returns the header value only if forwarded headers are trusted.
 func (a *Authenticator) forwarded(r *http.Request, name string) string {
@@ -179,7 +231,8 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		token, viaCookie := credential(r)
-		if !a.valid(token) {
+		principal, ok := a.resolve(r, token)
+		if !ok {
 			// A browser navigation gets redirected to the login form; an
 			// API/CLI caller gets a clean 401.
 			if wantsHTML(r) {
@@ -196,7 +249,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(identity.NewContext(r.Context(), principal)))
 	})
 }
 
@@ -207,27 +260,114 @@ func wantsHTML(r *http.Request) bool {
 // LoginRoutes serves a minimal token-entry form that sets the session
 // cookie, so the browser UI works without a proxy injecting headers.
 func (a *Authenticator) LoginRoutes(mux *http.ServeMux) {
+	if a.OIDC.Configured() {
+		mux.HandleFunc("GET /login", a.oidcStart)
+		mux.HandleFunc("GET /auth/callback", a.oidcCallback)
+		// The token form stays reachable at an explicit path so an operator
+		// locked out by a broken IdP still has a way in.
+		mux.HandleFunc("GET /login/token", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(loginHTML)
+		})
+		mux.HandleFunc("POST /login/token", a.tokenLogin)
+		return
+	}
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(loginHTML)
 	})
-	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
-		tok := strings.TrimSpace(r.FormValue("token"))
-		if !a.valid(tok) {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write(loginHTML)
-			return
-		}
-		// Secure whenever the browser reached us over TLS (directly or via a
-		// trusted proxy); a plain-HTTP port-forward still works for dev.
-		secure := a.secureRequest(r)
-		http.SetCookie(w, &http.Cookie{
-			Name: consoleCookieName(secure), Value: tok, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
-			// No Domain: host-only, so a subdomain cannot receive it.
-		})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	mux.HandleFunc("POST /login", a.tokenLogin)
+}
+
+func (a *Authenticator) tokenLogin(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimSpace(r.FormValue("token"))
+	if !a.valid(tok) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write(loginHTML)
+		return
+	}
+	a.setSessionCookie(w, r, tok, 0)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// setSessionCookie stores a credential for the browser UI, which cannot
+// attach an Authorization header to navigations, iframes and asset loads.
+func (a *Authenticator) setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
+	// Secure whenever the browser reached us over TLS (directly or via a
+	// trusted proxy); a plain-HTTP port-forward still works for dev.
+	secure := a.secureRequest(r)
+	http.SetCookie(w, &http.Cookie{
+		Name: consoleCookieName(secure), Value: value, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
+		MaxAge: maxAge,
+		// No Domain: host-only, so a subdomain cannot receive it.
 	})
+}
+
+// oidcStateCookie holds the CSRF state and PKCE verifier between the
+// redirect out and the callback back. Keeping it in a host-only, HttpOnly
+// cookie rather than server memory means any celld replica can complete a
+// flow another one started.
+const oidcStateCookie = "agentcell_oidc_flow"
+
+// oidcRedirectURL is where the provider sends the browser back. Derived from
+// the console's own origin unless pinned, so a single value works for
+// port-forward, ingress and gateway deployments.
+func (a *Authenticator) oidcRedirectURL(r *http.Request) string {
+	if a.OIDC.RedirectURL != "" {
+		return a.OIDC.RedirectURL
+	}
+	return a.requestOrigin(r) + "/auth/callback"
+}
+
+func (a *Authenticator) oidcStart(w http.ResponseWriter, r *http.Request) {
+	state, verifier := identity.RandomString(16), identity.RandomString(32)
+	url, err := a.OIDC.AuthCodeURL(r.Context(), a.oidcRedirectURL(r), state, verifier)
+	if err != nil {
+		// A cold or unreachable IdP must not look like a rejected login.
+		http.Error(w, "identity provider unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	secure := a.secureRequest(r)
+	http.SetCookie(w, &http.Cookie{
+		Name: oidcStateCookie, Value: state + "|" + verifier, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
+		MaxAge: 600,
+	})
+	http.Redirect(w, r, url, http.StatusSeeOther)
+}
+
+func (a *Authenticator) oidcCallback(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(oidcStateCookie)
+	if err != nil {
+		http.Error(w, "login flow expired; start again", http.StatusBadRequest)
+		return
+	}
+	state, verifier, ok := strings.Cut(c.Value, "|")
+	// Constant-time compare: the state is the CSRF defence for the callback,
+	// so a timing oracle on it is worth avoiding even though it is short-lived.
+	if !ok || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 {
+		http.Error(w, "state mismatch", http.StatusBadRequest)
+		return
+	}
+	// Burn the flow cookie whatever happens next, so a code cannot be
+	// replayed against it.
+	http.SetCookie(w, &http.Cookie{Name: oidcStateCookie, Value: "", Path: "/", MaxAge: -1})
+
+	raw, err := a.OIDC.Exchange(r.Context(), a.oidcRedirectURL(r), r.URL.Query().Get("code"), verifier)
+	if err != nil {
+		http.Error(w, "login failed: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+	// Verify before trusting: the token came from the provider's token
+	// endpoint, but the session cookie is what every later request is judged
+	// on, so it must never hold something we have not checked ourselves.
+	if _, err := a.OIDC.Verify(r.Context(), raw); err != nil {
+		http.Error(w, "provider returned an unverifiable token: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+	a.setSessionCookie(w, r, raw, 0)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 var loginHTML = []byte(`<!doctype html><meta charset=utf-8>

@@ -36,6 +36,16 @@ spec:
               required: [cell, task, runner, provider, credentialSecret]
               properties:
                 cell: {type: string}
+                # Immutable by CRD validation rather than by the API handler,
+                # so it also holds for kubectl edits (ADR-0008). Transitions
+                # from empty are allowed once, to let a Session created before
+                # ownership existed be adopted deliberately.
+                ownerUserID:
+                  type: string
+                  maxLength: 63
+                  x-kubernetes-validations:
+                    - rule: "oldSelf == '' || self == oldSelf"
+                      message: "ownerUserID is immutable once set"
                 task: {type: string}
                 runner: {type: string}
                 provider: {type: string}

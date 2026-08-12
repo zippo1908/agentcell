@@ -9,6 +9,16 @@ import (
 type SessionSpec struct {
 	// Cell names the Cell CR (same namespace as this Session CR).
 	Cell string `json:"cell"`
+	// OwnerUserID is the principal that created this Session (ADR-0008). It
+	// is set once and never changes — the CRD enforces that, so it holds for
+	// kubectl edits too, not just for writes through the API.
+	//
+	// A Session is a user-private execution and memory boundary: transcript,
+	// checkpoint and worktree belong to this user alone. Sessions created
+	// before ownership existed have an empty value and are visible only to
+	// the static-token principal; guessing an owner that was never recorded
+	// would hand one user another user's work.
+	OwnerUserID string `json:"ownerUserID,omitempty"`
 	// Task is the work order handed to the agent.
 	Task string `json:"task"`
 	// Runner is the agent CLI: claude | codex | pi.
