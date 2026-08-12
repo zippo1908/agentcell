@@ -130,6 +130,12 @@ func (c *Client) CreatePull(ctx context.Context, cell, sessionID, title, body st
 	return c.call(ctx, cell, request{Op: "pull-create", SessionID: sessionID, Title: title, Body: body})
 }
 
+// FindPull returns the existing PR for session/<id> if there is one (any
+// state); Number == 0 means none. Used to make PR creation idempotent.
+func (c *Client) FindPull(ctx context.Context, cell, sessionID string) (*Result, error) {
+	return c.call(ctx, cell, request{Op: "pull-find", SessionID: sessionID})
+}
+
 // GetPull fetches a PR's current state (open | merged | closed).
 func (c *Client) GetPull(ctx context.Context, cell string, number int) (*Result, error) {
 	return c.call(ctx, cell, request{Op: "pull-get", Number: number})

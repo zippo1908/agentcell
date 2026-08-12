@@ -184,6 +184,35 @@ func (s *server) forgeCall(c *acv1.Cell, cred forgeCred, req forgeRequest) (*for
 		return &forgeResponse{URL: payload.HTMLURL, Number: payload.Number, State: payload.State},
 			http.StatusOK, nil
 
+	case "pull-find":
+		// Idempotency support: find an existing PR for this session's head
+		// branch regardless of state, so a create that succeeded but whose
+		// status write was lost can be recovered instead of re-created.
+		if req.SessionID == "" {
+			return nil, http.StatusBadRequest, fmt.Errorf("sessionID required")
+		}
+		u := fmt.Sprintf("%s/repos/%s/%s/pulls?state=all&head=%s:session/%s&per_page=1",
+			api, owner, repo, url.QueryEscape(owner), url.PathEscape(req.SessionID))
+		var payload []struct {
+			HTMLURL  string  `json:"html_url"`
+			Number   int     `json:"number"`
+			State    string  `json:"state"`
+			Merged   bool    `json:"merged"`
+			MergedAt *string `json:"merged_at"`
+		}
+		if err := s.forgeJSON(http.MethodGet, u, cred, nil, &payload); err != nil {
+			return nil, http.StatusBadGateway, err
+		}
+		if len(payload) == 0 {
+			return &forgeResponse{}, http.StatusOK, nil // none yet
+		}
+		p := payload[0]
+		state := p.State
+		if p.Merged || p.MergedAt != nil {
+			state = "merged"
+		}
+		return &forgeResponse{URL: p.HTMLURL, Number: p.Number, State: state}, http.StatusOK, nil
+
 	case "pull-get":
 		if req.Number == 0 {
 			return nil, http.StatusBadRequest, fmt.Errorf("number required")
