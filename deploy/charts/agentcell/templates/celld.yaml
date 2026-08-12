@@ -26,6 +26,10 @@ spec:
         {{- include "agentcell.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.celldName }}
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -38,6 +42,9 @@ spec:
             - "--control-namespace={{ .Values.controlNamespace }}"
             {{- with (include "agentcell.brokerURL" .) }}
             - "--git-broker-url={{ . }}"
+            {{- end }}
+            {{- with .Values.image.pullSecret }}
+            - "--image-pull-secret={{ . }}"
             {{- end }}
             - "--preview-addr=:{{ .Values.preview.port }}"
             - "--metrics-addr=:8082"

@@ -35,6 +35,15 @@ type CellReconciler struct {
 	// GitBrokerURL, when set, routes workload git through the broker so no
 	// pod holds a forge credential (ADR-0005).
 	GitBrokerURL string
+	// ControlNamespace is where the operator's own configuration lives — the
+	// source of anything that has to be mirrored into a Cell's namespace.
+	ControlNamespace string
+	// ImagePullSecret names a docker-registry Secret in ControlNamespace. On
+	// private clouds the runtime images usually sit in a private registry, so
+	// the Cell namespaces need pull credentials too. It carries no push rights
+	// and no forge token, so mirroring it does not widen the blast radius the
+	// way copying the git credential would (ADR-0005).
+	ImagePullSecret string
 }
 
 func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -60,6 +69,9 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	ns := ids.WorkloadNamespace(cell.Name)
 	if err := r.ensureNamespace(ctx, ns, cell.Name); err != nil {
+		return r.fail(ctx, &cell, err)
+	}
+	if err := r.ensurePullSecret(ctx, ns); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
 	if err := r.ensureNetworkPolicies(ctx, ns, cell.Namespace); err != nil {
@@ -199,11 +211,47 @@ func (r *CellReconciler) finalize(ctx context.Context, cell *acv1.Cell) (ctrl.Re
 func (r *CellReconciler) ensureServiceAccounts(ctx context.Context, ns string) error {
 	for _, name := range []string{runtimeapi.SAAnchor, runtimeapi.SASettle, runtimeapi.SAProd} {
 		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil }); err != nil {
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+			sa.ImagePullSecrets = nil
+			if r.ImagePullSecret != "" {
+				sa.ImagePullSecrets = []corev1.LocalObjectReference{{Name: r.ImagePullSecret}}
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// ensurePullSecret mirrors the registry credential into the Cell namespace.
+// kubelet resolves pull secrets namespace-locally, so a private registry is
+// unusable without this copy. Only the data is mirrored — never ownership of
+// the original.
+func (r *CellReconciler) ensurePullSecret(ctx context.Context, ns string) error {
+	if r.ImagePullSecret == "" {
+		return nil
+	}
+	var src corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: r.ControlNamespace, Name: r.ImagePullSecret}, &src); err != nil {
+		return fmt.Errorf("image pull secret %s/%s: %w", r.ControlNamespace, r.ImagePullSecret, err)
+	}
+	dst := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: r.ImagePullSecret}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dst, func() error {
+		dst.Type = src.Type
+		dst.Data = src.Data
+		return nil
+	}); err != nil {
+		return err
+	}
+	// Pods that predate the per-role ServiceAccounts (and any run without the
+	// broker) fall back to `default`, so it needs the credential as well.
+	def := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "default"}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, def, func() error {
+		def.ImagePullSecrets = []corev1.LocalObjectReference{{Name: r.ImagePullSecret}}
+		return nil
+	})
+	return err
 }
 
 func (r *CellReconciler) ensureNamespace(ctx context.Context, name, cellName string) error {

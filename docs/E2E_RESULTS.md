@@ -87,3 +87,58 @@ Kubernetes then rejected copied credentials and per-session secrets. The
 controller now keeps the Cell finalizer and requeues until the workload
 namespace is actually gone; `TestCellFinalizeWaitsForWorkloadNamespaceDeletion`
 covers that ordering.
+## Run 4 - broker mode against a real cluster and a self-hosted GitLab
+
+Runs 1-3 exercised a k3s node that could reach GitHub. Run 4 is the case the
+project actually targets: an air-gapped-ish private cluster whose only forge is
+an internal GitLab, driven end to end through the git-broker. It is the first
+run where no workload pod ever held a forge credential and where the review
+queue opened a real merge request.
+
+Environment: k3s v1.36.3+k3s1 on an internal host, reached through a reverse
+SSH tunnel; forge `http://git.tinci.com:6006/zhumingze/agentcell_e2etest.git`;
+control plane `celld`/`git-broker` at `run4` (commit `598f590`); runtime image
+pulled from a **private** registry.
+
+| Step | Check | Result |
+| --- | --- | --- |
+| 1 | Cell reconciles; workspace PVC bound | PASS |
+| 2 | No `GIT_TOKEN` in anchor/prod pod specs | PASS |
+| 2 | Forge Secret absent from the Cell namespace | PASS |
+| 2 | Per-role ServiceAccounts (anchor/settle/prod) exist | PASS |
+| 3 | Anchor clones through the broker and serves | PASS |
+| 4 | Console issues a ticketed preview URL | PASS |
+| 4 | Preview serves through the ticket | PASS, HTTP 200 |
+| 4 | Console credential refused on the preview origin | PASS, HTTP 401 |
+| 4 | Ticket is single-use | PASS, first 303, replay 403 |
+| 5 | Dispatch -> settle -> branch pushed to GitLab | PASS, `session/01kzten9y4zwa68t6zgpfv6kdk` |
+| 6 | Diff served through the broker | PASS, HTTP 200 |
+| 6 | Approve opens a merge request | PASS, `merge_requests/3` |
+| 7 | Release advertises a production URL | PASS |
+| 7 | Production zone serves | PASS, HTTP 200 |
+
+`passed=16 failed=0`.
+
+Three things this run surfaced, all fixed before the green result:
+
+**GitLab was not a supported forge.** The broker only spoke the GitHub REST
+API, so `compare` / `pull-find` / `pull-create` / `pull-get` all failed against
+GitLab. `cmd/git-broker/forge_gitlab.go` adds the adapter behind the same
+four-operation allow-list: project addressed as URL-encoded `group/name`,
+`PRIVATE-TOKEN` auth, merge requests keyed by `iid`, and diff line counts
+derived locally because GitLab does not summarise them.
+
+**Private registries were unusable.** kubelet resolves image pull secrets
+namespace-locally, so images in a private registry could never be pulled into
+the dynamically created Cell namespaces - every Cell would have stalled in
+`ImagePullBackOff`. `image.pullSecret` now names a docker-registry Secret in
+the control namespace; the operator mirrors it into each Cell namespace and
+attaches it to the accounts its pods run as. This is not an edge case: a
+private registry is the norm on the private clouds this project targets.
+
+**Two apparent failures were the harness, not the product**, and both became
+assertions instead. The preview retry loop replayed one single-use ticket, so
+attempts after the first were correctly refused with 403 - the run now asserts
+that replay is refused. And the first hit answers 303, not 200, because the
+ticket is exchanged for a session cookie and the URL rewritten without it; the
+check accepts 3xx there rather than treating the design as a failure.
