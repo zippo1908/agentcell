@@ -31,7 +31,10 @@ product preview to steer against; and an SDLC loop — dispatch → work → set
 - **Credentials stay out of reach.** Model keys are injected per session. With
   the git-broker (default), **no workload pod holds the forge token** — pods
   authenticate with an audience-scoped ServiceAccount token; only the settle
-  role may push, create-only, to its own branch.
+  role may push, create-only, to its own branch. The preview a project serves
+  is repo- and agent-authored, so it runs on **its own origin per Cell and
+  zone** and the proxy strips every platform credential before the request
+  reaches it — while the app keeps full same-origin powers over itself.
 - **China-cloud friendly.** Providers are data, not code: Alibaba Bailian,
   Tencent Hunyuan, DeepSeek, Moonshot, Zhipu work through their OpenAI-/
   Anthropic-compatible endpoints with no proxy.
@@ -59,15 +62,17 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 |---|---|
 | Cell operator (namespace / PVC / anchor / preview) · Session lifecycle (slot gate → settle Job → reclaim) | ✅ tested |
 | Settle data-safety (push-confirmed-or-retry, worktree kept) | ✅ real-git tested |
-| Resident preview + calibration UI · two-zone release (`/app`, branch/tag/SHA, rollback) | ✅ |
+| Resident preview + calibration UI (React SPA embedded in celld) · two-zone release (branch/tag/SHA, rollback) | ✅ |
+| **Untrusted content isolated by origin**: each Cell *zone* on its own host, single-use tickets, no platform credential ever reaches repo code | ✅ tested ([ADR-0007](docs/adr/0007-preview-origin-separation.md)) |
 | Provider registry (Aliyun Bailian / Tencent Hunyuan / DeepSeek / …) | ✅ tested |
 | HTTP auth (bearer + login cookie; refuses to start open) · per-Cell NetworkPolicy · PSS restricted · non-root pods | ✅ |
 | Race-free slot leases (+ crash recovery) | ✅ tested |
 | **git-broker**: forge token in no workload pod; per-role SAs; audience-bound tokens; repo↔cred binding; push verified by pod uid+owner; create-only `session/<id>` | ✅ tested ([ADR-0005](docs/adr/0005-git-broker.md)) |
 | Real-cluster (k3s) e2e — all 8 steps incl. preview & production HTTP 200 | ✅ ([Run 3](docs/E2E_RESULTS.md)) |
 | Review queue · diff · approve→auto-PR · merge tracking (forge API via broker, celld holds no credential) | ✅ tested ([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
+| Helm chart + GHCR images + cloud presets (k3s / ACK / TKE) | ✅ `helm lint`-verified |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
-| agent-sandbox substrate · Helm chart · multi-node RWX | ⬜ designed |
+| agent-sandbox substrate · multi-node RWX | ⬜ designed |
 
 ## Install (one command)
 
@@ -77,8 +82,15 @@ needs nothing built locally:
 ```sh
 helm install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
   --namespace agentcell-system --create-namespace \
-  --set celld.auth.tokens="{$(openssl rand -hex 24)}"
+  --set celld.auth.tokens="{$(openssl rand -hex 24)}" \
+  --set preview.domain=preview.example.com --set preview.ingress.enabled=true
 ```
+
+`preview.domain` gives every Cell zone its own host
+(`<cell>-dev.…`, `<cell>-prod.…`) and needs a wildcard DNS record and
+certificate. **Set it for any deployment whose repositories aren't fully
+trusted** — without it all Cells share one preview origin
+([ADR-0007](docs/adr/0007-preview-origin-separation.md)).
 
 Presets for k3s / Alibaba ACK / Tencent TKE: `-f deploy/presets/<name>.yaml`.
 Then create the git credential + model key and your first Cell (the chart
@@ -121,8 +133,10 @@ Production walkthrough (ingress/TLS, storage, upgrades, troubleshooting):
 
 ## Components
 
-- **`celld`** — operator for the `Cell`/`Session` CRDs + HTTP surface (UI,
-  API, preview/app reverse proxy).
+- **`celld`** — operator for the `Cell`/`Session` CRDs plus two HTTP
+  surfaces: the console (React SPA + API, `:8080`) and, on a **separate
+  origin**, the untrusted-content proxy (`:8081`). The SPA lives in `web/`
+  and is embedded with `go:embed`, so this is still one binary.
 - **`git-broker`** — the only component holding forge credentials; an
   authenticating git proxy.
 - **`cell-runtime`** — static multi-call binary, PID 1 of anchor/session/prod
