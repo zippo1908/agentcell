@@ -1,13 +1,13 @@
-// Package webui serves the calibration loop: the embedded single-page UI
-// (product description editor + dispatch + session list) side by side with
-// the resident product preview, which celld reverse-proxies from each
-// Cell's in-cluster preview Service.
+// Package webui serves the control API and the embedded single-page UI
+// (web/), plus the reverse proxies for each Cell's preview and production
+// zones.
+
 package webui
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -21,10 +21,8 @@ import (
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/web"
 )
-
-//go:embed index.html
-var indexHTML []byte
 
 // Handler exposes the control API. It talks to the cluster through the
 // manager's cached client and holds no state of its own.
@@ -39,10 +37,6 @@ type Handler struct {
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(indexHTML)
-	})
 	mux.HandleFunc("GET /api/meta", h.meta)
 	mux.HandleFunc("GET /api/cells", h.listCells)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
@@ -55,7 +49,37 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{session}", h.settleSession)
 	mux.HandleFunc("/preview/{cell}/", h.preview)
 	mux.HandleFunc("/app/{cell}/", h.productionApp)
+	// The SPA is last: it serves built assets and falls back to index.html
+	// so client-side routes (/cells/x, /reviews) survive a hard reload.
+	mux.Handle("/", spaHandler())
 	return mux
+}
+
+// spaHandler serves the embedded build, rewriting unknown paths to
+// index.html (client-side routing) while leaving real assets alone.
+func spaHandler() http.Handler {
+	assets := web.Dist()
+	files := http.FileServer(http.FS(assets))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "" {
+			p = "index.html"
+		}
+		if _, err := fs.Stat(assets, p); err != nil {
+			// Not a built asset → hand the SPA its entrypoint.
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+			index, err := fs.ReadFile(assets, "index.html")
+			if err != nil {
+				http.Error(w, "UI not built", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(index)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
