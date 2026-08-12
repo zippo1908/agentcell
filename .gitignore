@@ -3,5 +3,11 @@
 *.db-wal
 *.db-shm
 .env
-dist/
+# Go release artifacts; web/dist is intentionally committed (see web/embed.go)
+/dist/
+!web/dist/
 coverage.out
+/celld
+/git-broker
+/cellctl
+/cell-runtime

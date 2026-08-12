@@ -18,6 +18,9 @@ export function ReviewsPage() {
 
   const { data, error } = useQuery({ queryKey: ['reviews'], queryFn: () => api.reviews() })
 
+  // Track which row is in flight so one decision doesn't lock the list.
+  const [busy, setBusy] = useState<string | null>(null)
+
   const decide = useMutation({
     mutationFn: ({
       session,
@@ -28,8 +31,23 @@ export function ReviewsPage() {
       decision: 'approve' | 'reject'
       note: string
     }) => api.review(session, decision, note),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['reviews'] }),
+    onMutate: (v) => setBusy(v.session),
+    onSettled: () => setBusy(null),
+    onSuccess: () => {
+      // Refresh both the queue and the nav badge (same query key).
+      qc.invalidateQueries({ queryKey: ['reviews'] })
+    },
   })
+
+  function reject(session: string) {
+    const note = prompt('驳回原因(会作为后续派工的素材):')
+    if (note === null) return // cancelled — don't call the API
+    if (!note.trim()) {
+      alert('驳回必须写明原因。')
+      return
+    }
+    decide.mutate({ session, decision: 'reject', note })
+  }
 
   const rows = (data ?? []).filter((r) => filter === 'All' || r.state === filter)
 
@@ -77,17 +95,14 @@ export function ReviewsPage() {
                       onClick={() =>
                         decide.mutate({ session: r.session, decision: 'approve', note: '' })
                       }
-                      disabled={decide.isPending}
+                      disabled={busy === r.session}
                     >
                       通过 → 开 PR
                     </button>
                     <button
                       className="ghost"
-                      onClick={() => {
-                        const note = prompt('驳回原因(会作为后续派工的素材):') ?? ''
-                        decide.mutate({ session: r.session, decision: 'reject', note })
-                      }}
-                      disabled={decide.isPending}
+                      onClick={() => reject(r.session)}
+                      disabled={busy === r.session}
                     >
                       驳回
                     </button>

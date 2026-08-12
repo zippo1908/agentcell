@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -120,16 +121,37 @@ func (h *Handler) reviewSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("only a settled session with output can be reviewed"))
 		return
 	}
+	// The verdict is a one-way transition, enforced here rather than by the
+	// UI hiding buttons: Pending → Approved | Rejected, and no reversal.
+	// Re-deciding an approved session is especially dangerous once a PR
+	// exists — the branch is already in flight.
+	if cur := sess.Status.ReviewState; cur != "" && cur != acv1.ReviewPending {
+		writeErr(w, http.StatusConflict,
+			fmt.Errorf("session is already %s and cannot be reviewed again", cur))
+		return
+	}
+	if sess.Status.PRNumber != 0 {
+		writeErr(w, http.StatusConflict,
+			fmt.Errorf("a pull request (#%d) already exists for this session", sess.Status.PRNumber))
+		return
+	}
+	note := strings.TrimSpace(body.Note)
 	switch body.Decision {
 	case "approve":
 		sess.Status.ReviewState = acv1.ReviewApproved
 	case "reject":
+		// A rejection without a reason is useless to whoever picks up the
+		// follow-up dispatch.
+		if note == "" {
+			writeErr(w, 400, fmt.Errorf("a rejection requires a reason"))
+			return
+		}
 		sess.Status.ReviewState = acv1.ReviewRejected
 	default:
 		writeErr(w, 400, fmt.Errorf("decision must be approve or reject"))
 		return
 	}
-	sess.Status.ReviewNote = body.Note
+	sess.Status.ReviewNote = note
 	if err := h.Client.Status().Update(r.Context(), &sess); err != nil {
 		writeErr(w, 500, err)
 		return

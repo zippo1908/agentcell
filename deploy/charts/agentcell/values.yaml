@@ -25,6 +25,23 @@ celld:
     allowNoAuth: false
 
 # git-broker: the only component holding forge credentials (ADR-0005).
+# Untrusted Cell content (ADR-0007). Each Cell ZONE gets its own host under
+# previewDomain: <cell>-dev.<domain> and <cell>-prod.<domain>. REQUIRED for
+# multi-tenant or untrusted-repo deployments; without it every Cell and zone
+# shares one origin and only path-scoped tickets separate them.
+preview:
+  # e.g. preview.example.com — needs a wildcard DNS record (*.preview…)
+  # and a wildcard certificate.
+  domain: ""
+  port: 8081
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    tls:
+      enabled: false
+      secretName: ""   # must cover *.<preview.domain>
+
 gitBroker:
   enabled: true
   replicas: 1

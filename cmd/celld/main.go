@@ -7,9 +7,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -29,8 +31,14 @@ import (
 
 func main() {
 	var (
-		httpAddr    = flag.String("http-addr", ":8080", "UI/API/preview listen address")
-		metricsAddr = flag.String("metrics-addr", ":8081", "Prometheus metrics address")
+		httpAddr    = flag.String("http-addr", ":8080", "console (UI + API) listen address")
+		previewAddr = flag.String("preview-addr", ":8081",
+			"listen address for untrusted Cell content; MUST be a different origin from the console (ADR-0007)")
+		previewDomain = flag.String("preview-domain", "",
+			"wildcard domain giving each Cell its OWN preview host (<cell>.<domain>) — required to isolate Cells from each other in the browser; see ADR-0007")
+		previewOrigin = flag.String("preview-origin", "",
+			"absolute origin browsers use for preview/app, e.g. https://preview.example.com (default: console host with the preview port)")
+		metricsAddr = flag.String("metrics-addr", ":8082", "Prometheus metrics address")
 		controlNS   = flag.String("control-namespace", envOr("AGENTCELL_NAMESPACE", "agentcell-system"),
 			"namespace holding Cell/Session CRs")
 		providersDir = flag.String("providers-dir", "/etc/agentcell/providers.d",
@@ -39,6 +47,8 @@ func main() {
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
 			"file of API access tokens (whitespace-separated); enables auth when present")
+		trustForwarded = flag.Bool("trust-forwarded-headers", false,
+			"honour X-Forwarded-Proto/Host; enable ONLY behind a gateway that OVERWRITES them (e.g. APISIX), never where celld is directly reachable")
 		allowNoAuth = flag.Bool("allow-no-auth", false,
 			"start with the HTTP surface unauthenticated (dev only)")
 		showVersion = flag.Bool("version", false, "print version and exit")
@@ -90,6 +100,7 @@ func main() {
 	}
 
 	auth := webui.NewAuthenticator(readTokenFile(*tokenFile))
+	auth.TrustForwardedHeaders = *trustForwarded
 	if !auth.Enabled() {
 		if !*allowNoAuth {
 			log.Error(nil, "no API tokens found and --allow-no-auth not set; refusing to expose an unauthenticated control plane",
@@ -99,7 +110,21 @@ func main() {
 		log.Info("WARNING: HTTP surface is UNAUTHENTICATED (--allow-no-auth)")
 	}
 
-	ui := &webui.Handler{Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient}
+	// Cookie tossing: a sibling subdomain can set a cookie that the parent
+	// also receives. The console cookie uses __Host- over TLS, which blocks
+	// that for the session itself, but sharing a registrable domain with
+	// untrusted content is still a weaker posture than separating them.
+	if *previewDomain != "" && registrableSuffix(*previewDomain) != "" {
+		log.Info("NOTE: give preview content its own registrable domain (not a subdomain of the console's) to rule out cookie tossing",
+			"previewDomain", *previewDomain)
+	}
+
+	_, previewPort, _ := net.SplitHostPort(*previewAddr)
+	ui := &webui.Handler{
+		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
+		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
+		PreviewDomain: *previewDomain, Auth: auth,
+	}
 	mux := http.NewServeMux()
 	auth.LoginRoutes(mux)
 	mux.Handle("/", auth.Middleware(ui.Routes()))
@@ -114,7 +139,7 @@ func main() {
 			<-ctx.Done()
 			_ = srv.Close()
 		}()
-		log.Info("http listening", "addr", *httpAddr, "controlNamespace", *controlNS)
+		log.Info("console listening", "addr", *httpAddr, "controlNamespace", *controlNS)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}
@@ -124,11 +149,44 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Untrusted Cell content is served on its own origin (ADR-0007) so a
+	// previewed app keeps full same-origin powers over itself while being
+	// unable to reach the console.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		pmux := http.NewServeMux()
+		// Untrusted content is authorized by a short-lived per-Cell ticket,
+		// never by the console credential (ADR-0007).
+		pmux.Handle("/", auth.PreviewMiddleware(ui.PreviewRoutes()))
+		srv := &http.Server{Addr: *previewAddr, Handler: pmux}
+		go func() {
+			<-ctx.Done()
+			_ = srv.Close()
+		}()
+		log.Info("preview listening", "addr", *previewAddr, "origin", *previewOrigin)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})); err != nil {
+		log.Error(err, "add preview runnable")
+		os.Exit(1)
+	}
+
 	log.Info("starting", "version", version.String())
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "manager exited")
 		os.Exit(1)
 	}
+}
+
+// registrableSuffix is a crude eTLD+1 for the advisory log above; it is
+// informational only and deliberately does not gate anything.
+func registrableSuffix(host string) string {
+	parts := strings.Split(strings.Trim(host, "."), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
 }
 
 func envOr(key, def string) string {

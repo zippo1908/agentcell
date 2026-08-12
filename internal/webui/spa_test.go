@@ -54,3 +54,53 @@ func TestSPAServesAssetsAndFallsBackToIndex(t *testing.T) {
 		t.Errorf("asset %s served as HTML (%q) — the fallback swallowed a real file", asset, ctype)
 	}
 }
+
+// The fallback must not turn mistakes into "successful" HTML: an unknown
+// API path, a missing asset and a non-GET to a client route are all errors.
+func TestSPAFallbackDoesNotMaskErrors(t *testing.T) {
+	h := spaHandler()
+	do := func(method, path string) (int, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec.Code, rec.Header().Get("Content-Type")
+	}
+
+	t.Run("unknown api path is a JSON 404", func(t *testing.T) {
+		code, ctype := do(http.MethodGet, "/api/nope")
+		if code != http.StatusNotFound {
+			t.Errorf("GET /api/nope = %d, want 404", code)
+		}
+		if strings.Contains(ctype, "text/html") {
+			t.Errorf("api 404 answered with HTML (%q)", ctype)
+		}
+	})
+	t.Run("missing asset is a 404, not HTML", func(t *testing.T) {
+		code, ctype := do(http.MethodGet, "/assets/does-not-exist.js")
+		if code != http.StatusNotFound {
+			t.Errorf("missing asset = %d, want 404", code)
+		}
+		if strings.Contains(ctype, "text/html") && code == http.StatusOK {
+			t.Error("missing asset served as HTML 200")
+		}
+	})
+	t.Run("POST to a client route is not HTML 200", func(t *testing.T) {
+		code, _ := do(http.MethodPost, "/reviews")
+		if code == http.StatusOK {
+			t.Errorf("POST /reviews = 200; a write to an SPA route must not succeed")
+		}
+	})
+	t.Run("other prefixes do not fall into the SPA", func(t *testing.T) {
+		for _, p := range []string{"/preview/shop/x", "/app/shop/x", "/login/extra"} {
+			if code, _ := do(http.MethodGet, p); code == http.StatusOK {
+				t.Errorf("GET %s fell through to the SPA (200)", p)
+			}
+		}
+	})
+	t.Run("known client routes still reload", func(t *testing.T) {
+		for _, p := range []string{"/", "/cells", "/cells/shop", "/reviews"} {
+			if code, ctype := do(http.MethodGet, p); code != http.StatusOK || !strings.Contains(ctype, "text/html") {
+				t.Errorf("GET %s = %d %q, want 200 html", p, code, ctype)
+			}
+		}
+	})
+}

@@ -17,7 +17,10 @@ export function PreviewPane({
 }) {
   const [zone, setZone] = useState<'preview' | 'prod'>('preview')
   const frame = useRef<HTMLIFrameElement>(null)
-  const src = zone === 'prod' ? cell.productionPath : cell.previewPath
+  // The server hands us absolute, ticketed URLs on the untrusted-content
+  // origin (ADR-0007). Composing them here from paths would put the content
+  // back on the console's origin and collapse the isolation.
+  const src = zone === 'prod' ? cell.productionURL : cell.previewURL
 
   // Follow-target changes mean a different working tree is being served.
   useEffect(() => {
@@ -61,7 +64,18 @@ export function PreviewPane({
         </button>
       </div>
       {src ? (
-        <iframe ref={frame} src={src} title="product preview" />
+        <iframe
+          ref={frame}
+          src={src}
+          title="product preview"
+          // The previewed app is untrusted, but it is served from its OWN
+          // origin (ADR-0007), so allow-same-origin is safe to grant and the
+          // app behaves exactly as it would standalone — cookies, storage
+          // and service workers all work. What stays denied is replacing or
+          // navigating this console page. celld sends the same policy as a
+          // CSP header so it also holds when the URL is opened directly.
+          sandbox="allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+        />
       ) : (
         <div className="empty">正式区尚未发布。</div>
       )}

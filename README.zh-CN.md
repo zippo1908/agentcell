@@ -24,7 +24,9 @@
   预览——你对着 agent 正在做出来的东西随手校准。
 - **凭据够不到。** 模型 key 按会话注入。开启 git-broker(默认)后**没有任何 workload
   pod 持有 forge 令牌**——pod 用 audience 绑定的 ServiceAccount 令牌认证;只有 settle
-  角色能 push,且只能 create-only 推自己那一个分支。
+  角色能 push,且只能 create-only 推自己那一个分支。项目预览是仓库与 agent 写的代码,
+  因此**按 Cell 与区各自独立 origin** 运行,代理在请求到达它之前剥掉所有平台凭据——
+  而预览应用对自己仍是完整同源,毫无退化。
 - **国内云友好。** 服务商是数据不是代码:阿里百炼、腾讯混元、DeepSeek、Kimi、智谱
   经其 OpenAI/Anthropic 兼容端点开箱即用,免代理。
 
@@ -51,15 +53,17 @@ flowchart TB
 |---|---|
 | Cell 控制器(命名空间/PVC/锚点/预览)· 会话生命周期(槽位闸 → settle Job → 回收) | ✅ 有测试 |
 | settle 数据安全(推送确认否则重试、永不删未送达 worktree) | ✅ 真 git 测试 |
-| 常驻预览 + 校准 UI · 双区发布(`/app`、分支/标签/SHA、回滚) | ✅ |
+| 常驻预览 + 校准 UI(React SPA,内嵌进 celld)· 双区发布(分支/标签/SHA、回滚) | ✅ |
+| **不可信内容按 origin 隔离**:每个 Cell 的每个区独立 host、一次性票据、平台凭据永不到达仓库代码 | ✅ 有测试([ADR-0007](docs/adr/0007-preview-origin-separation.md)) |
 | 服务商注册表(阿里百炼 / 腾讯混元 / DeepSeek / …) | ✅ 有测试 |
 | HTTP 鉴权(Bearer + 登录 cookie,默认拒绝裸启)· 每 Cell NetworkPolicy · PSS restricted · 非 root Pod | ✅ |
 | 无竞态槽位租约(含崩溃恢复) | ✅ 有测试 |
 | **git-broker**:令牌不进任何 workload pod;按角色 SA;audience 绑定令牌;repo↔凭据绑定;push 经 pod uid+owner 校验;`session/<id>` create-only | ✅ 有测试([ADR-0005](docs/adr/0005-git-broker.md)) |
 | 真机 k3s e2e — 全 8 步含预览与正式区 HTTP 200 | ✅([Run 3](docs/E2E_RESULTS.md)) |
 | 批阅队列 · diff · 通过即开 PR · merge 跟踪(forge API 经 broker,celld 不持凭据) | ✅ 有测试([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
+| Helm chart + GHCR 镜像 + 云预置(k3s / ACK / TKE) | ✅ 经 `helm lint` 验证 |
 | 终端 attach(tmux over WebSocket) | ⬜ 设计中(M5) |
-| agent-sandbox 底座 · Helm chart · 多节点 RWX | ⬜ 设计中 |
+| agent-sandbox 底座 · 多节点 RWX | ⬜ 设计中 |
 
 ## 一条命令安装
 
@@ -68,8 +72,14 @@ flowchart TB
 ```sh
 helm install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
   --namespace agentcell-system --create-namespace \
-  --set celld.auth.tokens="{$(openssl rand -hex 24)}"
+  --set celld.auth.tokens="{$(openssl rand -hex 24)}" \
+  --set preview.domain=preview.example.com --set preview.ingress.enabled=true
 ```
+
+`preview.domain` 让每个 Cell 的每个区拥有独立 host(`<cell>-dev.…`、
+`<cell>-prod.…`),需要泛域名解析与泛证书。**仓库并非完全可信的部署必须设置**
+——不设则所有 Cell 共用一个预览 origin(见
+[ADR-0007](docs/adr/0007-preview-origin-separation.md))。
 
 k3s / 阿里 ACK / 腾讯 TKE 预置:`-f deploy/presets/<名字>.yaml`。装完按 chart
 输出的提示创建 git 凭据、模型 key 和第一个 Cell。完整说明见
@@ -111,7 +121,9 @@ kubectl -n agentcell-system port-forward svc/celld 8080:80   # http://localhost:
 
 ## 组件
 
-- **`celld`** —— `Cell`/`Session` CRD 的 operator + HTTP 面(UI、API、预览/正式区反代)。
+- **`celld`** —— `Cell`/`Session` CRD 的 operator,外加两个 HTTP 面:控制台
+  (React SPA + API,`:8080`)与**独立 origin** 上的不可信内容代理(`:8081`)。
+  前端在 `web/`,用 `go:embed` 打进二进制——仍是单二进制。
 - **`git-broker`** —— 唯一持有 forge 凭据的组件,一个认证式 git 代理。
 - **`cell-runtime`** —— 静态 multi-call 二进制,anchor/session/prod pod 的 PID 1。
 - **`cellctl`** —— 运维 CLI。

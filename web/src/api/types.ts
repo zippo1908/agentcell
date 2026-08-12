@@ -10,6 +10,9 @@ export interface Cell {
   maxSessions: number
   previewPath: string
   productionPath: string
+  /** Absolute, ticketed URLs on the untrusted-content origin (ADR-0007). */
+  previewURL: string
+  productionURL: string
   releaseRef: string
   followSession: string
   message: string
@@ -73,6 +76,8 @@ export interface Diff {
 export interface Meta {
   runners: string[]
   providers: string[]
+  /** Absolute origin serving untrusted preview/app content (ADR-0007). */
+  previewOrigin: string
 }
 
 export interface DispatchInput {
