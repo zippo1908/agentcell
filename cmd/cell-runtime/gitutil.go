@@ -105,3 +105,25 @@ func gitOut(dir string, args ...string) (string, error) {
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }
+
+// ensureRepoTrusted tells git that the shared checkout is safe to work in
+// even though it belongs to a different uid.
+//
+// Since ADR-0009 a session runs as its owner, while the project checkout is
+// owned by the project identity that cloned it. git's safe.directory
+// protection refuses a repository owned by another user outright — it exists
+// so that stepping into a directory someone else controls cannot run their
+// hooks or config as you. Here the "someone else" is the anchor, the
+// checkout is the collaboration layer by design, and every session already
+// runs its own repo-authored code, so the protection is buying nothing and
+// blocking everything.
+//
+// Scoped to the exact path — never the "*" wildcard, which would also trust
+// any repository an agent happens to fetch into the workspace.
+func ensureRepoTrusted(repo string) error {
+	cmd := exec.Command("git", "config", "--global", "--add", "safe.directory", repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("trust %s: %v: %s", repo, err, out)
+	}
+	return nil
+}

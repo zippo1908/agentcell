@@ -41,6 +41,11 @@ func runSession() error {
 	if err := ensurePrivateHome(uid); err != nil {
 		return err
 	}
+	// After HOME points at the private tree, so the trust lands in this
+	// user's own git config rather than a shared one.
+	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+		return err
+	}
 	wt := ids.WorktreePath(uid, id)
 	branch := ids.SessionBranch(id)
 	if _, err := os.Stat(wt); os.IsNotExist(err) {
