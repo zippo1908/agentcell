@@ -25,6 +25,12 @@ const (
 	// it; every session's TASK.md points the agent at it.
 	KnowledgePath = "/workspace/knowledge"
 
+	// DoneMarker is where a resident session records that its agent returned,
+	// and with what status. An absolute path in the pod's own filesystem, so
+	// anything exec'ing in can read it without knowing the worktree, the uid
+	// or the session id — none of which an exec inherits.
+	DoneMarker = "/tmp/agentcell-agent.done"
+
 	// Session credential indirection: the pod defines EnvAPIKey from a
 	// per-session Secret, and protocol variables reference it via the
 	// Kubernetes $(VAR) substitution syntax.

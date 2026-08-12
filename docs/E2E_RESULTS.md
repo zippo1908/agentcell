@@ -198,3 +198,46 @@ pushed. Real session ids are ULIDs.
 Settle also stopped swallowing failure causes. "autosave commit failed" with
 no reason attached is what made the object-store bug look intermittent; the
 verdict now carries the error onto the Session status.
+
+## Run 6 - resident sessions (ADR-0010)
+
+A one-shot session is verified by Runs 1-5. Run 6 checks the other shape: a
+slot that outlives its agent, so the owner can look at the result and keep
+going in the same context.
+
+Environment: the same internal k3s and self-hosted GitLab; celld `res4`,
+runtime image `res3`.
+
+| Check | Result |
+| --- | --- |
+| Resident session accepted and started | PASS, HTTP 201 |
+| Slot stays alive after the agent finishes | PASS, phase still `Running` |
+| State reports the agent finished, with its exit status | PASS, `working:false exitCode:"0"` |
+| Attach command is printed and self-contained | PASS |
+| A follow-up instruction reaches the live session | PASS, HTTP 200 |
+| It lands in the SAME worktree | PASS, `AGENT_RAN.md` + `FOLLOWUP.md` |
+| Explicit settle still publishes | PASS, branch pushed to GitLab |
+
+That last row is the one that matters most. The point of a resident slot is
+that the user decides when it ends — and mandatory settle has to survive
+that, or the model has traded a real guarantee for convenience. It does not:
+ending the session ran settle, which committed the follow-up work and pushed
+the branch.
+
+Two defects surfaced, both in the seam between the pod and the console:
+
+**The completion marker was unreadable from outside.** It was written
+relative to the worktree, but an exec starts in the image's working directory
+and inherits neither the worktree path, the uid, nor the session id. The
+marker moved to an absolute path in the pod's own filesystem. Before the fix
+a finished agent reported `working:true` forever.
+
+**`cell-runtime` is not on `$PATH`.** The console execs it by name; images
+bake it at `/agentcell/cell-runtime`. Now referenced through the constant
+that already existed for exactly this.
+
+A third finding was about failing clearly rather than correctly: the e2e image
+had no tmux, so a resident session simply failed and the Session reported
+"agent finished (Failed)" — which points at the agent rather than at the
+image. The runtime now checks for tmux up front and says so in a sentence an
+operator can act on.

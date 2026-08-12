@@ -15,6 +15,7 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 // A resident session keeps its slot alive in a tmux server on the owner's
@@ -74,13 +75,14 @@ func (h *Handler) sessionState(w http.ResponseWriter, r *http.Request) {
 	ns, id := ids.WorkloadNamespace(sess.Spec.Cell), sess.Status.SessionID
 	st := residentState{
 		Resident: true,
-		Attach: fmt.Sprintf("kubectl -n %s exec -it %s -- tmux -S %s attach -t %s",
-			ns, ids.SessionName(id), "$AGENTCELL_TMUX_SOCKET", ids.TmuxWindow(id)),
+		// cell-runtime derives the socket and window inside the pod, so the
+		// command works as printed and reveals no private paths.
+		Attach: fmt.Sprintf("kubectl -n %s exec -it %s -- %s attach", ns, ids.SessionName(id), runtimeapi.RuntimeBin),
 	}
 	// The marker file is written by the shell after the agent returns, so its
 	// presence (and contents) is the exit status; its absence means working.
 	out, err := h.execInPod(r.Context(), ns, ids.SessionName(id),
-		[]string{"sh", "-c", "cat .agentcell/agent.done 2>/dev/null || true"})
+		[]string{"sh", "-c", "cat " + runtimeapi.DoneMarker + " 2>/dev/null || true"})
 	if err != nil {
 		// The pod may be gone or starting; that is not an error for a status
 		// question, it just means there is nothing live to report.
@@ -127,7 +129,7 @@ func (h *Handler) continueSession(w http.ResponseWriter, r *http.Request) {
 	// the text is user input and tmux would otherwise happily run whatever a
 	// semicolon introduces.
 	out, err := h.execInPod(r.Context(), ns, ids.SessionName(id),
-		[]string{"cell-runtime", "tell", body.Text})
+		[]string{runtimeapi.RuntimeBin, "tell", body.Text})
 	if err != nil {
 		writeErr(w, 502, fmt.Errorf("%v: %s", err, out))
 		return
