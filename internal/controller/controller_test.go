@@ -565,3 +565,73 @@ func TestSessionPodGoneLeadsToSettling(t *testing.T) {
 		t.Fatalf("phase = %s, want Settling", sess.Status.Phase)
 	}
 }
+
+// A private registry is the norm on private clouds. kubelet only resolves
+// pull secrets inside the pod's own namespace, so the operator has to mirror
+// the credential into every Cell namespace and attach it to the accounts its
+// pods run as — otherwise every Cell stalls in ImagePullBackOff.
+func TestImagePullSecretIsMirroredIntoTheCellNamespace(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Spec.Repo.SecretName = "git-cred"
+	src := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: controlNS, Name: "regcred"},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{".dockerconfigjson": []byte(`{"auths":{}}`)},
+	}
+	c := newFake(t, cellCR, src)
+	r := &CellReconciler{
+		Client:           c,
+		GitBrokerURL:     "http://git-broker.agentcell-system.svc:8080",
+		ControlNamespace: controlNS,
+		ImagePullSecret:  "regcred",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+
+	var copied corev1.Secret
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "regcred"}, &copied); err != nil {
+		t.Fatalf("pull secret not mirrored: %v", err)
+	}
+	if string(copied.Data[".dockerconfigjson"]) != `{"auths":{}}` || copied.Type != corev1.SecretTypeDockerConfigJson {
+		t.Errorf("mirrored secret differs from the source: type=%s data=%q", copied.Type, copied.Data)
+	}
+	for _, name := range []string{runtimeapi.SAAnchor, runtimeapi.SASettle, runtimeapi.SAProd, "default"} {
+		var sa corev1.ServiceAccount
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &sa); err != nil {
+			t.Errorf("service account %q: %v", name, err)
+			continue
+		}
+		if len(sa.ImagePullSecrets) != 1 || sa.ImagePullSecrets[0].Name != "regcred" {
+			t.Errorf("service account %q carries pull secrets %v, want [regcred]", name, sa.ImagePullSecrets)
+		}
+	}
+}
+
+// Without the option nothing is mirrored and no account is touched — the
+// public-registry path stays exactly as it was.
+func TestNoImagePullSecretLeavesAccountsUntouched(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Spec.Repo.SecretName = "git-cred"
+	c := newFake(t, cellCR)
+	r := &CellReconciler{Client: c, GitBrokerURL: "http://git-broker.agentcell-system.svc:8080", ControlNamespace: controlNS}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	var sa corev1.ServiceAccount
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: ids.WorkloadNamespace("shop"), Name: runtimeapi.SAAnchor}, &sa); err != nil {
+		t.Fatal(err)
+	}
+	if len(sa.ImagePullSecrets) != 0 {
+		t.Errorf("pull secrets appeared without the option: %v", sa.ImagePullSecrets)
+	}
+}

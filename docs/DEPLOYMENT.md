@@ -133,6 +133,24 @@ kubectl -n agentcell-system create secret generic git-cred \
   --from-literal=repo_url=<https-clone-url>   # REQUIRED in broker mode
 ```
 
+**Self-hosted GitLab.** Add `--from-literal=forge=gitlab` and use the project
+access token as `password` (any non-empty `username`, e.g. `oauth2`). The
+broker then speaks the GitLab API for compare / merge-request operations. Left
+unset, the forge is inferred from the clone URL's host. Verified end to end in
+[Run 4](E2E_RESULTS.md).
+
+**Private registry.** On a private cloud the runtime images usually sit in a
+registry that needs credentials. Create the pull secret in the control
+namespace and point the chart at it — the operator mirrors it into every Cell
+namespace, which is required because kubelet only resolves pull secrets
+locally:
+
+```sh
+kubectl -n agentcell-system create secret docker-registry regcred \
+  --docker-server=<registry> --docker-username=<user> --docker-password=<token>
+helm upgrade --install agentcell ... --set image.pullSecret=regcred
+```
+
 `repo_url` binds the credential to exactly one repository: the broker
 rejects any Cell whose `spec.repo.url` doesn't match it (normalized), so a
 Cell creator cannot forward the credential to a different (attacker) URL.
