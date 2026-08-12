@@ -1,0 +1,119 @@
+{{- if and (not .Values.celld.auth.existingSecret) .Values.celld.auth.tokens }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: celld-tokens
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+stringData:
+  tokens: {{ join "\n" .Values.celld.auth.tokens | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celld
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.celld.replicas }}
+  selector:
+    matchLabels: {app: celld}
+  template:
+    metadata:
+      labels:
+        app: celld
+        {{- include "agentcell.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.celldName }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: celld
+          image: {{ include "agentcell.image" (dict "Values" .Values "Chart" .Chart "component" "celld") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--control-namespace={{ .Values.controlNamespace }}"
+            {{- with (include "agentcell.brokerURL" .) }}
+            - "--git-broker-url={{ . }}"
+            {{- end }}
+            {{- if .Values.celld.auth.allowNoAuth }}
+            - "--allow-no-auth"
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources: {{- toYaml .Values.celld.resources | nindent 12 }}
+          volumeMounts:
+            {{- if or .Values.celld.auth.existingSecret .Values.celld.auth.tokens }}
+            - {name: tokens, mountPath: /etc/agentcell/auth, readOnly: true}
+            {{- end }}
+            {{- if .Values.gitBroker.enabled }}
+            - {name: git-broker-token, mountPath: /var/run/secrets/agentcell/git-broker, readOnly: true}
+            {{- end }}
+      volumes:
+        {{- if or .Values.celld.auth.existingSecret .Values.celld.auth.tokens }}
+        - name: tokens
+          secret:
+            secretName: {{ .Values.celld.auth.existingSecret | default "celld-tokens" }}
+            items:
+              - {key: tokens, path: tokens}
+        {{- end }}
+        {{- if .Values.gitBroker.enabled }}
+        - name: git-broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: agentcell-git-broker
+                  expirationSeconds: 3600
+                  path: token
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: celld
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.celld.service.type }}
+  selector: {app: celld}
+  ports:
+    - {name: http, port: {{ .Values.celld.service.port }}, targetPort: http}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: celld
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+  annotations: {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: celld
+                port: {number: {{ .Values.celld.service.port }}}
+{{- end }}

@@ -1,0 +1,26 @@
+AgentCell {{ .Chart.AppVersion }} installed into {{ .Values.controlNamespace }}.
+
+{{- if not (or .Values.celld.auth.existingSecret .Values.celld.auth.tokens .Values.celld.auth.allowNoAuth) }}
+
+⚠  No API token configured — celld will refuse to start. Create one:
+
+    kubectl -n {{ .Values.controlNamespace }} create secret generic celld-tokens \
+      --from-literal=tokens="$(openssl rand -hex 24)"
+    kubectl -n {{ .Values.controlNamespace }} rollout restart deploy/celld
+{{- end }}
+
+Next:
+  1. Git credential, bound to its repo (required in broker mode):
+       kubectl -n {{ .Values.controlNamespace }} create secret generic git-cred \
+         --type=kubernetes.io/basic-auth \
+         --from-literal=username=<user> --from-literal=password=<PAT> \
+         --from-literal=repo_url=<https clone url>
+  2. A model key:
+       kubectl -n {{ .Values.controlNamespace }} create secret generic bailian-key \
+         --from-literal=key=sk-...
+  3. Create a Cell and open the UI:
+       cellctl cell create shop --repo <url> --image ghcr.io/zippo1908/devbox \
+         --secret git-cred --preview "npm run dev -- --host" --preview-port 5173
+       kubectl -n {{ .Values.controlNamespace }} port-forward svc/celld 8080:80
+
+Docs: https://github.com/zippo1908/agentcell/blob/main/docs/DEPLOYMENT.md

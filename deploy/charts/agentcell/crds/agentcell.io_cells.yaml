@@ -1,0 +1,83 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cells.agentcell.io
+spec:
+  group: agentcell.io
+  names:
+    kind: Cell
+    listKind: CellList
+    plural: cells
+    singular: cell
+    shortNames: [cl]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Sessions
+          type: integer
+          jsonPath: .status.activeSessions
+        - name: Preview
+          type: string
+          jsonPath: .status.previewPath
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [repo, image]
+              properties:
+                repo:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string}
+                    branch: {type: string}
+                    secretName: {type: string}
+                image: {type: string}
+                description: {type: string}
+                maxSessions: {type: integer, format: int32, minimum: 1}
+                sessionResources:
+                  type: object
+                  properties:
+                    cpu: {type: string}
+                    memory: {type: string}
+                workspaceSize: {type: string}
+                storageClassName: {type: string}
+                preview:
+                  type: object
+                  properties:
+                    command:
+                      type: array
+                      items: {type: string}
+                    port: {type: integer, format: int32}
+                    followSession: {type: string}
+                production:
+                  type: object
+                  properties:
+                    command:
+                      type: array
+                      items: {type: string}
+                    port: {type: integer, format: int32}
+                    ref: {type: string}
+                    releaseID: {type: string}
+            status:
+              type: object
+              properties:
+                phase: {type: string}
+                observedGeneration: {type: integer, format: int64}
+                activeSessions: {type: integer, format: int32}
+                previewPath: {type: string}
+                productionPath: {type: string}
+                slotLeases:
+                  type: array
+                  items: {type: string}
+                message: {type: string}

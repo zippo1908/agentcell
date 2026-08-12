@@ -1,0 +1,10 @@
+# Tencent Cloud TKE. CFS is the RWX option; CBS is RWO (single node).
+storage:
+  className: cfs            # or cbs for single-node
+celld:
+  service: {type: ClusterIP}
+ingress:
+  enabled: true
+  className: nginx
+  # host: agentcell.example.com
+  # tls: {enabled: true, secretName: agentcell-tls}

@@ -123,6 +123,35 @@ git ls-remote "https://$E2E_GIT_USER:$E2E_GIT_TOKEN@${E2E_REPO_URL#https://}" "$
   | grep -q "$branch" || fail "settled branch $branch not found on remote"
 echo "settled branch on remote: $branch"
 
+log "7b/8 broker mode: no workload pod holds a forge token"
+for kind in statefulset/anchor deployment/prod; do
+  if kubectl -n "cell-$CELL" get "$kind" -o yaml 2>/dev/null | grep -q 'GIT_TOKEN'; then
+    fail "$kind carries GIT_TOKEN — broker mode is not isolating credentials"
+  fi
+done
+if kubectl -n "cell-$CELL" get secret agentcell-git >/dev/null 2>&1; then
+  fail "forge secret was copied into the workload namespace in broker mode"
+fi
+echo "broker isolation verified: no GIT_TOKEN in workloads, no secret copy"
+
+log "7c/8 review queue: session is queued, approve opens a PR"
+sess_short=${sess#sess-}
+state=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:18080/api/reviews?cell=$CELL" \
+  | grep -o "\"session\":\"$sess\"[^}]*" | grep -o '"state":"[^"]*"' | head -1)
+echo "review state: $state"
+curl -s -o /dev/null -w 'diff endpoint: %{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:18080/api/sessions/$sess/diff"
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"decision":"approve","note":"e2e"}' \
+  "http://127.0.0.1:18080/api/sessions/$sess/review" >/dev/null
+for i in $(seq 1 20); do
+  pr=$(kubectl -n "$NS" get session "$sess" -o jsonpath='{.status.prURL}' 2>/dev/null || true)
+  [ -n "$pr" ] && break
+  sleep 6
+done
+[ -n "$pr" ] || fail "approval did not open a PR (check git-broker logs: kubectl -n $NS logs deploy/git-broker)"
+echo "PR opened: $pr"
+
 log "8/8 release to production and reach /app"
 go run ./cmd/cellctl release "$CELL" --namespace "$NS"
 for i in $(seq 1 60); do

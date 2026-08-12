@@ -1,0 +1,10 @@
+# Alibaba Cloud ACK. Use NAS for multi-node (RWX) so a Cell can move nodes.
+storage:
+  className: alicloud-nas   # or alicloud-disk-essd for single-node (RWO)
+celld:
+  service: {type: ClusterIP}
+ingress:
+  enabled: true
+  className: nginx
+  # host: agentcell.example.com
+  # tls: {enabled: true, secretName: agentcell-tls}

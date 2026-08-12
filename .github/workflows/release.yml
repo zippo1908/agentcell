@@ -1,0 +1,83 @@
+name: release
+
+# Publishes multi-component images and the Helm chart to GHCR on a tag,
+# using the built-in GITHUB_TOKEN (no extra secrets needed).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.1.0-alpha.3)"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [celld, git-broker, devbox]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: stable}
+      - name: Resolve version
+        id: v
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Build binaries
+        run: make build build-runtime-static VERSION=${{ steps.v.outputs.tag }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/${{ matrix.component }}/Containerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:${{ steps.v.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:latest
+
+  chart:
+    runs-on: ubuntu-latest
+    needs: images
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Resolve version
+        id: v
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Package and push chart
+        run: |
+          v="${{ steps.v.outputs.tag }}"; v="${v#v}"
+          helm package deploy/charts/agentcell --version "$v" --app-version "${{ steps.v.outputs.tag }}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "agentcell-$v.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: stable}
+      - name: Resolve version
+        id: v
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Build and package
+        run: |
+          make build build-runtime-static VERSION=${{ steps.v.outputs.tag }}
+          cd bin && tar czf "agentcell_${{ steps.v.outputs.tag }}_linux_amd64.tar.gz" \
+            celld git-broker cellctl cell-runtime cell-runtime-linux-amd64
+          sha256sum *.tar.gz > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            bin/*.tar.gz
+            bin/checksums.txt
