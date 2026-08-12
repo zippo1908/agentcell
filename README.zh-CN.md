@@ -32,18 +32,37 @@
 
 ## 核心模型
 
+**项目是共享的,个人的运行时不是。** 协作发生在项目层——分支、批阅、知识库,
+而不是进程层。任何人都不会 attach 到别人的终端上。
+
 ```mermaid
 flowchart TB
-    subgraph CELL["Cell = 项目命名空间 + 常驻锚点 + PVC(热态)"]
-        PID1["cell-runtime PID 1<br/>克隆 · 预览 · 心跳"]
-        OBJ[("/workspace/repo")]
-        S1["Slot s01 — worktree + agent"]
-        S2["Slot s02 — 空闲"]
+    subgraph CELL["Cell — 一个项目"]
+        OBJ[("/workspace/repo · knowledge<br/>共享,归项目所有")]
+        ANCHOR["anchor — 克隆 · 基线预览"]
+        subgraph UA["Alice · uid 100000 · 0700"]
+            TA["一个 tmux server"]
+            WA1["window:会话 a1"]
+            WA2["window:会话 a2"]
+        end
+        subgraph UB["Bob · uid 100001 · 0700"]
+            TB["一个 tmux server"]
+            WB1["window:会话 b1"]
+        end
     end
-    D["派工"] --> S1
-    S1 -->|清算| BR["session/&lt;id&gt; 分支 → 批阅 → 发布"]
-    S1 -.->|共享| OBJ
+    TA --> WA1 & WA2
+    TB --> WB1
+    WA1 & WA2 & WB1 -.->|读| OBJ
+    WA1 -->|清算 · 唯一出口| BR["session/&lt;id&gt; → 批阅 → PR → 发布"]
+    WB1 -->|清算| BR
 ```
+
+**一个用户一个 tmux,而不是一个会话一个**:agent CLI 自己管理对话(Claude Code
+用我们指定的 id,Codex 用它自己的),所以平台只负责给它们一个私有 `$HOME` 存这些
+状态、一个比任何单次运行都活得久的终端,其余不插手。
+
+清算是进入项目层的唯一一道门。worktree 可以由属主决定留多久,但任何东西不经过
+清算都到不了分支上。
 
 完整图(控制面、生命周期、git-broker):**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
 
@@ -62,7 +81,15 @@ flowchart TB
 | 真机 k3s e2e — 全 8 步含预览与正式区 HTTP 200 | ✅([Run 3](docs/E2E_RESULTS.md)) |
 | 批阅队列 · diff · 通过即开 PR · merge 跟踪(forge API 经 broker,celld 不持凭据) | ✅ 有测试([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
 | Helm chart + GHCR 镜像 + 云预置(k3s / ACK / TKE) | ✅ 经 `helm lint` 验证 |
-| 终端 attach(tmux over WebSocket) | ⬜ 设计中(M5) |
+| 自建 GitLab 作为一等 forge(compare / 开 MR / 跟踪) | ✅ 实测([Run 4](docs/E2E_RESULTS.md)) |
+| 私有 registry:pull secret 复制进每个 Cell 命名空间 | ✅ 实测 |
+| **用户身份**:celld 自验 OIDC(不信任身份头、不强依赖网关);Session 属主不可变;越权一律 404 | ✅ 实测([ADR-0008](docs/adr/0008-user-identity-and-ownership.md)) |
+| 注册登录用 Casdoor、边缘用 Apache APISIX®,二者**均可选**,任何 OIDC 提供方都能用 | ✅ 清单([deploy/identity](deploy/identity/)) |
+| **运行时隔离**:每用户独立 Unix uid(分配且永不复用)、`0700` 私有目录(worktree / `$HOME` / CLI 状态 / tmux socket) | ✅ 实测([Run 5](docs/E2E_RESULTS.md)、[ADR-0009](docs/adr/0009-runtime-isolation.md)) |
+| **常驻会话**:agent 结束后槽位仍在,追加指令续的是 CLI 自己的对话,清算仍然强制 | ✅ 实测([Run 6](docs/E2E_RESULTS.md)、[ADR-0010](docs/adr/0010-resident-sessions.md)) |
+| 每用户一个 tmux runtime 承载多个会话(window);模型 key 绝不进 argv | ✅ 实测([Run 7](docs/E2E_RESULTS.md)) |
+| 浏览器内终端(tmux over WebSocket)——现在可用 `kubectl exec … cell-runtime attach <id>` | ⬜ 设计中(M5) |
+| runtime pod 被替换后续上原对话(id 与 `$HOME` 状态都在,重开 window 未接) | ⬜ 设计中 |
 | agent-sandbox 底座 · 多节点 RWX | ⬜ 设计中 |
 
 ## 一条命令安装
@@ -118,6 +145,34 @@ kubectl -n agentcell-system port-forward svc/celld 8080:80   # http://localhost:
 ```
 
 生产部署(Ingress/TLS、存储、升级、排障):**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。
+
+## 多人使用
+
+开箱只有一个主体:持有令牌的人。接上 OIDC 之后,每个人有自己的归属、uid 和运行时:
+
+```sh
+helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
+  --set oidc.issuer=https://casdoor.example.com --set oidc.clientID=... \
+  --set oidc.existingSecret=oidc
+```
+
+celld **自己**拿 provider 的 JWKS 验 ID token,**绝不信任身份头**——Pod 网络上任何
+东西都能伪造一个头。所以不装网关也能用,任何标准 OIDC 提供方都行。想要现成的注册、
+登录和 TLS,[`deploy/identity/`](deploy/identity/) 里有 Casdoor + Apache APISIX® 的清单。
+
+**边看边改**:常驻会话在 agent 结束后保留槽位,你可以看完结果**在同一个对话里再补
+一句**,而不是重派一个什么都要重新摸清的新会话:
+
+```sh
+cellctl dispatch shop --task "把商品卡片改成两列" --resident ...
+curl -H "Authorization: Bearer $TOKEN" .../api/sessions/$S/state    # 在跑?跑完了?退出码?
+curl -X POST ... -d '{"text":"两列太挤了,间距加大一点"}' .../api/sessions/$S/continue
+kubectl -n cell-shop exec -it runtime-100000 -- /agentcell/cell-runtime attach $ID
+curl -X DELETE ... .../api/sessions/$S                              # 清算:提交、推送、进批阅
+```
+
+你在一个 Cell 里的每个会话,都是**你自己** runtime 里的一个 window,tmux socket 只有
+你的 uid 能打开。别人正在跑的会话,在他清算之前你完全看不到。
 
 ## 组件
 
