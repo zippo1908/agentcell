@@ -28,6 +28,14 @@ func runAnchor() error {
 	// The persistent, session-shared knowledge directory lives on the PVC
 	// outside the checkout; sessions read it and distill learnings back.
 	_ = os.MkdirAll(runtimeapi.KnowledgePath, 0o755)
+	// The anchor holds the project identity, so it is the right process to
+	// lay down the directory every user's private tree hangs off: created
+	// once, group-writable and sticky, rather than by whichever user happens
+	// to start first (which would give it that user's 0700). Sessions repair
+	// it if the anchor has not run yet, but this is where it belongs.
+	if err := ensureSharedParent(filepath.Dir(ids.UserHome(0))); err != nil {
+		fmt.Fprintf(os.Stderr, "anchor: %v\n", err)
+	}
 	go reapZombies()
 	go heartbeat()
 	go syncBase(os.Getenv(runtimeapi.EnvRepoBranch))
@@ -76,6 +84,12 @@ func ensureClone() error {
 				fmt.Fprintln(os.Stderr, "anchor: reset to origin/"+branch+" failed (continuing)")
 			}
 		}
+		// Repair on every start, not just at clone time: a Cell created
+		// before per-user uids existed has an object store no user can write
+		// to, and would fail intermittently rather than loudly.
+		if err := shareRepoWithProjectGroup(); err != nil {
+			fmt.Fprintf(os.Stderr, "anchor: sharing the object store failed: %v\n", err)
+		}
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(ids.RepoPath), 0o755); err != nil {
@@ -86,7 +100,48 @@ func ensureClone() error {
 		args = append(args, "--branch", branch)
 	}
 	args = append(args, effectiveGitURL(url), ids.RepoPath)
-	return gitNet("/", args...)
+	if err := gitNet("/", args...); err != nil {
+		return err
+	}
+	return shareRepoWithProjectGroup()
+}
+
+// shareRepoWithProjectGroup makes the object store writable by every member
+// of the project group.
+//
+// Since ADR-0009 each user's session runs as its own uid while the checkout
+// belongs to the project identity, and a session's commits land in the
+// SHARED object database. git creates object directories 0755 by default, so
+// whichever uid happens to create a prefix directory first owns it and every
+// other user gets:
+//
+//	insufficient permission for adding an object to repository database
+//
+// It fails by luck of the hash, which makes it look intermittent. This is
+// precisely what core.sharedRepository exists for: git then creates
+// directories 2775 and files 0664, so the group can write.
+//
+// The config only governs objects created from now on, so the existing tree
+// is relaxed too. Only the owner may chmod, which the anchor is — it did the
+// clone.
+func shareRepoWithProjectGroup() error {
+	if err := git(ids.RepoPath, "config", "core.sharedRepository", "group"); err != nil {
+		return fmt.Errorf("core.sharedRepository: %w", err)
+	}
+	return filepath.Walk(filepath.Join(ids.RepoPath, ".git"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // best effort: a file we cannot stat is one we cannot fix
+		}
+		mode := info.Mode()
+		want := mode | 0o060 // group read+write
+		if mode.IsDir() {
+			want |= 0o010 | os.ModeSetgid // traversable, and new entries inherit the group
+		}
+		if want != mode {
+			_ = os.Chmod(path, want)
+		}
+		return nil
+	})
 }
 
 // syncBase keeps the local base branch tracking the remote so worktrees
