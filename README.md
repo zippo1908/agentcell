@@ -65,7 +65,7 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Race-free slot leases (+ crash recovery) | ✅ tested |
 | **git-broker**: forge token in no workload pod; per-role SAs; audience-bound tokens; repo↔cred binding; push verified by pod uid+owner; create-only `session/<id>` | ✅ tested ([ADR-0005](docs/adr/0005-git-broker.md)) |
 | Real-cluster (k3s) e2e — all 8 steps incl. preview & production HTTP 200 | ✅ ([Run 3](docs/E2E_RESULTS.md)) |
-| Review queue · diff approval · auto-PR · merge tracking | ⬜ designed (M7/M9) |
+| Review queue · diff · approve→auto-PR · merge tracking (forge API via broker, celld holds no credential) | ✅ tested ([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
 | agent-sandbox substrate · Helm chart · multi-node RWX | ⬜ designed |
 

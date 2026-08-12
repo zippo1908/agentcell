@@ -20,6 +20,7 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
@@ -40,6 +41,9 @@ type SessionReconciler struct {
 	// GitBrokerURL, when set, routes the settle push through the broker so
 	// the settle job holds no forge credential (ADR-0005).
 	GitBrokerURL string
+	// Forge opens/tracks PRs through the broker after review approval
+	// (ADR-0006). nil/disabled leaves review purely informational.
+	Forge *forge.Client
 }
 
 // settleResult is the JSON the settle applet writes to its termination log.
@@ -60,11 +64,12 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Terminal phases: the CR lives on as a record. Release is re-run here
 	// idempotently — if the controller crashed between writing the terminal
 	// status and releasing the lease, this is where the slot comes back.
+	// The review/PR lifecycle (ADR-0006) continues after the work phase.
 	if sess.DeletionTimestamp.IsZero() && isTerminal(sess.Status.Phase) {
 		if sess.Status.SessionID != "" {
 			r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, sess.Status.SessionID)
 		}
-		return ctrl.Result{}, nil
+		return r.reviewReconcile(ctx, &sess)
 	}
 
 	var cell acv1.Cell

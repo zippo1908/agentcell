@@ -53,3 +53,8 @@ spec:
                 produced: {type: boolean}
                 startTime: {type: string, format: date-time}
                 message: {type: string}
+                reviewState: {type: string, enum: ["", "Pending", "Approved", "Rejected"]}
+                reviewNote: {type: string}
+                prURL: {type: string}
+                prNumber: {type: integer}
+                prState: {type: string}

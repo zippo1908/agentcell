@@ -62,6 +62,9 @@ const (
 	SAAnchor = "anchor"
 	SASettle = "settle"
 	SAProd   = "prod"
+	// SACelld is the control plane's own ServiceAccount; only it may use
+	// the broker's narrow forge REST route (ADR-0006).
+	SACelld = "celld"
 
 	// BrokerClientLabel marks pods permitted to reach the broker; the
 	// NetworkPolicy egress rule selects on it, so session pods (which lack

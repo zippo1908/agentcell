@@ -89,12 +89,22 @@ spec:
             httpGet: {path: /healthz, port: http}
           volumeMounts:
             - {name: tokens, mountPath: /etc/agentcell/auth, readOnly: true}
+            # Audience-bound token so celld can use the broker's narrow
+            # forge REST route (ADR-0006) without holding forge creds.
+            - {name: git-broker-token, mountPath: /var/run/secrets/agentcell/git-broker, readOnly: true}
       volumes:
         - name: tokens
           secret:
             secretName: celld-tokens
             items:
               - {key: tokens, path: tokens}
+        - name: git-broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: agentcell-git-broker
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: v1
 kind: Service

@@ -57,7 +57,7 @@ flowchart TB
 | 无竞态槽位租约(含崩溃恢复) | ✅ 有测试 |
 | **git-broker**:令牌不进任何 workload pod;按角色 SA;audience 绑定令牌;repo↔凭据绑定;push 经 pod uid+owner 校验;`session/<id>` create-only | ✅ 有测试([ADR-0005](docs/adr/0005-git-broker.md)) |
 | 真机 k3s e2e — 全 8 步含预览与正式区 HTTP 200 | ✅([Run 3](docs/E2E_RESULTS.md)) |
-| 批阅队列 · diff 审批 · 自动开 PR · merge 跟踪 | ⬜ 设计中(M7/M9) |
+| 批阅队列 · diff · 通过即开 PR · merge 跟踪(forge API 经 broker,celld 不持凭据) | ✅ 有测试([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
 | 终端 attach(tmux over WebSocket) | ⬜ 设计中(M5) |
 | agent-sandbox 底座 · Helm chart · 多节点 RWX | ⬜ 设计中 |
 

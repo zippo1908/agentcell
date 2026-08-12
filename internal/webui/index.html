@@ -94,6 +94,10 @@
       <h2>会话</h2>
       <div id="sessions"></div>
     </div>
+    <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0">
+      <h2>批阅队列</h2>
+      <div id="reviews" style="overflow-y:auto;flex:1;min-height:0"></div>
+    </div>
   </div>
   <div class="col">
     <div class="card preview">
@@ -168,6 +172,52 @@ async function settle(name) {
   refresh();
 }
 
+async function loadReviews() {
+  if (!cell) return;
+  const rs = await j('/api/reviews?cell=' + encodeURIComponent(cell));
+  $('reviews').innerHTML = rs.map(v => `
+    <div class="sess">
+      <div class="task" title="${esc(v.task)}">${esc(v.task)}</div>
+      <div class="sub">
+        <span class="chip ${v.state}">${v.state}</span>
+        <code>${esc(v.branch)}</code>
+        ${v.prURL ? `<a href="${v.prURL}" target="_blank">PR #${v.prNumber} · ${esc(v.prState || 'open')}</a>` : ''}
+        ${v.note ? `<span title="${esc(v.note)}">ℹ</span>` : ''}
+        ${v.state === 'Pending' ? `
+          <button class="ghost" onclick="showDiff('${v.session}')">看 diff</button>
+          <button class="ghost" onclick="review('${v.session}','approve')">通过 → 开 PR</button>
+          <button class="ghost" onclick="review('${v.session}','reject')">驳回</button>` : ''}
+      </div>
+      <pre id="diff-${v.session}" style="display:none;white-space:pre-wrap;font-size:12px;
+           max-height:220px;overflow:auto;background:var(--bg);border:1px solid var(--line);
+           border-radius:6px;padding:8px;margin:6px 0 0"></pre>
+    </div>`).join('') || '<div class="status">没有待批阅的产出。</div>';
+}
+
+async function showDiff(name) {
+  const el = $('diff-' + name);
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.textContent = '加载中…';
+  try {
+    const d = await j('/api/sessions/' + name + '/diff');
+    el.textContent = (d.files || []).map(f =>
+      `${f.status}  ${f.filename}  +${f.additions} -${f.deletions}\n${f.patch || ''}`).join('\n\n')
+      || '(无文件变更)';
+  } catch (e) { el.textContent = '取 diff 失败:' + e.message; }
+}
+
+async function review(name, decision) {
+  let note = '';
+  if (decision === 'reject') { note = prompt('驳回原因(会作为后续派工的素材):') || ''; }
+  try {
+    await j('/api/sessions/' + name + '/review', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decision, note})});
+  } catch (e) { alert(e.message); }
+  loadReviews();
+}
+
 $('cellSel').onchange = () => { cell = $('cellSel').value; $('frame').removeAttribute('data-src'); refresh(); };
 $('saveDesc').onclick = async () => {
   try {
@@ -203,7 +253,8 @@ $('release').onclick = async () => {
   await loadMeta();
   await loadCells();
   await refresh();
-  setInterval(async () => { try { await loadCells(); await refresh(); } catch {} }, 4000);
+  await loadReviews();
+  setInterval(async () => { try { await loadCells(); await refresh(); await loadReviews(); } catch {} }, 4000);
 })();
 </script>
 </body>

@@ -67,6 +67,7 @@ func main() {
 	s := &server{k8s: kc, auth: cs, creds: newCredProvider(), controlNS: *controlNS, enforceRef: *enforceRef}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/forge/", s.handleForge) // ADR-0006, control plane only
 	mux.HandleFunc("/", s.handleGit)
 
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 15 * time.Second}

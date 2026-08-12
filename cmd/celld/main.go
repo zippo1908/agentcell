@@ -22,6 +22,7 @@ import (
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/internal/controller"
+	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/internal/version"
 	"github.com/zippo1908/agentcell/internal/webui"
 )
@@ -79,7 +80,11 @@ func main() {
 		log.Error(err, "setup cell controller")
 		os.Exit(1)
 	}
-	if err := (&controller.SessionReconciler{Client: mgr.GetClient(), Registry: registry, GitBrokerURL: *gitBrokerURL}).SetupWithManager(mgr); err != nil {
+	forgeClient := forge.New(*gitBrokerURL)
+	if err := (&controller.SessionReconciler{
+		Client: mgr.GetClient(), Registry: registry,
+		GitBrokerURL: *gitBrokerURL, Forge: forgeClient,
+	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup session controller")
 		os.Exit(1)
 	}
@@ -94,7 +99,7 @@ func main() {
 		log.Info("WARNING: HTTP surface is UNAUTHENTICATED (--allow-no-auth)")
 	}
 
-	ui := &webui.Handler{Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry}
+	ui := &webui.Handler{Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient}
 	mux := http.NewServeMux()
 	auth.LoginRoutes(mux)
 	mux.Handle("/", auth.Middleware(ui.Routes()))

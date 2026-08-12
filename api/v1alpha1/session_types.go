@@ -45,6 +45,16 @@ const (
 	SessionError     SessionPhase = "Error"
 )
 
+// ReviewState is the human verdict on a settled session's branch
+// (ADR-0006). Meaningful only when Produced is true.
+type ReviewState string
+
+const (
+	ReviewPending  ReviewState = "Pending"
+	ReviewApproved ReviewState = "Approved"
+	ReviewRejected ReviewState = "Rejected"
+)
+
 // SessionStatus is the observed state of a Session.
 type SessionStatus struct {
 	Phase     SessionPhase `json:"phase,omitempty"`
@@ -55,6 +65,17 @@ type SessionStatus struct {
 	Produced  bool         `json:"produced,omitempty"`
 	StartTime *metav1.Time `json:"startTime,omitempty"`
 	Message   string       `json:"message,omitempty"`
+
+	// Review (ADR-0006): the queue is Sessions with Produced && Pending.
+	ReviewState ReviewState `json:"reviewState,omitempty"`
+	// ReviewNote carries the approval remark or the rejection reason (the
+	// latter seeds a follow-up dispatch).
+	ReviewNote string `json:"reviewNote,omitempty"`
+	// PR tracking, populated after approval opens one.
+	PRURL    string `json:"prURL,omitempty"`
+	PRNumber int    `json:"prNumber,omitempty"`
+	// PRState is the forge's view: open | merged | closed.
+	PRState string `json:"prState,omitempty"`
 }
 
 // +kubebuilder:object:root=true

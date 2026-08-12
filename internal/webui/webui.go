@@ -19,6 +19,7 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/pkg/ids"
 )
 
@@ -31,6 +32,9 @@ type Handler struct {
 	Client    client.Client
 	Namespace string // control namespace holding Cell/Session CRs
 	Registry  *access.Registry
+	// Forge serves diffs through the broker (ADR-0006); nil/disabled makes
+	// the diff endpoint report 501 and review purely informational.
+	Forge *forge.Client
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -45,6 +49,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
 	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
+	mux.HandleFunc("GET /api/reviews", h.listReviews)
+	mux.HandleFunc("GET /api/sessions/{session}/diff", h.sessionDiff)
+	mux.HandleFunc("POST /api/sessions/{session}/review", h.reviewSession)
 	mux.HandleFunc("DELETE /api/sessions/{session}", h.settleSession)
 	mux.HandleFunc("/preview/{cell}/", h.preview)
 	mux.HandleFunc("/app/{cell}/", h.productionApp)
