@@ -142,3 +142,59 @@ attempts after the first were correctly refused with 403 - the run now asserts
 that replay is refused. And the first hit answers 303, not 200, because the
 ticket is exchanged for a session cookie and the URL rewritten without it; the
 check accepts 3xx there rather than treating the design as a failure.
+
+## Run 5 - two users in one Cell (ADR-0009)
+
+Runs 1-4 all had a single principal, so the entire runtime ran as one Unix
+user and nothing about isolation was exercised. Run 5 puts two owners in one
+Cell and checks the property that matters: neither can read the other's
+work, both can still use the project.
+
+Environment: the same internal k3s and self-hosted GitLab as Run 4; celld at
+`iso2`, runtime image at `iso5`.
+
+| Check | Result |
+| --- | --- |
+| Two owned Sessions both settle, concurrently | PASS |
+| Allocator records distinct uids | PASS, 100000 / 100001 |
+| uids come from the reserved user range | PASS |
+| The pods really ran as those uids | PASS, settle pods 100000 / 100001 |
+| fsGroup is still the project group | PASS, 1000 |
+| Private tree is 0700 and owned by its user | PASS |
+| The other user's pod is refused by the kernel | PASS, `Permission denied` |
+| Both users still read the project checkout | PASS |
+
+`passed=8 failed=0`.
+
+Three real defects surfaced here that no unit test reached, all of them
+consequences of per-user uids:
+
+**One user's private tree locked out every other user.** `MkdirAll` creates
+the parent with the child's mode, so `/workspace/users` became 0700 owned by
+whichever user started first, and the second user's session could not start
+at all. The anchor — which holds the project identity — now creates that
+directory group-writable and **sticky**: `/workspace` is world-writable, so
+without the sticky bit any user could delete a peer's private directory.
+Being unable to read it is not the whole property worth having.
+
+**git refused the shared checkout.** Sessions run as their owner while the
+checkout belongs to the project identity, so `git worktree add` failed with
+"detected dubious ownership". Trust is now granted for that exact path, never
+the `*` wildcard.
+
+**The shared object store was unwritable by anyone but its creator.** git
+creates object directories 0755, so the first uid to create a prefix
+directory owned it and everyone else hit "insufficient permission for adding
+an object to repository database". It fails by luck of the object hash, so it
+presents as an intermittent flake — in the first run of this suite alice
+settled and bob did not, with identical code. `core.sharedRepository=group`
+is the mechanism for exactly this, applied at clone and repaired on every
+anchor start so Cells created before per-user uids are fixed too.
+
+A fourth finding was in the harness, not the product: the fixture reused
+fixed session ids, which collided with the branch its own previous run had
+pushed. Real session ids are ULIDs.
+
+Settle also stopped swallowing failure causes. "autosave commit failed" with
+no reason attached is what made the object-store bug look intermittent; the
+verdict now carries the error onto the Session status.
