@@ -37,6 +37,9 @@ const (
 type SessionReconciler struct {
 	client.Client
 	Registry *access.Registry
+	// GitBrokerURL, when set, routes the settle push through the broker so
+	// the settle job holds no forge credential (ADR-0005).
+	GitBrokerURL string
 }
 
 // settleResult is the JSON the settle applet writes to its termination log.
@@ -381,7 +384,7 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 		{Name: runtimeapi.EnvRepoURL, Value: cell.Spec.Repo.URL},
 	}
 	if cell.Spec.Repo.SecretName != "" {
-		settleEnv = append(settleEnv, gitCredEnv(ids.GitSecretName)...)
+		settleEnv = append(settleEnv, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)
 	}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.SettleJobName(id)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, job, func() error {

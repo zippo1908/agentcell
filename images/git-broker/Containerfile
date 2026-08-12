@@ -1,0 +1,7 @@
+# git-broker image — the only component that holds forge credentials.
+# Build from repo root:
+#   make build && podman build -t ghcr.io/agentcell/git-broker -f images/git-broker/Containerfile .
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY bin/git-broker /git-broker
+USER nonroot
+ENTRYPOINT ["/git-broker"]

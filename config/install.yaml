@@ -73,7 +73,11 @@ spec:
         - name: celld
           image: ghcr.io/agentcell/celld:latest
           imagePullPolicy: IfNotPresent
-          args: ["--control-namespace=agentcell-system"]
+          args:
+            - "--control-namespace=agentcell-system"
+            # Route all workload git through the broker so no workload pod
+            # holds a forge token (ADR-0005). Remove to use direct mode.
+            - "--git-broker-url=http://git-broker.agentcell-system.svc:8080"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
@@ -101,3 +105,80 @@ spec:
   selector: {app: celld}
   ports:
     - {name: http, port: 80, targetPort: http}
+---
+# git-broker: the only component that holds forge credentials (ADR-0005).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: git-broker
+  namespace: agentcell-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentcell-git-broker
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentcell-git-broker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentcell-git-broker
+subjects:
+  - kind: ServiceAccount
+    name: git-broker
+    namespace: agentcell-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-broker
+  namespace: agentcell-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: git-broker}
+  template:
+    metadata:
+      labels: {app: git-broker}
+    spec:
+      serviceAccountName: git-broker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: git-broker
+          image: ghcr.io/agentcell/git-broker:latest
+          imagePullPolicy: IfNotPresent
+          args: ["--control-namespace=agentcell-system"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-broker
+  namespace: agentcell-system
+spec:
+  selector: {app: git-broker}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

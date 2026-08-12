@@ -22,7 +22,7 @@
 | Real-cluster (k3s) e2e — all 8 steps incl. preview & production HTTP 200 | ✅ passed ([docs/E2E_RESULTS.md](docs/E2E_RESULTS.md) Run 3) |
 | Review queue, diff approval, auto-PR, merge tracking | ⬜ designed (M7/M9) |
 | Terminal attach (tmux over WebSocket) | ⬜ designed (M5) |
-| Git-token broker (tokens fully out of workload pods) | ⬜ designed |
+| Git-token broker (forge token in no workload pod; SA-token auth; session-branch-only push policy; optional short-lived GitHub App tokens) | ✅ implemented (ADR-0005), default on |
 | Knowledge indexing / review-feedback distillation | ⬜ designed |
 | agent-sandbox substrate (ADR-0004 Phase 1) | ⬜ designed |
 
@@ -104,7 +104,7 @@ Deleting a Session CR is safe at any moment: a finalizer guarantees settle runs 
 
 - Namespace per project; session pods run with pod-level CPU/memory limits.
 - Model keys: per-session Secret + `$(VAR)` indirection — the literal never appears in a pod spec (unit-tested).
-- Forge tokens: never in session pods. In the prod pod they exist only in the clone **init container** (the serving container gets no git env); the anchor strips them from the preview dev server's environment. Remaining exposure: the anchor's own supervisor process holds them for clone/fetch — the designed fix is a cluster-side git broker.
+- Forge tokens: with the **git-broker** on (default, [ADR-0005](docs/adr/0005-git-broker.md)), **no workload pod holds the forge token at all** — anchor / settle / prod-clone reach git through the broker and authenticate with their ServiceAccount token; the broker (the one component holding credentials) injects the real token and enforces a session-branch-only push policy. A leaked SA token only permits git on that cell's own repo, never the PAT. Session pods never touch git credentials in either mode.
 - **Trust model within a project:** all sessions of one Cell share the workspace PVC (that's what makes worktrees share one object store), so a session can read the main checkout, other worktrees, and the knowledge dir. Isolation is strong *between* projects (namespaces), advisory *within* one.
 - All platform-rendered pods run non-root (uid 1000, seccomp RuntimeDefault, drop-ALL caps, no privilege escalation); the stock devbox image sets `USER node`. Planned (M8+): NetworkPolicy per cell namespace, Pod Security restricted labels, optional RuntimeClass (Kata/gVisor) hard-isolation tier.
 

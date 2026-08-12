@@ -36,6 +36,8 @@ func runProdClone() error {
 		return fmt.Errorf("%s / %s not set", runtimeapi.EnvRepoURL, runtimeapi.EnvProdRef)
 	}
 
+	gitURL := effectiveGitURL(url)
+
 	// Fresh, immutable release checkout.
 	_ = os.RemoveAll(runtimeapi.ProdRepoPath)
 	if err := os.MkdirAll(runtimeapi.ProdRepoPath, 0o755); err != nil {
@@ -46,7 +48,7 @@ func runProdClone() error {
 		if err := git(runtimeapi.ProdRepoPath, "init", "-q"); err != nil {
 			return err
 		}
-		if err := git(runtimeapi.ProdRepoPath, "remote", "add", "origin", url); err != nil {
+		if err := git(runtimeapi.ProdRepoPath, "remote", "add", "origin", gitURL); err != nil {
 			return err
 		}
 		if err := gitNet(runtimeapi.ProdRepoPath, "fetch", "--depth", "1", "origin", ref); err != nil {
@@ -56,7 +58,7 @@ func runProdClone() error {
 			return err
 		}
 	} else {
-		if err := gitNet("/", "clone", "--depth", "1", "--branch", ref, url, runtimeapi.ProdRepoPath); err != nil {
+		if err := gitNet("/", "clone", "--depth", "1", "--branch", ref, gitURL, runtimeapi.ProdRepoPath); err != nil {
 			return fmt.Errorf("clone release %q: %w", ref, err)
 		}
 	}

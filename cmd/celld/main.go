@@ -34,6 +34,8 @@ func main() {
 			"namespace holding Cell/Session CRs")
 		providersDir = flag.String("providers-dir", "/etc/agentcell/providers.d",
 			"directory of provider preset overlays (*.yaml)")
+		gitBrokerURL = flag.String("git-broker-url", os.Getenv("AGENTCELL_GIT_BROKER"),
+			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
 			"file of API access tokens (whitespace-separated); enables auth when present")
 		allowNoAuth = flag.Bool("allow-no-auth", false,
@@ -73,11 +75,11 @@ func main() {
 		log.Error(err, "new manager")
 		os.Exit(1)
 	}
-	if err := (&controller.CellReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.CellReconciler{Client: mgr.GetClient(), GitBrokerURL: *gitBrokerURL}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup cell controller")
 		os.Exit(1)
 	}
-	if err := (&controller.SessionReconciler{Client: mgr.GetClient(), Registry: registry}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.SessionReconciler{Client: mgr.GetClient(), Registry: registry, GitBrokerURL: *gitBrokerURL}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup session controller")
 		os.Exit(1)
 	}

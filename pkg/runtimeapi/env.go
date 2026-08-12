@@ -29,10 +29,28 @@ const (
 	// Kubernetes $(VAR) substitution syntax.
 	EnvAPIKey = "AGENTCELL_API_KEY"
 
-	// Git credentials (anchor clone + settle push only; never in session
-	// pods). Provided via the workload-namespace copy of the forge secret.
+	// Git credentials for DIRECT mode (anchor clone + settle push only;
+	// never in session pods). Provided via the workload-namespace copy of
+	// the forge secret. In broker mode (EnvGitBroker set) these are absent —
+	// the workload never holds the forge token; see ADR-0005.
 	EnvGitUsername = "GIT_USERNAME"
 	EnvGitToken    = "GIT_TOKEN"
+
+	// EnvGitBroker, when set, is the base URL of the git-broker service
+	// (e.g. http://git-broker.agentcell-system.svc:8080). cell-runtime then
+	// routes all git through <broker>/<cell> and authenticates with its
+	// projected ServiceAccount token instead of a forge credential.
+	EnvGitBroker = "AGENTCELL_GIT_BROKER"
+	// EnvCellName is the Cell this workload belongs to; broker URLs are
+	// <broker>/<cell>/… and the broker binds it to the pod's namespace.
+	EnvCellName = "AGENTCELL_CELL"
+
+	// SATokenPath is where Kubernetes projects the pod's ServiceAccount
+	// token; in broker mode cell-runtime sends it as the git password.
+	SATokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	// BrokerGitUser is the fixed basic-auth username workloads present to
+	// the broker; the password carries the SA token.
+	BrokerGitUser = "x-access-token"
 
 	// Production (正式区) container: fresh shallow clone per release,
 	// on an emptyDir — never the dev-zone PVC.

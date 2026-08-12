@@ -130,6 +130,17 @@ kubectl -n agentcell-system create secret generic git-cred \
   --from-literal=password=<PAT-with-push-access>
 ```
 
+> **git-broker (default, ADR-0005).** `config/install.yaml` deploys a
+> `git-broker` and starts celld with `--git-broker-url`, so anchor / settle /
+> prod-clone pods **never receive the forge token** — they authenticate to
+> the broker with their ServiceAccount token and the broker injects the real
+> credential. The `git-cred` secret is read only by the broker. To use
+> **short-lived GitHub App tokens** instead of a PAT, store App credentials
+> in that secret (`github_app_id`, `github_app_installation_id`,
+> `github_app_private_key`) and omit `password`; the broker mints ~1h
+> installation tokens. To disable the broker (direct mode, token in the
+> anchor), remove the `--git-broker-url` arg from the celld Deployment.
+
 ### 5c. Model credentials (per session, key `key`)
 
 Each dispatch injects a model API key into that session only. Create one

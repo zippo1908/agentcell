@@ -32,6 +32,9 @@ const cellFinalizer = "agentcell.io/cleanup"
 // resident product preview) and preview Service.
 type CellReconciler struct {
 	client.Client
+	// GitBrokerURL, when set, routes workload git through the broker so no
+	// pod holds a forge credential (ADR-0005).
+	GitBrokerURL string
 }
 
 func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -62,7 +65,10 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.ensureNetworkPolicies(ctx, ns, cell.Namespace); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("network policies: %w", err))
 	}
-	if cell.Spec.Repo.SecretName != "" {
+	// In broker mode the forge secret must NOT be copied into the workload
+	// namespace — it stays readable only by the broker (ADR-0005). Only
+	// direct mode needs a per-namespace copy for the askpass helper.
+	if cell.Spec.Repo.SecretName != "" && r.GitBrokerURL == "" {
 		if err := r.copySecret(ctx, cell.Namespace, cell.Spec.Repo.SecretName, ns, ids.GitSecretName); err != nil {
 			return r.fail(ctx, &cell, fmt.Errorf("copy git secret: %w", err))
 		}
@@ -217,17 +223,31 @@ func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, ns, controlN
 	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
 	dns := intstr.FromInt(53)
 	https := intstr.FromInt(443)
+	broker := intstr.FromInt(8080)
 	egress := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "allow-egress"}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, egress, func() error {
+		rules := []netv1.NetworkPolicyEgressRule{
+			{Ports: []netv1.NetworkPolicyPort{
+				{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns},
+			}},
+			{Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &https}}},
+		}
+		if r.GitBrokerURL != "" {
+			// Reaching the git-broker in the control namespace on 8080. (443
+			// stays open for session pods calling model APIs.)
+			rules = append(rules, netv1.NetworkPolicyEgressRule{
+				To: []netv1.NetworkPolicyPeer{{
+					NamespaceSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
+					},
+				}},
+				Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &broker}},
+			})
+		}
 		egress.Spec = netv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{},
 			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
-			Egress: []netv1.NetworkPolicyEgressRule{
-				{Ports: []netv1.NetworkPolicyPort{
-					{Protocol: &udp, Port: &dns}, {Protocol: &tcp, Port: &dns},
-				}},
-				{Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &https}}},
-			},
+			Egress:      rules,
 		}
 		return nil
 	}); err != nil {
@@ -321,7 +341,7 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 		{Name: runtimeapi.EnvPreviewTarget, Value: previewTargetDir(cell)},
 	}
 	if cell.Spec.Repo.SecretName != "" {
-		env = append(env, gitCredEnv(ids.GitSecretName)...)
+		env = append(env, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)
 	}
 
 	labels := map[string]string{
@@ -460,7 +480,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 		{Name: runtimeapi.EnvProdReleaseID, Value: cell.Spec.Production.ReleaseID},
 	}
 	if cell.Spec.Repo.SecretName != "" {
-		cloneEnv = append(cloneEnv, gitCredEnv(ids.GitSecretName)...)
+		cloneEnv = append(cloneEnv, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)
 	}
 	serveEnv := []corev1.EnvVar{
 		{Name: runtimeapi.EnvProdCmd, Value: string(cmdJSON)},

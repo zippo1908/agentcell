@@ -50,11 +50,13 @@ http_ok() {
 log "1/8 build binaries + images"
 make build build-runtime-static
 $BUILDER build -t ghcr.io/agentcell/celld       -f images/celld/Containerfile .
+$BUILDER build -t ghcr.io/agentcell/git-broker  -f images/git-broker/Containerfile .
 $BUILDER build -t ghcr.io/agentcell/devbox-e2e  -f images/devbox-e2e/Containerfile .
 if [ "${E2E_IMPORT:-0}" = "1" ]; then
   # Import each image separately: k3s ctr can collapse tags from a multi-image
-  # Docker archive, making devbox-e2e point at celld.
-  $BUILDER save ghcr.io/agentcell/celld | sudo k3s ctr images import -
+  # Docker archive, making tags point at the wrong image.
+  $BUILDER save ghcr.io/agentcell/celld      | sudo k3s ctr images import -
+  $BUILDER save ghcr.io/agentcell/git-broker | sudo k3s ctr images import -
   $BUILDER save ghcr.io/agentcell/devbox-e2e | sudo k3s ctr images import -
 fi
 
@@ -69,6 +71,8 @@ kubectl -n "$NS" create secret generic git-cred --type=kubernetes.io/basic-auth 
 kubectl -n "$NS" create secret generic e2e-model --from-literal=key=dummy
 kubectl -n "$NS" rollout restart deploy/celld
 kubectl -n "$NS" rollout status deploy/celld --timeout=120s
+# git-broker holds the forge token; workloads reach git only through it.
+kubectl -n "$NS" rollout status deploy/git-broker --timeout=120s
 
 log "3/8 auth is enforced (401 without token, 200 with)"
 kubectl -n "$NS" port-forward svc/celld 18080:80 >/tmp/e2e-pf.log 2>&1 &

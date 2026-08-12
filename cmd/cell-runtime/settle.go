@@ -30,7 +30,7 @@ func runSettle() error {
 		return err
 	}
 	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(id), ids.SessionBranch(id), base, id,
-		os.Getenv(runtimeapi.EnvRepoURL))
+		effectiveGitURL(os.Getenv(runtimeapi.EnvRepoURL)))
 	raw, _ := json.Marshal(v)
 	// Termination message is the transport back to the controller; write it
 	// on failure too so a final failed attempt still explains itself.

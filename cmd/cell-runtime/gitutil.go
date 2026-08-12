@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 // askpassScript is written at container start; git invokes it for
@@ -20,12 +22,40 @@ func ensureAskpass() error {
 
 func runAskpass(args []string) error {
 	prompt := strings.ToLower(strings.Join(args, " "))
-	if strings.Contains(prompt, "username") {
-		fmt.Println(os.Getenv("GIT_USERNAME"))
+	username := strings.Contains(prompt, "username")
+	// Broker mode: authenticate to the git-broker with the pod's SA token,
+	// never a forge credential (ADR-0005). The forge token is not present
+	// in this pod at all.
+	if os.Getenv(runtimeapi.EnvGitBroker) != "" {
+		if username {
+			fmt.Println(runtimeapi.BrokerGitUser)
+		} else {
+			tok, err := os.ReadFile(runtimeapi.SATokenPath)
+			if err != nil {
+				return fmt.Errorf("read service account token: %w", err)
+			}
+			fmt.Println(strings.TrimSpace(string(tok)))
+		}
+		return nil
+	}
+	if username {
+		fmt.Println(os.Getenv(runtimeapi.EnvGitUsername))
 	} else {
-		fmt.Println(os.Getenv("GIT_TOKEN"))
+		fmt.Println(os.Getenv(runtimeapi.EnvGitToken))
 	}
 	return nil
+}
+
+// effectiveGitURL returns the URL git should target for the workload's
+// repository. In broker mode that is <broker>/<cell> (the real remote is
+// resolved by the broker from the Cell CR, and never appears here); in
+// direct mode it is the real remote passed in.
+func effectiveGitURL(realURL string) string {
+	broker := strings.TrimRight(os.Getenv(runtimeapi.EnvGitBroker), "/")
+	if broker == "" {
+		return realURL
+	}
+	return broker + "/" + os.Getenv(runtimeapi.EnvCellName)
 }
 
 // git runs a git command with output to our stdout/stderr and askpass wired.

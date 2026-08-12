@@ -1,6 +1,6 @@
 # ADR-0005: git-broker — keep the forge token out of every workload pod
 
-- 状态:已接受设计,分阶段实现(2026-08 提出)
+- 状态:**已实现(v1+v2+v3)**,2026-08。默认在 install.yaml 开启;直连模式保留为去掉 `--git-broker-url` 的回退。
 - 关联:兑现 [ADR-0001](0001-architecture.md) 的"凭据不进容器"承诺中唯一未完成的一半;取代 [ADR-0004](0004-agent-sandbox-adoption.md) 无关
 
 ## 背景:欠账在哪

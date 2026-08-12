@@ -19,6 +19,7 @@ import (
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 const controlNS = "agentcell-system"
@@ -156,6 +157,77 @@ func TestCellFinalizeWaitsForWorkloadNamespaceDeletion(t *testing.T) {
 		t.Fatalf("finalizer retained after namespace deletion: %v", cell.Finalizers)
 	}
 }
+func envMap(vars []corev1.EnvVar) map[string]corev1.EnvVar {
+	m := map[string]corev1.EnvVar{}
+	for _, e := range vars {
+		m[e.Name] = e
+	}
+	return m
+}
+
+// In broker mode, no workload container that runs (or hosts) repo-controlled
+// code may carry a forge credential; it gets the broker URL + cell name and
+// authenticates with its ServiceAccount token instead (ADR-0005).
+func TestBrokerModeStripsForgeCredentialsFromWorkloads(t *testing.T) {
+	cellCR := testCell()
+	cellCR.Spec.Repo.SecretName = "git-cred"
+	cellCR.Spec.Production = acv1.ProductionSpec{ReleaseID: ids.NewSessionID()}
+	c := newFake(t, cellCR)
+	r := &CellReconciler{Client: c, GitBrokerURL: "http://git-broker.agentcell-system.svc:8080"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+
+	var sts appsv1.StatefulSet
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.AnchorStatefulSet}, &sts); err != nil {
+		t.Fatal(err)
+	}
+	anchor := envMap(sts.Spec.Template.Spec.Containers[0].Env)
+	if _, has := anchor["GIT_TOKEN"]; has {
+		t.Error("anchor holds a forge token in broker mode")
+	}
+	if anchor[runtimeapi.EnvGitBroker].Value == "" {
+		t.Error("anchor missing broker URL")
+	}
+	if anchor[runtimeapi.EnvCellName].Value != "shop" {
+		t.Errorf("anchor cell name = %q", anchor[runtimeapi.EnvCellName].Value)
+	}
+
+	var dep appsv1.Deployment
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.ProdDeployment}, &dep); err != nil {
+		t.Fatal(err)
+	}
+	clone := envMap(dep.Spec.Template.Spec.InitContainers[0].Env)
+	if _, has := clone["GIT_TOKEN"]; has {
+		t.Error("prod-clone holds a forge token in broker mode")
+	}
+	if clone[runtimeapi.EnvGitBroker].Value == "" {
+		t.Error("prod-clone missing broker URL")
+	}
+
+	// The egress policy must permit reaching the broker.
+	var eg netv1.NetworkPolicy
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "allow-egress"}, &eg); err != nil {
+		t.Fatal(err)
+	}
+	foundBroker := false
+	for _, rule := range eg.Spec.Egress {
+		for _, p := range rule.Ports {
+			if p.Port != nil && p.Port.IntValue() == 8080 {
+				foundBroker = true
+			}
+		}
+	}
+	if !foundBroker {
+		t.Error("egress policy does not allow reaching the broker on 8080")
+	}
+}
+
 func credSecret(name string) *corev1.Secret {
 	s := &corev1.Secret{}
 	s.Name, s.Namespace = name, controlNS

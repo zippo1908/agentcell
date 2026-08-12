@@ -85,7 +85,7 @@ func ensureClone() error {
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, url, ids.RepoPath)
+	args = append(args, effectiveGitURL(url), ids.RepoPath)
 	return gitNet("/", args...)
 }
 
