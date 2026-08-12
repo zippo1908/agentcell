@@ -7,10 +7,21 @@
 controlNamespace: agentcell-system
 
 image:
-  # Point at wherever the internal registry mirrors the images; with
-  # locally imported images IfNotPresent keeps them from being re-pulled.
+  # Point at wherever the internal registry mirrors the images.
   registry: ghcr.io/zippo1908
-  pullPolicy: IfNotPresent
+  tag: v0.1.0-alpha.3
+  # Always, deliberately. Run 4 lost half an hour to IfNotPresent: a tag
+  # already cached on the node was reused, so the cluster silently kept
+  # running older code while reporting the new version's tag. Switch to
+  # IfNotPresent only once images are mirrored to an internal registry and
+  # tags are treated as immutable.
+  pullPolicy: Always
+  # Name of a docker-registry Secret in controlNamespace; the operator
+  # mirrors it into every Cell namespace. Required whenever the images are
+  # not public — create it with:
+  #   kubectl -n agentcell-system create secret docker-registry regcred \
+  #     --docker-server=... --docker-username=... --docker-password=...
+  pullSecret: ""
 
 celld:
   replicas: 1          # no leader election yet — keep at 1

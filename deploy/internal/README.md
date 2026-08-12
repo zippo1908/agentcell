@@ -25,6 +25,20 @@ kubectl -n agentcell-system create secret generic git-cred \
   --from-literal=repo_url=<https clone url>
 ```
 
+For the internal GitLab add `--from-literal=forge=gitlab` and use a project
+access token as `password` (`username` can be anything, e.g. `oauth2`). If
+the images live in a registry that needs credentials, also create the pull
+secret and set `image.pullSecret` — kubelet resolves pull secrets per
+namespace, so without it every Cell stalls in `ImagePullBackOff`:
+
+```sh
+kubectl -n agentcell-system create secret docker-registry regcred \
+  --docker-server=<registry> --docker-username=<user> --docker-password=<token>
+```
+
+Both paths are verified end to end in [Run 4](../../docs/E2E_RESULTS.md):
+k3s + self-hosted GitLab + private registry, 16 checks, 0 failures.
+
 Two reasons this rule is absolute: the repository may become public (this
 branch would go with it), and secrets committed to git survive in history
 even after deletion.
