@@ -4,6 +4,7 @@ import type {
   Diff,
   DispatchInput,
   Meta,
+  SessionState,
   Review,
 } from './types'
 
@@ -69,6 +70,16 @@ export const api = {
     req<Review[]>(`/api/reviews${cell ? `?cell=${encodeURIComponent(cell)}` : ''}`),
 
   diff: (session: string) => req<Diff>(`/api/sessions/${session}/diff`),
+
+  /** Is a resident session still working, or waiting for you? */
+  sessionState: (session: string) => req<SessionState>(`/api/sessions/${session}/state`),
+
+  /** Say one more thing to a live session, in the same conversation. */
+  continueSession: (session: string, text: string) =>
+    req<{ ok: string }>(`/api/sessions/${session}/continue`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
 
   review: (session: string, decision: 'approve' | 'reject', note: string) =>
     req<Review>(`/api/sessions/${session}/review`, {

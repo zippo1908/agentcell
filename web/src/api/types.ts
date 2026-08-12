@@ -113,3 +113,13 @@ export interface DispatchInput {
   /** Keep the slot alive after the agent finishes, in the owner's tmux. */
   resident?: boolean
 }
+
+/** Live state of a resident session — answered by asking its tmux window,
+ * not by looking at the pod (a runtime can be up while the window is gone). */
+export interface SessionState {
+  resident: boolean
+  live: boolean
+  working: boolean
+  exitCode?: string
+  attach: string
+}

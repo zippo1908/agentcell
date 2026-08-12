@@ -111,7 +111,9 @@ func (h *Handler) previewURL(r *http.Request, cell string, zone Zone, path strin
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/meta", h.meta)
+	mux.HandleFunc("GET /api/me", h.me)
 	mux.HandleFunc("GET /api/cells", h.listCells)
+	mux.HandleFunc("POST /api/cells", h.createCell)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
@@ -242,6 +244,25 @@ func (h *Handler) meta(w http.ResponseWriter, r *http.Request) {
 		// the console on purpose; the UI must not build these as relative
 		// paths or the isolation collapses.
 		"previewOrigin": h.previewOriginFor(r),
+	})
+}
+
+// me tells the UI who it is acting as.
+//
+// Ownership is invisible without it: a user needs to know whether they are
+// themselves or the shared static-token principal, because that decides
+// which sessions they can see and whether "private" means anything here.
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	p := identity.FromContext(r.Context())
+	writeJSON(w, 200, map[string]any{
+		"subject": p.ID(),
+		"name":    p.Display(),
+		"email":   p.Email,
+		"kind":    string(p.Kind),
+		// Shared means every caller is the same principal, so nothing is
+		// private from anyone else holding the token. Saying so plainly beats
+		// a UI that implies isolation it does not have.
+		"shared": p.Kind == identity.KindToken,
 	})
 }
 
