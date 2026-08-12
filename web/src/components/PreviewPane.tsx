@@ -61,7 +61,19 @@ export function PreviewPane({
         </button>
       </div>
       {src ? (
-        <iframe ref={frame} src={src} title="product preview" />
+        <iframe
+          ref={frame}
+          src={src}
+          title="product preview"
+          // The previewed app is repo- and agent-authored: untrusted. Omitting
+          // allow-same-origin gives it an opaque origin, so its scripts cannot
+          // reach this page's DOM or call the control API with our cookie; the
+          // omitted top-navigation permissions stop it replacing the console.
+          // (celld sends the same policy as a CSP header, which also covers
+          // opening /preview directly.) Trade-off: an app relying on its own
+          // cookies/localStorage will degrade inside the preview.
+          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+        />
       ) : (
         <div className="empty">正式区尚未发布。</div>
       )}

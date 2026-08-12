@@ -3,6 +3,7 @@ package webui
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -51,17 +52,75 @@ func (a *Authenticator) valid(presented string) bool {
 // bearer's rights and nothing more.
 const sessionCookie = "agentcell_token"
 
-// credential extracts the presented token from either the bearer header
-// (API/CLI) or the session cookie (browser).
-func credential(r *http.Request) string {
+// credential extracts the presented token and how it was presented. The
+// distinction matters: a bearer header is only ever sent deliberately by an
+// API/CLI caller, while a cookie rides along on any request the browser
+// makes — including one initiated by untrusted preview content.
+func credential(r *http.Request) (token string, viaCookie bool) {
 	const p = "Bearer "
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, p) {
-		return strings.TrimSpace(h[len(p):])
+		return strings.TrimSpace(h[len(p):]), false
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		return c.Value
+		return c.Value, true
 	}
-	return ""
+	return "", false
+}
+
+// unsafeMethod reports whether a request can change state.
+func unsafeMethod(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return true
+}
+
+// sameOriginRequest verifies a state-changing, cookie-authenticated request
+// actually originated from the AgentCell UI.
+//
+// This is load-bearing: preview and production content is untrusted (repo-
+// and agent-authored) and is served from *this same origin* under /preview
+// and /app. SameSite cookies therefore do not help at all — such a request
+// is same-site by construction. Without this check, a malicious preview
+// page could call dispatch/review/release with the operator's cookie.
+//
+// Bearer callers are exempt: a token in a header cannot be attached by a
+// browser on someone else's behalf.
+func sameOriginRequest(r *http.Request) bool {
+	self := requestOrigin(r)
+	if o := r.Header.Get("Origin"); o != "" {
+		// "null" is what a sandboxed (opaque-origin) document sends —
+		// exactly the preview case we are defending against.
+		return o != "null" && o == self
+	}
+	// No Origin: fall back to Referer, which browsers send on same-origin
+	// form posts. Absent both, refuse — we cannot establish provenance.
+	if ref := r.Header.Get("Referer"); ref != "" {
+		u, err := url.Parse(ref)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return false
+		}
+		return u.Scheme+"://"+u.Host == self
+	}
+	return false
+}
+
+// requestOrigin reconstructs this server's own origin as the browser sees
+// it, honouring a trusted reverse proxy's forwarded headers.
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	}
+	host := r.Host
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		host = h
+	}
+	return scheme + "://" + host
 }
 
 // Middleware wraps a handler, requiring a valid token on every request
@@ -73,7 +132,8 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.valid(credential(r)) {
+		token, viaCookie := credential(r)
+		if !a.valid(token) {
 			// A browser navigation gets redirected to the login form; an
 			// API/CLI caller gets a clean 401.
 			if wantsHTML(r) {
@@ -82,6 +142,12 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// CSRF: a valid cookie is not enough for a state-changing request —
+		// it must also demonstrably come from our own UI.
+		if viaCookie && unsafeMethod(r.Method) && !sameOriginRequest(r) {
+			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -106,9 +172,12 @@ func (a *Authenticator) LoginRoutes(mux *http.ServeMux) {
 			_, _ = w.Write(loginHTML)
 			return
 		}
+		// Secure whenever the browser reached us over TLS (directly or via a
+		// trusted proxy); a plain-HTTP port-forward still works for dev.
 		http.SetCookie(w, &http.Cookie{
 			Name: sessionCookie, Value: tok, Path: "/",
 			HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			Secure: strings.HasPrefix(requestOrigin(r), "https://"),
 		})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})

@@ -39,6 +39,25 @@ design. In short:
   with an audience-bound ServiceAccount token; only the settle role may push,
   and only to its own `session/<id>` branch. Session pods carry no token at
   all.
+- **Preview and production content is untrusted.** `/preview/<cell>/` and
+  `/app/<cell>/` serve repo- and agent-authored code from the control
+  plane's own origin. It is therefore confined two ways: the UI frames it
+  with a `sandbox` attribute that omits `allow-same-origin`, and celld
+  stamps an equivalent `Content-Security-Policy: sandbox …` on every
+  proxied response so the confinement also applies when an operator opens
+  the URL directly. Both give the document an **opaque origin**: its
+  scripts cannot read the console's DOM, cannot use our cookie, and cannot
+  navigate the top-level page. Trade-off: a previewed app that relies on
+  its own cookies/storage degrades. A dedicated preview origin remains the
+  stronger long-term answer.
+- **Cookie-authenticated writes require same-origin provenance.** Because
+  untrusted preview content is *same-site* with the console, SameSite
+  cookies provide no protection at all. Every state-changing request
+  authenticated by cookie must carry a matching `Origin` (or same-origin
+  `Referer`); `Origin: null` — what a sandboxed document sends — and
+  requests with no provenance are refused with 403. Bearer-token callers
+  (CLI/API) are exempt, since a browser cannot attach a header on someone
+  else's behalf.
 - **Trust assumption — tenants must not have direct Kubernetes access to
   `cell-*` namespaces.** The broker binds identity to the pod's
   audience-scoped token, verifies the pod's uid and its controller

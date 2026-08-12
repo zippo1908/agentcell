@@ -55,30 +55,59 @@ func (h *Handler) Routes() http.Handler {
 	return mux
 }
 
-// spaHandler serves the embedded build, rewriting unknown paths to
-// index.html (client-side routing) while leaving real assets alone.
+// isClientRoute reports whether a path is one the SPA router owns, so a
+// hard reload of it should be answered with index.html. Anything else —
+// unknown API paths, missing assets, other prefixes — must NOT be masked
+// as a 200 HTML page.
+func isClientRoute(p string) bool {
+	switch {
+	case p == "/" || p == "/cells" || p == "/reviews":
+		return true
+	case strings.HasPrefix(p, "/cells/"):
+		// /cells/<name> only; no deeper synthetic paths.
+		return !strings.Contains(strings.TrimPrefix(p, "/cells/"), "/")
+	}
+	return false
+}
+
+// spaHandler serves the embedded build. It serves real assets as-is and
+// falls back to index.html only for GET/HEAD of a known client route:
+// returning HTML 200 for an unknown /api/* path or for a POST would turn
+// programming errors into silently "successful" responses.
 func spaHandler() http.Handler {
 	assets := web.Dist()
 	files := http.FileServer(http.FS(assets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
-		if p == "" {
-			p = "index.html"
-		}
-		if _, err := fs.Stat(assets, p); err != nil {
-			// Not a built asset → hand the SPA its entrypoint.
-			r = r.Clone(r.Context())
-			r.URL.Path = "/"
-			index, err := fs.ReadFile(assets, "index.html")
-			if err != nil {
-				http.Error(w, "UI not built", http.StatusInternalServerError)
+		if p != "" {
+			if _, err := fs.Stat(assets, p); err == nil {
+				files.ServeHTTP(w, r) // a real built asset
 				return
 			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(index)
+		}
+		// Unmatched API paths answer in the caller's language.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("no such endpoint"))
 			return
 		}
-		files.ServeHTTP(w, r)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !isClientRoute(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		index, err := fs.ReadFile(assets, "index.html")
+		if err != nil {
+			http.Error(w, "UI not built", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = w.Write(index)
 	})
 }
 
@@ -323,13 +352,42 @@ func (h *Handler) productionApp(w http.ResponseWriter, r *http.Request) {
 	h.proxyTo(w, r, cellName, ids.ProdService, port, "/app/"+cellName)
 }
 
+// untrustedContentCSP forces every preview/production response into a
+// sandbox with an OPAQUE ORIGIN. This content is repo- and agent-authored,
+// i.e. untrusted, yet served from the control plane's own origin — without
+// this a preview page could read the UI's DOM or call the control API with
+// the operator's cookie. Deliberately absent: allow-same-origin (that would
+// hand the page back our origin) and every top-navigation permission.
+//
+// The iframe sandbox attribute in the UI is not sufficient on its own,
+// because an operator can open /preview/<cell>/ directly in a tab.
+const untrustedContentCSP = "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+
 func (h *Handler) proxyTo(w http.ResponseWriter, r *http.Request, cellName, svc string, port int32, prefix string) {
-	target := &url.URL{
-		Scheme: "http",
-		Host:   fmt.Sprintf("%s.%s.svc:%d", svc, ids.WorkloadNamespace(cellName), port),
+	h.proxyToURL(w, r, fmt.Sprintf("http://%s.%s.svc:%d", svc, ids.WorkloadNamespace(cellName), port), prefix)
+}
+
+// proxyToURL forwards to an already-resolved upstream. Split out from
+// proxyTo so the untrusted-content headers can be tested without cluster
+// DNS.
+func (h *Handler) proxyToURL(w http.ResponseWriter, r *http.Request, upstream, prefix string) {
+	target, err := url.Parse(upstream)
+	if err != nil {
+		http.Error(w, "bad upstream", http.StatusInternalServerError)
+		return
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		// Append rather than replace: multiple CSP headers are enforced as
+		// the intersection, so an upstream policy still applies and ours
+		// cannot be relaxed by the upstream.
+		resp.Header.Add("Content-Security-Policy", untrustedContentCSP)
+		resp.Header.Set("Referrer-Policy", "no-referrer")
+		resp.Header.Set("X-Content-Type-Options", "nosniff")
+		return nil
+	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+		w.Header().Set("Content-Security-Policy", untrustedContentCSP)
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = fmt.Fprintf(w, "upstream not ready: %v\n", err)
 	}
