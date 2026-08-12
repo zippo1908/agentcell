@@ -15,6 +15,7 @@ version: 1
 runners:
   claude:
     display_name: Claude Code
+    vendor: anthropic
     # Preference order; first protocol the provider also speaks wins.
     protocols: [anthropic]
     headless: ["claude", "--dangerously-skip-permissions", "-p", "{{task}}"]
@@ -26,6 +27,7 @@ runners:
 
   codex:
     display_name: OpenAI Codex CLI
+    vendor: openai
     protocols: [openai]
     # The container is the boundary; Codex's inner sandbox must yield to it.
     headless: ["codex", "exec", "--sandbox", "danger-full-access", "{{task}}"]
@@ -42,6 +44,11 @@ runners:
 
   kimi:
     display_name: Kimi CLI (月之暗面)
+    vendor: moonshot
+    # Pairing this with the `moonshot` provider keeps both the client and the
+    # models with one vendor, which is the least ambiguous shape for a team
+    # in mainland China: nothing crosses a border, and no third party's client
+    # terms are involved. See docs/DEPLOYMENT.md.
     # Kimi speaks both of Moonshot's endpoints; pair it with the `moonshot`
     # provider, or with any gateway exposing the same protocols.
     protocols: [anthropic, openai]

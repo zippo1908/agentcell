@@ -313,3 +313,30 @@ namespaces.
 
 For the full "what's implemented vs designed" matrix, see the
 [README](../README.md).
+
+## Choosing a runner and a provider (and what that implies)
+
+A dispatch binds a **runner** (the agent CLI) to a **provider** (whose models
+answer). They are independent, because model providers publish
+protocol-compatible endpoints so established CLIs can drive their models.
+
+For a team in mainland China the three shapes are:
+
+| Shape | Works | Notes |
+| --- | --- | --- |
+| Domestic CLI + domestic models (`kimi` + `moonshot`) | yes | Nothing crosses a border and no third party's client terms are involved. The simplest thing to defend. |
+| Foreign CLI + domestic models (`claude` + `moonshot`) | yes | Moonshot publishes an Anthropic-compatible endpoint for exactly this, and AgentCell will use it. Inference stays domestic. What AgentCell cannot tell you is whether Anthropic's licence for Claude Code permits pointing it at another vendor's backend — that is Anthropic's to define and yours to read. |
+| Foreign CLI + foreign models (`claude` + `anthropic`) | reachability-dependent | Anthropic does not serve mainland China; this is the direction that raises cross-border data questions, not the one above. |
+
+AgentCell's position is to state the pairing and never choose it for you. A
+dispatch that crosses vendors returns an `advisory` field naming both sides;
+it is not blocked, because the combination works and is often the only
+workable one.
+
+**None of this is legal advice.** Two documents decide it: the CLI vendor's
+terms, and the model provider's. AgentCell reads neither.
+
+On the regulatory side, the direction that helps is the one that keeps
+inference domestic: a provider registered in China (Moonshot/Kimi, DashScope,
+DeepSeek, Hunyuan) means no cross-border transfer of your repository content
+or prompts, which is usually the harder requirement to satisfy.
