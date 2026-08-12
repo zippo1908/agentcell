@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/pkg/ids"
@@ -146,6 +148,16 @@ func (h *Handler) continueSession(w http.ResponseWriter, r *http.Request) {
 		append([]string{runtimeapi.RuntimeBin, "tell", id}, argv...))
 	if err != nil {
 		writeErr(w, 502, fmt.Errorf("%v: %s", err, out))
+		return
+	}
+	// Typing to a session is the clearest possible activity: without this the
+	// idle clock would keep running while its owner was using it.
+	now := metav1.Now()
+	sess.Status.LastActivity = &now
+	if err := h.Client.Status().Update(r.Context(), sess); err != nil {
+		// The instruction was delivered; failing the request now would invite
+		// the user to send it twice.
+		writeJSON(w, 200, map[string]string{"ok": "sent", "warning": err.Error()})
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": "sent"})

@@ -87,6 +87,19 @@ type SessionStatus struct {
 	// name the conversation and give it a private $HOME (ADR-0009), not to
 	// reimplement transcripts.
 	RunnerSessionID string `json:"runnerSessionID,omitempty"`
+	// LastActivity is when something last happened in this session: a window
+	// opened, a follow-up typed, or the agent observed working. A resident
+	// session's TTL is measured from here rather than from its start, so the
+	// slot reclaimed is an idle one and never one in use.
+	LastActivity *metav1.Time `json:"lastActivity,omitempty"`
+	// RuntimeInstance identifies the exact container this session's window
+	// lives in. A tmux server dies with its container, so a restart takes
+	// every window with it — which looks identical to the owner closing one.
+	// Recording the instance is what tells those two apart: same container
+	// and no window means someone closed it; a different container means the
+	// runtime was replaced and the session should be handed back, not
+	// settled out from under its owner.
+	RuntimeInstance string `json:"runtimeInstance,omitempty"`
 	// Recoveries counts how often this session's runtime had to be rebuilt
 	// under it. Bounded: a session that cannot stay up is settled rather than
 	// rebuilt forever, so a failing node does not become an infinite loop.

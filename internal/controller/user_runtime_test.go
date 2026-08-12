@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -166,7 +167,11 @@ func TestModelCredentialNeverAppearsInArgv(t *testing.T) {
 		t.Errorf("the model key did not reach the window over stdin: %q", call.stdin)
 	}
 	// The briefing has to cross too, or TASK.md is written blank.
-	if !strings.Contains(call.stdin, "AGENTCELL_TASK=work") {
+	var env map[string]string
+	if err := json.Unmarshal([]byte(call.stdin), &env); err != nil {
+		t.Fatalf("stdin is not a JSON object: %v", err)
+	}
+	if env["AGENTCELL_TASK"] != "work" {
 		t.Errorf("the task text did not cross the exec channel: %q", call.stdin)
 	}
 }
@@ -567,8 +572,250 @@ func TestRecencyResumingRunnersGetTheirOwnStateDir(t *testing.T) {
 	}
 	var got acv1.Session
 	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
-	want := "CODEX_HOME=" + ids.SessionStateDir(uid, got.Status.SessionID)
-	if !strings.Contains(open.stdin, want) {
-		t.Errorf("window environment has no per-session state dir (%s):\n%s", want, open.stdin)
+	var env map[string]string
+	if err := json.Unmarshal([]byte(open.stdin), &env); err != nil {
+		t.Fatalf("stdin is not a JSON object: %v", err)
+	}
+	want := ids.SessionStateDir(uid, got.Status.SessionID)
+	if env["CODEX_HOME"] != want {
+		t.Errorf("window state dir = %q, want %q", env["CODEX_HOME"], want)
+	}
+}
+
+// A briefing is prose. Line-oriented framing forced a choice between
+// mangling a task that contains a newline and refusing it outright — and
+// refusing was wrong, because the console offers a multi-line box.
+func TestMultilineTaskCrossesTheExecChannel(t *testing.T) {
+	task := "两列布局\n第一行:间距加大\n第二行:标题=\"促销\"; 不要动价格"
+	s := residentSession("sess-a", "u-aaaa1111", task)
+	cellCR := testCell()
+	cellCR.Spec.Description = "极简电商\n面向移动端"
+	c := newFake(t, cellCR, credSecret("bailian-key"), s)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = rec.exec
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("a multi-line task was refused: %v", err)
+	}
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{
+		Namespace: ids.WorkloadNamespace("shop"), Name: ids.UserRuntimePod(uid)}, &pod)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	for range 2 {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var open *struct {
+		pod   string
+		argv  []string
+		stdin string
+	}
+	for i := range rec.calls {
+		if len(rec.calls[i].argv) > 1 && rec.calls[i].argv[1] == "window-open" {
+			open = &rec.calls[i]
+		}
+	}
+	if open == nil {
+		t.Fatal("no window opened")
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(open.stdin), &got); err != nil {
+		t.Fatalf("stdin is not a JSON object: %v\n%s", err, open.stdin)
+	}
+	// Byte-for-byte, newlines and quotes included.
+	if got["AGENTCELL_TASK"] != task {
+		t.Errorf("task did not survive:\n got %q\nwant %q", got["AGENTCELL_TASK"], task)
+	}
+	if got["AGENTCELL_DESCRIPTION"] != cellCR.Spec.Description {
+		t.Errorf("description did not survive: %q", got["AGENTCELL_DESCRIPTION"])
+	}
+	// And a newline in the prose cannot forge another variable.
+	if _, forged := got["第一行:间距加大"]; forged {
+		t.Error("a line of the task became an environment variable")
+	}
+	if got["AGENTCELL_API_KEY"] != "sk-test" {
+		t.Error("the credential no longer reaches the window")
+	}
+}
+
+// A tmux server dies with its container, so a restart takes every window
+// with it — which looks exactly like the owner closing one. Settling on that
+// destroys a session its owner never ended, and the difference is knowable:
+// the container is a different one.
+func TestRuntimeRestartRecoversInsteadOfSettling(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Status.Phase = acv1.SessionRunning
+	s.Status.SessionID = "a"
+	s.Status.RuntimeInstance = "containerd://OLD"
+	now := metav1.Now()
+	s.Status.StartTime = &now
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	// The window is gone — as it always is after a restart.
+	r.Exec = func(ctx context.Context, ns, pod string, argv []string, stdin io.Reader) (string, error) {
+		if len(argv) > 1 && argv[1] == "window-status" {
+			return "alive=false exit=-\n", nil
+		}
+		return rec.exec(ctx, ns, pod, argv, stdin)
+	}
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, uid); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+	// A NEW container: same pod, restarted.
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "runtime", Ready: true, ContainerID: "containerd://NEW"},
+	}
+	_ = c.Status().Update(ctx, &pod)
+	var sx acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &sx)
+	sx.Status.PodName = ids.UserRuntimePod(uid)
+	_ = c.Status().Update(ctx, &sx)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Phase == acv1.SessionSettling || got.Status.Phase == acv1.SessionSettled {
+		t.Fatalf("a runtime restart settled the session (%s)", got.Status.Phase)
+	}
+	restored := false
+	for _, call := range rec.calls {
+		if len(call.argv) > 2 && call.argv[2] == "-restore" {
+			restored = true
+		}
+	}
+	if !restored {
+		t.Errorf("the window was not restored after the restart: %v", rec.calls)
+	}
+	if got.Status.RuntimeInstance != "containerd://NEW" {
+		t.Errorf("instance = %q; the next restart would not be recognisable", got.Status.RuntimeInstance)
+	}
+}
+
+// The other half: same container, no window, means somebody closed it — and
+// that IS the signal to settle. Without this the two cases would merge and
+// closing a window would leave a session running forever.
+func TestClosedWindowInTheSameContainerStillSettles(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Status.Phase = acv1.SessionRunning
+	s.Status.SessionID = "a"
+	s.Status.RuntimeInstance = "containerd://SAME"
+	now := metav1.Now()
+	s.Status.StartTime = &now
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = func(_ context.Context, _, _ string, argv []string, _ io.Reader) (string, error) {
+		if len(argv) > 1 && argv[1] == "window-status" {
+			return "alive=false exit=0\n", nil
+		}
+		return "", nil
+	}
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	_, _ = r.ensureUserRuntime(ctx, testCell(), ns, uid)
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "runtime", Ready: true, ContainerID: "containerd://SAME"},
+	}
+	_ = c.Status().Update(ctx, &pod)
+	var sx acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &sx)
+	sx.Status.PodName = ids.UserRuntimePod(uid)
+	_ = c.Status().Update(ctx, &sx)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Phase != acv1.SessionSettling {
+		t.Errorf("phase = %s; a window the owner closed should settle", got.Status.Phase)
+	}
+}
+
+// A resident session idles out, it does not age out. Killing one at the
+// deadline while its agent is mid-run would be the platform interrupting the
+// work it exists to host.
+func TestResidentSessionIdlesOutRatherThanAgesOut(t *testing.T) {
+	longAgo := metav1.NewTime(metav1.Now().Add(-3 * time.Hour))
+	recent := metav1.Now()
+
+	for _, tc := range []struct {
+		name       string
+		working    bool
+		activity   metav1.Time
+		wantSettle bool
+	}{
+		{"old session, agent still working, stays", true, longAgo, false},
+		{"old session, recent activity, stays", false, recent, false},
+		{"old session, idle for hours, settles", false, longAgo, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := residentSession("sess-a", "u-aaaa1111", "work")
+			s.Status.Phase = acv1.SessionRunning
+			s.Status.SessionID = "a"
+			s.Status.RuntimeInstance = "containerd://SAME"
+			started := metav1.NewTime(metav1.Now().Add(-5 * time.Hour))
+			s.Status.StartTime = &started
+			act := tc.activity
+			s.Status.LastActivity = &act
+			c := newFake(t, testCell(), credSecret("bailian-key"), s)
+			r := sessionReconciler(t, c)
+			r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+			exit := "0"
+			if tc.working {
+				exit = "-"
+			}
+			r.Exec = func(_ context.Context, _, _ string, argv []string, _ io.Reader) (string, error) {
+				if len(argv) > 1 && argv[1] == "window-status" {
+					return "alive=true exit=" + exit + "\n", nil
+				}
+				return "", nil
+			}
+			ctx := context.Background()
+			ns := ids.WorkloadNamespace("shop")
+			uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+			_, _ = r.ensureUserRuntime(ctx, testCell(), ns, uid)
+			var pod corev1.Pod
+			_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+				{Name: "runtime", Ready: true, ContainerID: "containerd://SAME"},
+			}
+			_ = c.Status().Update(ctx, &pod)
+			var sx acv1.Session
+			_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &sx)
+			sx.Status.PodName = ids.UserRuntimePod(uid)
+			_ = c.Status().Update(ctx, &sx)
+
+			if _, err := r.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}); err != nil {
+				t.Fatal(err)
+			}
+			var got acv1.Session
+			_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+			settled := got.Status.Phase == acv1.SessionSettling || got.Status.Phase == acv1.SessionSettled
+			if settled != tc.wantSettle {
+				t.Errorf("phase = %s, settled=%v want %v", got.Status.Phase, settled, tc.wantSettle)
+			}
+		})
 	}
 }

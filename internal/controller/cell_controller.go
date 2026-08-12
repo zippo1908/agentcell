@@ -74,6 +74,9 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.ensurePullSecret(ctx, ns); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
+	if err := r.ensureQuota(ctx, &cell, ns); err != nil {
+		return r.fail(ctx, &cell, fmt.Errorf("resource quota: %w", err))
+	}
 	if err := r.ensureNetworkPolicies(ctx, ns, cell.Namespace); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("network policies: %w", err))
 	}
@@ -466,6 +469,7 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{runtimeapi.RuntimeBin, "anchor"},
 					SecurityContext: containerSecurity(),
+					Resources:       anchorResources(cell),
 					Env:             env,
 					Ports: []corev1.ContainerPort{{
 						Name: "preview", ContainerPort: previewPort(cell),
@@ -616,8 +620,10 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{runtimeapi.RuntimeBin, "prod-clone"},
 					SecurityContext: containerSecurity(),
-					Env:             cloneEnv,
-					VolumeMounts:    cloneMounts,
+					// A clone, not a dev server: sized like settle.
+					Resources:    settleResources(),
+					Env:          cloneEnv,
+					VolumeMounts: cloneMounts,
 				}},
 				Containers: []corev1.Container{{
 					Name:            "prod",
@@ -625,6 +631,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Command:         []string{runtimeapi.RuntimeBin, "prod-serve"},
 					SecurityContext: containerSecurity(),
+					Resources:       prodResources(cell),
 					Env:             serveEnv,
 					Ports:           []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
 					ReadinessProbe:  tcpReadiness(prodPort(cell)),
@@ -692,4 +699,22 @@ func (r *CellReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			})).
 		Named("cell").
 		Complete(r)
+}
+
+// ensureQuota caps the whole Cell namespace.
+func (r *CellReconciler) ensureQuota(ctx context.Context, cell *acv1.Cell, ns string) error {
+	req, lim := cellQuota(cell)
+	hard := corev1.ResourceList{}
+	for k, v := range req {
+		hard[k] = v
+	}
+	for k, v := range lim {
+		hard[k] = v
+	}
+	q := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cell"}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, q, func() error {
+		q.Spec.Hard = hard
+		return nil
+	})
+	return err
 }

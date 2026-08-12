@@ -61,6 +61,8 @@ spec:
                 sessionID: {type: string}
                 runnerSessionID: {type: string}
                 recoveries: {type: integer}
+                runtimeInstance: {type: string}
+                lastActivity: {type: string, format: date-time}
                 podName: {type: string}
                 branch: {type: string}
                 produced: {type: boolean}

@@ -73,6 +73,12 @@ type CellSpec struct {
 	MaxSessions int32 `json:"maxSessions,omitempty"`
 	// SessionResources is the per-slot budget. Defaults to 1 CPU / 2Gi.
 	SessionResources ResourceBudget `json:"sessionResources,omitempty"`
+	// PreviewResources bounds the resident preview (and the production pod,
+	// which runs the same command). A dev server's footprint is a property
+	// of the project — a Vite app and a JVM are not in the same class — so
+	// this is where an operator states what theirs needs. Defaults to
+	// 2 CPU / 4Gi limits with modest requests.
+	PreviewResources ResourceBudget `json:"previewResources,omitempty"`
 	// WorkspaceSize is the PVC size, default "10Gi".
 	WorkspaceSize string `json:"workspaceSize,omitempty"`
 	// StorageClassName optionally pins the PVC's storage class (cloud

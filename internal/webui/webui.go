@@ -423,6 +423,9 @@ type dispatchRequest struct {
 	// Resident keeps the slot alive in tmux after the agent finishes, so the
 	// owner can look at the result and keep going in the same context.
 	Resident bool `json:"resident"`
+	// TTLSeconds overrides the default. For a resident session this is IDLE
+	// time, not total age.
+	TTLSeconds int64 `json:"ttlSeconds"`
 }
 
 func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {

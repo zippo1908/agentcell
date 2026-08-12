@@ -42,6 +42,30 @@ The agent's working directory contains **no repository**. Every git
 operation, local included, is performed by a component the agent cannot
 reach, and the agent asks for the few it is allowed to have.
 
+### 0. One protocol, not two
+
+The boundary this ADR builds must converge on the shape the platform already
+has, not sit beside it:
+
+```
+agent  →  aip-git client  →  scheduler (aip-git server)  →  private git storage
+```
+
+`aip-git` is the only thing an agent ever talks to about git. The component
+this ADR calls `gitd` is **the scheduler's execution backend for aip-git** —
+not a second protocol with its own client, its own socket convention and its
+own vocabulary. If the two ever disagree about what an operation means, the
+agent-facing side is the one that is right, and `gitd` is what implements it.
+
+Stated plainly because the alternative is easy to drift into: a per-Cell
+daemon with a neat four-verb API is a pleasant thing to build, and would
+leave the platform with two ways to do local git and no single place to
+enforce the boundary.
+
+Every operation in the allow-list below — `materialize`, `status`, `diff`,
+`log`, `show`, `publish` — is reached through the aip-git client, and the
+agent image ends with **no native `git` binary at all**.
+
 ### 1. `gitd` — one local git authority per Cell
 
 A pod per Cell, running as **its own uid, distinct from every user uid AND
@@ -84,6 +108,7 @@ tree, mounted read-write for that user alone:
 | `materialize(session, ref)` | lay down the working files for a session |
 | `status(session)` | what changed, as a list |
 | `diff(session[, path])` | the patch, for review |
+| `log(ref)` / `show(ref, path)` | read-only history on the BASE ref |
 | `publish(session, message)` | commit and push `session/<id>` via the broker |
 
 The shape is deliberately ADR-0005's: a fixed allow-list, not a git proxy.
