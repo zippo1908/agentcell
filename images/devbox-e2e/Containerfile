@@ -8,7 +8,8 @@
 #   podman build -t ghcr.io/agentcell/devbox-e2e -f images/devbox-e2e/Containerfile .
 FROM docker.io/library/alpine:3.20
 
-RUN apk add --no-cache git busybox-extras
+# tmux: resident sessions host the agent in it (ADR-0010).
+RUN apk add --no-cache git busybox-extras tmux
 
 # Static cell-runtime (linux/amd64), baked at the contract path.
 COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime

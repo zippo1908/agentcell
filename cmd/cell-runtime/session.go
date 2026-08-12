@@ -121,6 +121,13 @@ func runSession() error {
 // did, then tell it one more thing" possible in the same context instead of
 // a fresh session that has to rediscover everything.
 func runResident(uid int64, id, wt string, argv []string) error {
+	// Say why, once, in a sentence an operator can act on. Without this the
+	// pod simply fails and the Session reports "agent finished (Failed)",
+	// which points at the agent rather than at the image.
+	if _, err := exec.LookPath("tmux"); err != nil {
+		return fmt.Errorf("resident sessions need tmux, and it is not in this Cell's image (%s): "+
+			"install it in the devbox image, or dispatch without resident", os.Getenv("AGENTCELL_IMAGE"))
+	}
 	sock := ids.TmuxSocket(uid)
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		return fmt.Errorf("tmux socket dir: %w", err)
@@ -135,7 +142,7 @@ func runResident(uid int64, id, wt string, argv []string) error {
 	}
 	// The marker is how anything outside the pod can tell "still working"
 	// from "waiting for you" without a Kubernetes token in here (ADR-0005).
-	done := filepath.Join(wt, ".agentcell", "agent.done")
+	done := runtimeapi.DoneMarker
 	_ = os.Remove(done)
 	line := shellJoin(argv) + "; printf '%s' \"$?\" > " + shellQuote(done)
 	if out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window,
@@ -285,4 +292,24 @@ func runTell(args []string) error {
 	}
 	fmt.Println("sent")
 	return nil
+}
+
+// runAttach attaches the caller's terminal to this session's tmux window.
+//
+// Everything it needs — the socket path and the window name — is derived
+// inside the pod from the uid it runs as and the session id in the
+// environment. That is deliberate: an operator attaching should not have to
+// know, or be told, another user's private paths.
+func runAttach() error {
+	id := os.Getenv(runtimeapi.EnvSessionID)
+	if id == "" {
+		return fmt.Errorf("attach: %s not set", runtimeapi.EnvSessionID)
+	}
+	tmux, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("attach: tmux is not in this image")
+	}
+	sock := ids.TmuxSocket(int64(os.Getuid()))
+	// Replace this process so the terminal is tmux's, not ours.
+	return syscall.Exec(tmux, []string{"tmux", "-S", sock, "attach", "-t", ids.TmuxWindow(id)}, os.Environ())
 }
