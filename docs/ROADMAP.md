@@ -52,3 +52,15 @@ Open a [Discussion](https://github.com/zippo1908/agentcell/discussions) under
 **Ideas** for direction, or an issue for a concrete unit of work. Items marked
 [`good first issue`](https://github.com/zippo1908/agentcell/labels/good%20first%20issue)
 are scoped for newcomers.
+
+## Next: the git boundary (ADR-0011)
+
+ADR-0005 took the forge credential away from every workload. Local git
+authority was never taken away: an agent can still run git against the shared
+object store, which since per-user identity means it can read another user's
+unpublished commits.
+
+[ADR-0011](adr/0011-git-boundary.md) proposes the fix — a `gitd` per Cell
+owning the repository at `0700`, worktrees materialized as plain directories
+with no `.git`, and a four-operation allow-list — with a migration ordered so
+the capability regression lands only after the replacement is proven.

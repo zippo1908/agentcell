@@ -10,7 +10,6 @@
 package access
 
 import (
-	"crypto/rand"
 	"fmt"
 	"sort"
 
@@ -51,6 +50,11 @@ type Registry struct {
 // Load parses the built-in preset table and applies overlay files (each a
 // full or partial providers.yaml); later overlays win per provider name.
 func Load(overlays ...[]byte) (*Registry, error) {
+	return LoadWithRunners(overlays, nil)
+}
+
+// LoadWithRunners parses the built-in tables and applies overlays to each.
+func LoadWithRunners(overlays [][]byte, runnerOverlays [][]byte) (*Registry, error) {
 	merged := map[string]Provider{}
 	for _, raw := range append([][]byte{configs.ProvidersYAML}, overlays...) {
 		if len(raw) == 0 {
@@ -64,6 +68,14 @@ func Load(overlays ...[]byte) (*Registry, error) {
 			merged[name] = p
 		}
 	}
+	// Runner overlays live beside provider overlays and are loaded the same
+	// way; a deployment that ships a different CLI build fixes its flags in
+	// config rather than waiting for a release.
+	rs, err := loadRunners(runnerOverlays...)
+	if err != nil {
+		return nil, err
+	}
+	runners = rs
 	return &Registry{providers: merged}, nil
 }
 
@@ -88,6 +100,8 @@ func (r *Registry) Provider(name string) (Provider, bool) {
 // argv, and env synthesis per protocol.
 type Runner struct {
 	Name string
+	// Display is the human label shown in the UI.
+	Display string
 	// Protocols in preference order; first intersecting protocol wins.
 	Protocols []string
 	// HeadlessArgv builds the one-shot dispatch command for a task.
@@ -170,56 +184,14 @@ func ResumeArgvFor(runner, task, runnerSessionID string) ([]string, error) {
 	return r.ResumeArgv(task, runnerSessionID), nil
 }
 
-var runners = map[string]Runner{
-	"claude": {
-		Name:      "claude",
-		Protocols: []string{ProtoAnthropic},
-		HeadlessArgv: func(task string) []string {
-			return []string{"claude", "--dangerously-skip-permissions", "-p", task}
-		},
-		// Claude Code accepts a caller-chosen session id, and it must be a
-		// UUID — our ULIDs are not, so the conversation gets its own id and
-		// the Session records it.
-		NewRunnerSessionID: newUUIDv4,
-		StartArgv: func(task, sid string) []string {
-			return []string{"claude", "--dangerously-skip-permissions", "--session-id", sid, "-p", task}
-		},
-		ResumeArgv: func(task, sid string) []string {
-			return []string{"claude", "--dangerously-skip-permissions", "--resume", sid, "-p", task}
-		},
-	},
-	"codex": {
-		Name:      "codex",
-		Protocols: []string{ProtoOpenAI},
-		HeadlessArgv: func(task string) []string {
-			// The container is the boundary; Codex's inner sandbox must yield
-			// to it (ADR appendix A).
-			return []string{"codex", "exec", "--sandbox", "danger-full-access", task}
-		},
-		// Codex names its own sessions, so there is no id to hand it up
-		// front — it resumes "the last one". That is only unambiguous if
-		// "last" is scoped to this session, and it is NOT: one user's windows
-		// share a runtime and a $HOME, so two concurrent Codex sessions would
-		// see each other's conversation as the most recent one.
-		//
-		// So each session gets its own CODEX_HOME (see SessionHomeEnv), which
-		// makes "the last one here" mean this session and nothing else.
-		ResumeArgv: func(task, _ string) []string {
-			return []string{"codex", "exec", "resume", "--last",
-				"--sandbox", "danger-full-access", task}
-		},
-		SessionHomeEnv: "CODEX_HOME",
-	},
-	"pi": {
-		Name:      "pi",
-		Protocols: []string{ProtoAnthropic, ProtoOpenAI},
-		HeadlessArgv: func(task string) []string {
-			return []string{"pi", "-p", task}
-		},
-	},
-}
+// runners is populated from configs/runners.yaml (plus overlays) by Load.
+//
+// Package-level rather than per-Registry because a runner is a property of
+// the images this deployment ships, not of one provider table; Load is
+// called once at startup.
+var runners = map[string]Runner{}
 
-// Runners returns the built-in runner names, sorted.
+// Runners returns the configured runner names, sorted.
 func Runners() []string {
 	names := make([]string, 0, len(runners))
 	for n := range runners {
@@ -227,6 +199,14 @@ func Runners() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// RunnerDisplay returns a human label for a runner, or the name itself.
+func RunnerDisplay(name string) string {
+	if r, ok := runners[name]; ok && r.Display != "" {
+		return r.Display
+	}
+	return name
 }
 
 // Binding is a resolved (runner, provider, model) triple.
@@ -311,18 +291,4 @@ func HeadlessArgv(runner, task string) ([]string, error) {
 		return nil, fmt.Errorf("unknown runner %q", runner)
 	}
 	return run.HeadlessArgv(task), nil
-}
-
-// newUUIDv4 builds the id shape Claude Code requires. Small enough to do
-// here rather than take a dependency for.
-func newUUIDv4() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// A guessable conversation id would let a later resume address
-		// somebody else's; there is no safe degraded value.
-		panic("access: crypto/rand unavailable: " + err.Error())
-	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

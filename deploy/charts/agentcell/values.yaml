@@ -71,6 +71,26 @@ oidc:
 # a second replica. Point at a Secret with key `previewKey` to pin it.
 previewKeySecret: ""
 
+# Preset overlays merged over the built-in tables at startup.
+#
+# A CLI's flags and a provider's endpoints change faster than AgentCell
+# releases do, so both are data. Map filename -> YAML content; celld merges
+# them in filename order, and later files win per entry.
+#
+#   presets:
+#     runners:
+#       kimi.yaml: |
+#         version: 1
+#         runners:
+#           kimi:
+#             protocols: [anthropic]
+#             headless: ["kimi", "--yes", "-p", "{{task}}"]
+#             session_id: uuid
+#             resume: ["kimi", "--yes", "--resume", "{{session}}", "-p", "{{task}}"]
+presets:
+  providers: {}
+  runners: {}
+
 gitBroker:
   enabled: true
   replicas: 1

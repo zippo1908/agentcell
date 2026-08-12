@@ -1,0 +1,26 @@
+{{- /*
+Preset overlays. Kept as ConfigMaps rather than baked into the image so an
+operator can correct a renamed CLI flag or a moved endpoint without waiting
+for a release — which is the whole reason runners and providers are data.
+*/ -}}
+{{- if .Values.presets.providers }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentcell-providers
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+data:
+{{ toYaml .Values.presets.providers | indent 2 }}
+{{- end }}
+{{- if .Values.presets.runners }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentcell-runners
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+data:
+{{ toYaml .Values.presets.runners | indent 2 }}
+{{- end }}

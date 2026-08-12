@@ -89,6 +89,12 @@ spec:
             httpGet: {path: /healthz, port: http}
           resources: {{- toYaml .Values.celld.resources | nindent 12 }}
           volumeMounts:
+            {{- if .Values.presets.providers }}
+            - {name: providers-d, mountPath: /etc/agentcell/providers.d, readOnly: true}
+            {{- end }}
+            {{- if .Values.presets.runners }}
+            - {name: runners-d, mountPath: /etc/agentcell/runners.d, readOnly: true}
+            {{- end }}
             {{- if or .Values.celld.auth.existingSecret .Values.celld.auth.tokens }}
             - {name: tokens, mountPath: /etc/agentcell/auth, readOnly: true}
             {{- end }}
@@ -96,6 +102,14 @@ spec:
             - {name: git-broker-token, mountPath: /var/run/secrets/agentcell/git-broker, readOnly: true}
             {{- end }}
       volumes:
+        {{- if .Values.presets.providers }}
+        - name: providers-d
+          configMap: {name: agentcell-providers}
+        {{- end }}
+        {{- if .Values.presets.runners }}
+        - name: runners-d
+          configMap: {name: agentcell-runners}
+        {{- end }}
         {{- if or .Values.celld.auth.existingSecret .Values.celld.auth.tokens }}
         - name: tokens
           secret:

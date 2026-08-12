@@ -9,3 +9,11 @@ import _ "embed"
 //
 //go:embed providers.yaml
 var ProvidersYAML []byte
+
+// RunnersYAML is the built-in agent-CLI preset table. Runners are data for
+// the same reason providers are: a CLI's flags are the fastest-moving thing
+// in this system, and an upstream rename should be a config fix rather than
+// a release.
+//
+//go:embed runners.yaml
+var RunnersYAML []byte
