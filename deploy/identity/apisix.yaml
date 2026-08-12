@@ -1,0 +1,76 @@
+# Apache APISIX® as AgentCell's edge gateway.
+#
+# Apache-2.0, deployed as a separate service; AgentCell is not affiliated
+# with or endorsed by the Apache Software Foundation (see THIRD_PARTY.md).
+#
+# APISIX here is a GATEWAY, not an auth proxy. It terminates TLS and routes;
+# celld verifies the OIDC token itself. Two layers authenticating
+# independently is how redirect loops and confused-deputy bugs appear, and
+# an identity header from the gateway would be forgeable by anything on the
+# pod network anyway.
+#
+# Requires the APISIX ingress controller or a standalone APISIX; this file
+# declares the routes for the standalone (`apisix-standalone`) config style.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-routes
+  namespace: identity
+data:
+  apisix.yaml: |
+    routes:
+      # 1. The console. Note there is no openid-connect plugin: the token
+      #    reaches celld untouched and celld checks it against the IdP's
+      #    JWKS. If you enable the plugin because APISIX fronts other
+      #    services too, use bearer_only: true and pass the token THROUGH —
+      #    never strip it and substitute a header.
+      - uri: /*
+        host: agentcell.example.com
+        upstream:
+          type: roundrobin
+          nodes:
+            "celld.agentcell-system.svc.cluster.local:80": 1
+        plugins:
+          # X-Forwarded-* must be SET by the gateway, never appended from
+          # client input: celld reconstructs its own origin from them when
+          # --trust-forwarded-headers is on.
+          proxy-rewrite:
+            headers:
+              set:
+                X-Forwarded-Proto: https
+                X-Forwarded-Host: agentcell.example.com
+          limit-req:
+            rate: 50
+            burst: 100
+            key_type: var
+            key: remote_addr
+            rejected_code: 429
+
+      # 2. Casdoor, so registration and login share the edge and its TLS.
+      - uri: /*
+        host: casdoor.example.com
+        upstream:
+          type: roundrobin
+          nodes:
+            "casdoor.identity.svc.cluster.local:80": 1
+
+      # 3. Untrusted preview content, on its OWN registrable domain.
+      #
+      #    This is load-bearing, not cosmetic (ADR-0007): the content served
+      #    here is written by the repo and by agents. Giving it a wildcard
+      #    under the console's domain would put it in a cookie relationship
+      #    with the console. Use a domain that is NOT a parent or sibling of
+      #    the console's.
+      - uri: /*
+        hosts:
+          - "*.agentcell-preview.example"
+        upstream:
+          type: roundrobin
+          nodes:
+            "celld.agentcell-system.svc.cluster.local:8081": 1
+        plugins:
+          proxy-rewrite:
+            headers:
+              set:
+                X-Forwarded-Proto: https
+    #END
