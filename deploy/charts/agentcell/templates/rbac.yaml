@@ -30,7 +30,7 @@ rules:
     resources: ["cells/status", "sessions/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
-    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods", "serviceaccounts"]
+    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods", "serviceaccounts", "configmaps"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["statefulsets", "deployments"]

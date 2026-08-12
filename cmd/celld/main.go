@@ -26,6 +26,7 @@ import (
 	"github.com/zippo1908/agentcell/internal/controller"
 	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/internal/identity"
+	"github.com/zippo1908/agentcell/internal/useruid"
 	"github.com/zippo1908/agentcell/internal/version"
 	"github.com/zippo1908/agentcell/internal/webui"
 )
@@ -105,10 +106,17 @@ func main() {
 		os.Exit(1)
 	}
 	forgeClient := forge.New(*gitBrokerURL)
-	if err := (&controller.SessionReconciler{
+	sessionReconciler := &controller.SessionReconciler{
 		Client: mgr.GetClient(), Registry: registry,
 		GitBrokerURL: *gitBrokerURL, Forge: forgeClient,
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if *oidcIssuer != "" && *oidcClientID != "" {
+		// Per-user Unix identities only mean anything once users exist; with
+		// static tokens alone every caller is the same principal and the
+		// shared project identity is the honest representation of that.
+		sessionReconciler.UIDs = &useruid.Allocator{Client: mgr.GetClient(), Namespace: *controlNS}
+	}
+	if err := sessionReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup session controller")
 		os.Exit(1)
 	}

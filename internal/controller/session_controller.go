@@ -20,6 +20,7 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
+	"github.com/zippo1908/agentcell/internal/useruid"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
@@ -43,6 +44,20 @@ type SessionReconciler struct {
 	// Forge opens/tracks PRs through the broker after review approval
 	// (ADR-0006). nil/disabled leaves review purely informational.
 	Forge ForgeClient
+	// UIDs resolves the Unix identity a Session's pods run as (ADR-0009).
+	// nil keeps every workload on the shared project identity, which is the
+	// pre-identity behaviour.
+	UIDs *useruid.Allocator
+}
+
+// ownerUID resolves the Unix identity this Session's pods run as. Without an
+// allocator — or without a recorded owner — that is the shared project
+// identity, so single-principal deployments are untouched.
+func (r *SessionReconciler) ownerUID(ctx context.Context, sess *acv1.Session) (int64, error) {
+	if r.UIDs == nil {
+		return useruid.ProjectUID, nil
+	}
+	return r.UIDs.Ensure(ctx, sess.Spec.OwnerUserID)
 }
 
 // settleResult is the JSON the settle applet writes to its termination log.
@@ -259,6 +274,10 @@ func (r *SessionReconciler) copyCredential(ctx context.Context, sess *acv1.Sessi
 }
 
 func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, binding access.Binding, argv []string) error {
+	uid, err := r.ownerUID(ctx, sess)
+	if err != nil {
+		return err
+	}
 	// Credential indirection: EnvAPIKey comes from the per-session secret;
 	// protocol variables reference it with $(VAR) substitution so the
 	// literal key never appears in the pod spec.
@@ -283,6 +302,20 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		return err
 	}
 	env = append(env, corev1.EnvVar{Name: "AGENTCELL_AGENT_ARGV", Value: string(argvJSON)})
+	// A followed session serves its own preview: the worktree is private to
+	// its owner, so no shared process can read it (ADR-0009).
+	ports := []corev1.ContainerPort{}
+	if sess.Spec.FollowPreview && len(cell.Spec.Preview.Command) > 0 {
+		previewJSON, err := json.Marshal(cell.Spec.Preview.Command)
+		if err != nil {
+			return err
+		}
+		env = append(env,
+			corev1.EnvVar{Name: runtimeapi.EnvPreviewCmd, Value: string(previewJSON)},
+			corev1.EnvVar{Name: runtimeapi.EnvPreviewTarget, Value: ids.WorktreePath(uid, id)},
+		)
+		ports = append(ports, corev1.ContainerPort{Name: "preview", ContainerPort: previewPort(cell)})
+	}
 
 	cpu, err := resource.ParseQuantity(cell.Spec.SessionResources.CPU)
 	if err != nil {
@@ -304,7 +337,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		}
 		pod.Spec = corev1.PodSpec{
 			RestartPolicy:   corev1.RestartPolicyNever,
-			SecurityContext: podSecurity(),
+			SecurityContext: podSecurityAs(uid),
 			// The session pod runs the agent (untrusted repo + model code)
 			// and never talks to git or the broker — the settle job does.
 			// Give it no ServiceAccount token at all (ADR-0005 hardening).
@@ -324,6 +357,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Command:         []string{runtimeapi.RuntimeBin, "session"},
 				Env:             env,
+				Ports:           ports,
 				SecurityContext: containerSecurity(),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{corev1.ResourceCPU: cpu, corev1.ResourceMemory: mem},
@@ -371,7 +405,7 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 }
 
 func (r *SessionReconciler) startSettle(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id, why string) (ctrl.Result, error) {
-	if err := r.ensureSettleJob(ctx, cell, ns, id); err != nil {
+	if err := r.ensureSettleJob(ctx, sess, cell, ns, id); err != nil {
 		return r.fail(ctx, sess, err)
 	}
 	sess.Status.Phase = acv1.SessionSettling
@@ -382,7 +416,13 @@ func (r *SessionReconciler) startSettle(ctx context.Context, sess *acv1.Session,
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
-func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell, ns, id string) error {
+func (r *SessionReconciler) ensureSettleJob(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) error {
+	// The settle job reads the owner's private worktree, so it must run as
+	// the owner — nobody else can read it, by design.
+	uid, err := r.ownerUID(ctx, sess)
+	if err != nil {
+		return err
+	}
 	settleEnv := []corev1.EnvVar{
 		{Name: runtimeapi.EnvSessionID, Value: id},
 		{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
@@ -412,7 +452,7 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 		volumes = append(volumes, brokerTokenVolume())
 	}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.SettleJobName(id)}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, job, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, job, func() error {
 		if !job.CreationTimestamp.IsZero() {
 			return nil
 		}
@@ -424,7 +464,7 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, cell *acv1.Cell
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,
 					ServiceAccountName: sa,
-					SecurityContext:    podSecurity(),
+					SecurityContext:    podSecurityAs(uid),
 					Affinity: &corev1.Affinity{PodAffinity: &corev1.PodAffinity{
 						RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
 							LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{

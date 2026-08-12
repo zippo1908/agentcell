@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/zippo1908/agentcell/pkg/ids"
@@ -33,10 +35,18 @@ func runSession() error {
 		return err
 	}
 
-	wt := ids.WorktreePath(id)
+	// The pod runs as its owner (ADR-0009), so our own uid is the identity
+	// everything private belongs to — no need to be told it.
+	uid := int64(os.Getuid())
+	if err := ensurePrivateHome(uid); err != nil {
+		return err
+	}
+	wt := ids.WorktreePath(uid, id)
 	branch := ids.SessionBranch(id)
 	if _, err := os.Stat(wt); os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(wt), 0o755); err != nil {
+		// 0700 all the way down: a peer's pod runs as a different uid on the
+		// same volume, and an unpublished worktree is nobody else's business.
+		if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
 			return err
 		}
 		if err := git(ids.RepoPath, "worktree", "add", "-b", branch, wt, base); err != nil {
@@ -58,6 +68,20 @@ func runSession() error {
 			"开工前浏览;本单学到的可复用经验(约定、坑、决策)以 md 文件沉淀回去。\n"
 	}
 	_ = os.WriteFile(filepath.Join(wt, ".agentcell", "TASK.md"), []byte(task), 0o644)
+
+	// When the user asked to watch this session live, serve the preview from
+	// this pod. The worktree is private to its owner, so the anchor cannot
+	// serve it — the resident preview for a followed session belongs to the
+	// user's own runtime (ADR-0009). The Cell's preview Service selects this
+	// pod for as long as it is the followed one.
+	var previewArgv []string
+	if raw := os.Getenv(runtimeapi.EnvPreviewCmd); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &previewArgv); err == nil && len(previewArgv) > 0 {
+			stop := make(chan os.Signal, 1)
+			signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+			go supervisePreview(previewArgv, wt, stop)
+		}
+	}
 
 	fmt.Printf("session %s: running %v in %s\n", id, argv, wt)
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -81,4 +105,29 @@ func waitForRepo(timeout time.Duration) error {
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("repo not cloned after %s (anchor still starting?)", timeout)
+}
+
+// ensurePrivateHome creates this user's private tree on the shared project
+// volume (ADR-0009).
+//
+// 0700 is the whole mechanism: the volume is shared with every other user's
+// pods, but those pods run as different uids, so the mode bits are what
+// actually withhold one person's worktrees, CLI state, transcripts and tmux
+// sockets from another. Nothing here may be group- or world-readable, even
+// by accident — hence the explicit Chmod: MkdirAll honours the umask and
+// would silently leave 0755 where the umask is the usual 022.
+func ensurePrivateHome(uid int64) error {
+	home := ids.UserHome(uid)
+	for _, dir := range []string{home, filepath.Join(home, "worktrees"), filepath.Join(home, "home")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("private home %s: %w", dir, err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("private home %s: %w", dir, err)
+		}
+	}
+	// Point the agent CLI at it: Codex/Claude/pi all keep configuration,
+	// credentials and transcripts under $HOME, and those are exactly the
+	// things that must not be shared.
+	return os.Setenv("HOME", filepath.Join(home, "home"))
 }

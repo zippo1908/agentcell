@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/oklog/ulid/v2"
@@ -75,9 +76,27 @@ func SessionBranch(id string) string { return "session/" + id }
 // RepoPath is where the anchor clones the project inside the shared PVC.
 const RepoPath = "/workspace/repo"
 
-// WorktreePath is the per-session git worktree, on the same PVC so it
-// shares the object store with RepoPath.
-func WorktreePath(id string) string { return "/workspace/.cells/" + id }
+// UserHome is a user's private tree on the shared project volume. The
+// directory is created 0700 and owned by that user's UID, so a peer's pod —
+// running as a different UID, in a different pod — cannot read it even
+// though the volume is shared (ADR-0009).
+//
+// CLI configuration, transcripts, checkpoints and tmux sockets all belong
+// here rather than in a shared location.
+func UserHome(uid int64) string {
+	return "/workspace/users/" + strconv.FormatInt(uid, 10)
+}
+
+// WorktreePath is the per-session git worktree. It lives inside the owner's
+// private tree, not in a shared directory: an unpublished worktree is the
+// user's own working state, and settle is what makes work visible to the
+// project.
+//
+// It stays on the same volume as RepoPath so the worktree shares the object
+// store — a git worktree cannot span filesystems.
+func WorktreePath(uid int64, id string) string {
+	return UserHome(uid) + "/worktrees/" + id
+}
 
 // GitSecretName is the workload-namespace copy of the forge credential.
 const GitSecretName = "agentcell-git"
