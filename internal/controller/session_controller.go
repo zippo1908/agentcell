@@ -438,9 +438,14 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: host}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
-		// Pod vanished (evicted, force-deleted): settle what's on disk. For a
-		// resident session that is its runtime going away, which takes the
-		// window with it.
+		if sess.Spec.Resident {
+			// A runtime that disappears takes its windows, not the work: the
+			// worktree is on the volume and the CLI's conversation is in the
+			// private $HOME. Rebuild the terminal and hand the session back
+			// rather than settling it out from under its owner.
+			return r.recoverResident(ctx, sess, cell, ns, id)
+		}
+		// Pod vanished (evicted, force-deleted): settle what's on disk.
 		return r.startSettle(ctx, sess, cell, ns, id, "session pod disappeared")
 	case err != nil:
 		return ctrl.Result{}, err
@@ -453,10 +458,26 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		return r.startSettle(ctx, sess, cell, ns, id, "agent finished ("+string(pod.Status.Phase)+")")
 	}
 	if sess.Status.StartTime != nil && time.Since(sess.Status.StartTime.Time) > time.Duration(ttl)*time.Second {
-		if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+		if !sess.Spec.Resident {
+			if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
 		}
+		// A resident session's pod is its owner's SHARED runtime. Deleting it
+		// on one session's TTL killed every other window that user had open —
+		// their work included. startSettle closes just this window.
 		return r.startSettle(ctx, sess, cell, ns, id, "TTL exceeded")
+	}
+
+	// The window is the session, not the pod. A runtime that answers exec may
+	// still have lost this window: the owner can close it, and a restarted
+	// runtime container keeps the pod while taking every window with it.
+	// Observing the pod alone reported all of that as Running.
+	if sess.Spec.Resident {
+		alive, err := r.windowAlive(ctx, sess, ns, id)
+		if err == nil && !alive {
+			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
+		}
 	}
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }

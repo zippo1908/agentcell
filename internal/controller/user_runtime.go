@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
@@ -61,12 +63,17 @@ func (r *SessionReconciler) ensureUserRuntime(ctx context.Context, cell *acv1.Ce
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Command:         []string{runtimeapi.RuntimeBin, "runtime"},
 				SecurityContext: containerSecurity(),
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("50m"),
-						corev1.ResourceMemory: resource.MustParse("64Mi"),
-					},
-				},
+				// Sized for what it actually holds. A runtime is not a
+				// bookkeeping pod: every one of this user's sessions runs its
+				// agent inside it, so asking for a tmux server's worth of
+				// memory would have the scheduler place several GB of CLI on
+				// a node that never agreed to it, and the first OOM would
+				// take all of that user's sessions at once.
+				//
+				// The honest number is the Cell's per-session budget times
+				// the slots a user can occupy. It is also the cost of sharing
+				// a runtime: Kubernetes now bounds the user, not the session.
+				Resources:    runtimeResources(cell),
 				VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
 			}},
 			Volumes: []corev1.Volume{{
@@ -107,9 +114,26 @@ func (r *SessionReconciler) ensureUserRuntime(ctx context.Context, cell *acv1.Ce
 // openWindow starts a session inside the user's runtime.
 //
 // The model credential is written to the command's stdin, never passed in
-// argv: argv is readable from /proc by every other window this user has open.
-// Same user, but a session is still the boundary a credential is scoped to.
+// argv, and reaches the window through a 0600 file it sources and unlinks.
+//
+// Be precise about what that buys: it keeps the key out of process listings,
+// out of shell history and off disk. It does NOT make the key private to one
+// session. Every window in a runtime runs as the same uid, and under the
+// default /proc model a process can read a sibling's environment. The real
+// boundary here is the USER, not the session; per-session secrecy would need
+// per-session uids or pods, which is exactly what sharing a runtime trades
+// away (ADR-0010).
 func (r *SessionReconciler) openWindow(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64, binding access.Binding, argv []string) error {
+	return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, argv, false)
+}
+
+// restoreWindow rebuilds the terminal for an existing session without
+// starting the agent again.
+func (r *SessionReconciler) restoreWindow(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64, binding access.Binding) error {
+	return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, nil, true)
+}
+
+func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64, binding access.Binding, argv []string, restore bool) error {
 	if r.Exec == nil {
 		return fmt.Errorf("resident sessions need exec access to the runtime pod")
 	}
@@ -129,6 +153,12 @@ func (r *SessionReconciler) openWindow(ctx context.Context, sess *acv1.Session, 
 	}
 	// The briefing values the worktree needs, carried as window environment
 	// so the applet reads them the same way the one-shot pod does.
+	// A CLI that resumes by recency needs its own state directory, or two of
+	// this user's sessions — same runtime, same $HOME — would resume into
+	// each other's conversation.
+	if v := access.SessionHomeVar(sess.Spec.Runner); v != "" {
+		fmt.Fprintf(&env, "%s=%s\n", v, ids.SessionStateDir(uid, id))
+	}
 	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvSessionID, id)
 	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvBaseBranch, cell.Spec.Repo.Branch)
 	// One line each, so a task containing a newline cannot inject another
@@ -141,6 +171,9 @@ func (r *SessionReconciler) openWindow(ctx context.Context, sess *acv1.Session, 
 	fmt.Fprintf(&env, "%s=%s\n", runtimeapi.EnvDescription, cell.Spec.Description)
 
 	cmd := append([]string{runtimeapi.RuntimeBin, "window-open", id}, argv...)
+	if restore {
+		cmd = []string{runtimeapi.RuntimeBin, "window-open", "-restore", id}
+	}
 	out, err := r.Exec(ctx, ns, ids.UserRuntimePod(uid), cmd, strings.NewReader(env.String()))
 	if err != nil {
 		return fmt.Errorf("open window: %v: %s", err, out)
@@ -189,4 +222,109 @@ func (r *SessionReconciler) reapUserRuntime(ctx context.Context, ns string, uid 
 		return err
 	}
 	return nil
+}
+
+// maxRecoveries bounds how often a session's runtime is rebuilt under it.
+// A node that keeps evicting must eventually settle the work rather than
+// loop: the point of recovery is not losing a conversation, not surviving
+// anything indefinitely.
+const maxRecoveries = 3
+
+// recoverResident rebuilds a resident session's terminal after its runtime
+// went away.
+//
+// It deliberately does NOT re-run the agent. Whatever it had already done is
+// committed to the worktree, so a second run would duplicate it; and the
+// conversation itself is the CLI's, resumable by its own id when the owner
+// says the next thing. Recovery restores the terminal — the user decides
+// what happens in it.
+func (r *SessionReconciler) recoverResident(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) (ctrl.Result, error) {
+	if sess.Status.Recoveries >= maxRecoveries {
+		return r.startSettle(ctx, sess, cell, ns, id,
+			fmt.Sprintf("runtime lost %d times; settling rather than rebuilding again", sess.Status.Recoveries))
+	}
+	uid, err := r.ownerUID(ctx, sess)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	ready, err := r.ensureUserRuntime(ctx, cell, ns, uid)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !ready {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	binding, err := r.Registry.Resolve(sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model)
+	if err != nil {
+		return r.fail(ctx, sess, err)
+	}
+	if err := r.restoreWindow(ctx, sess, cell, ns, id, uid, binding); err != nil {
+		return ctrl.Result{}, err
+	}
+	sess.Status.Recoveries++
+	sess.Status.PodName = ids.UserRuntimePod(uid)
+	sess.Status.Message = "runtime rebuilt; the conversation is where you left it"
+	if err := r.Status().Update(ctx, sess); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: pollInterval}, nil
+}
+
+// windowAlive asks the runtime whether this session's window still exists.
+//
+// Errors are NOT treated as death: an exec can fail because the API server
+// is busy or the pod is mid-restart, and settling a session on a transient
+// failure would destroy exactly what resident sessions exist to keep.
+func (r *SessionReconciler) windowAlive(ctx context.Context, sess *acv1.Session, ns, id string) (bool, error) {
+	if r.Exec == nil || sess.Status.PodName == "" {
+		return true, nil
+	}
+	out, err := r.Exec(ctx, ns, sess.Status.PodName,
+		[]string{runtimeapi.RuntimeBin, "window-status", id}, nil)
+	if err != nil {
+		if strings.Contains(out, "alive=false") {
+			// The applet ran and reported honestly; the non-zero exit is its
+			// answer, not a failure to ask.
+			return false, nil
+		}
+		return true, err
+	}
+	return strings.Contains(out, "alive=true"), nil
+}
+
+// runtimeResources sizes a user's runtime for the sessions it can hold.
+//
+// Requests stay modest — an idle runtime is a tmux server — but the LIMIT is
+// the full budget, because the agents run in here. Splitting them that way
+// keeps scheduling honest without reserving a Cell's worth of memory for a
+// user who has one window open.
+func runtimeResources(cell *acv1.Cell) corev1.ResourceRequirements {
+	slots := cell.Spec.MaxSessions
+	if slots <= 0 {
+		slots = 2
+	}
+	cpu, cpuErr := resource.ParseQuantity(cell.Spec.SessionResources.CPU)
+	mem, memErr := resource.ParseQuantity(cell.Spec.SessionResources.Memory)
+	if cpuErr != nil || memErr != nil {
+		// The Session controller validates these and fails loudly; here a bad
+		// value must not block the runtime, so fall back to the documented
+		// defaults rather than to something arbitrarily small.
+		cpu, mem = resource.MustParse("1"), resource.MustParse("2Gi")
+	}
+	limitCPU := cpu.DeepCopy()
+	limitMem := mem.DeepCopy()
+	for range slots - 1 {
+		limitCPU.Add(cpu)
+		limitMem.Add(mem)
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    limitCPU,
+			corev1.ResourceMemory: limitMem,
+		},
+	}
 }

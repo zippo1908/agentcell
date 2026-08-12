@@ -92,11 +92,47 @@ design. In short:
   requires a `repo_url` binding on each credential. These raise the bar, but
   a tenant who can create pods/Jobs in a cell namespace could still forge a
   workload identity — so cluster RBAC must not grant tenants that access.
+- **User identity (ADR-0008):** celld verifies the OIDC ID token itself —
+  issuer, audience, signature against the provider's JWKS. It never trusts an
+  identity header, because anything on the pod network could send one. A
+  Session's owner is immutable (enforced by the CRD, so `kubectl edit` cannot
+  change it), a model credential can only be spent by the user who owns it,
+  and asking about something you do not own answers **404, never 403** — 403
+  confirms existence, and a few probes then map out other people's work.
+
+- **Between users (ADR-0009):** each user's workloads run as their own
+  allocated Unix uid — recorded, never derived, never recycled — and their
+  worktrees, `$HOME`, CLI state and tmux socket live in a `0700` private tree
+  on the shared volume. A peer's pod runs as a different uid, so the kernel
+  is what withholds them. `fsGroup` stays the project group, which is what
+  still lets everyone collaborate on the checkout.
+
 - **Known limits (tracked, not hidden):** single celld replica (no HA); the
   git-broker is a high-value component holding all forge credentials (harden
   the cluster accordingly; its RBAC has no cluster-wide secret access); a
   non-enforcing CNI silently ignores our NetworkPolicies — verify yours
   enforces them.
+
+  Specific to the per-user runtime (ADR-0010), stated plainly because they
+  are easy to overestimate:
+
+  - **A model key is private to a user, not to a session.** It never appears
+    in argv, shell history or on disk beyond a `0600` file the window sources
+    and unlinks — but every window in a runtime runs as the same uid, and
+    under the default `/proc` model a process can read a sibling's
+    environment. Per-session secrecy needs per-session uids or pods, which is
+    what sharing a runtime deliberately trades away.
+  - **One runtime is one resource envelope.** Kubernetes bounds the user, not
+    the session: an OOM in a runtime takes every session that user has open
+    in that Cell.
+  - **No per-user NetworkPolicy.** Two users' workloads can reach each other
+    on the pod network.
+  - **The project layer is shared on purpose.** The checkout, the knowledge
+    directory and settled branches are readable by every member — that is
+    what a project is. Privacy applies to unpublished work, not to the code.
+  - **Same node, same kernel.** For tenants who do not trust each other, use
+    separate node pools or a sandboxed runtime (gVisor, Kata); a uid is a
+    filesystem boundary, not an isolation one.
 
 If you find a way to cross any of these boundaries — exfiltrate a token,
 reach another cell, push outside `session/*`, or escape a pod — that is

@@ -87,6 +87,10 @@ type SessionStatus struct {
 	// name the conversation and give it a private $HOME (ADR-0009), not to
 	// reimplement transcripts.
 	RunnerSessionID string `json:"runnerSessionID,omitempty"`
+	// Recoveries counts how often this session's runtime had to be rebuilt
+	// under it. Bounded: a session that cannot stay up is settled rather than
+	// rebuilt forever, so a failing node does not become an infinite loop.
+	Recoveries int `json:"recoveries,omitempty"`
 	// Branch is the settled output branch (session/<id>) when Produced.
 	Branch    string       `json:"branch,omitempty"`
 	Produced  bool         `json:"produced,omitempty"`

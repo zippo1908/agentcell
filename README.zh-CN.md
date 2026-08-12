@@ -18,7 +18,7 @@
 ## 为什么
 
 - **常驻 Cell + 一次性 Slot。** 一次性沙盒每单交冷启动税,人用的 workspace 又不管
-  agent。AgentCell 让项目环境保持热态,每个会话独占 git worktree 与资源额度,下线
+  agent。AgentCell 让项目环境保持热态,每个会话独占自己的 git worktree,常驻会话共享属主 runtime 的资源上限,下线
   走**清算**:有产出推 `session/<id>` 分支,空会话丢弃,不留垃圾。
 - **边看边校准。** 每个 Cell 常驻跑产品 dev server;UI 左边是产品描述,右边是实时
   预览——你对着 agent 正在做出来的东西随手校准。
@@ -172,7 +172,8 @@ curl -X DELETE ... .../api/sessions/$S                              # 清算:提
 ```
 
 你在一个 Cell 里的每个会话,都是**你自己** runtime 里的一个 window,tmux socket 只有
-你的 uid 能打开。别人正在跑的会话,在他清算之前你完全看不到。
+你的 uid 能打开。别人正在跑的会话,在他清算之前**在控制台上完全看不到**——这是 API 层
+的归属过滤;有集群权限的人当然能直接看 CR,那是另一个层级的授权问题。
 
 ## 组件
 

@@ -68,22 +68,29 @@ func (h *Handler) sessionState(w http.ResponseWriter, r *http.Request) {
 	}
 	// The marker file is written by the shell after the agent returns, so its
 	// presence (and contents) is the exit status; its absence means working.
-	// The marker is per window, so it is named by session: one runtime holds
-	// several of them.
-	out, err := h.execInPod(r.Context(), ns, host,
-		[]string{"sh", "-c", "cat " + runtimeapi.DoneMarkerFor(id) + " 2>/dev/null || true"})
-	if err != nil {
-		// The pod may be gone or starting; that is not an error for a status
-		// question, it just means there is nothing live to report.
+	// Ask about the WINDOW, not the pod. A runtime that answers exec may have
+	// lost this window — the owner closed it, or the runtime container
+	// restarted and took every window with it while the pod stayed. Reporting
+	// "the pod is reachable" as live called all of that running.
+	out, _ := h.execInPod(r.Context(), ns, host,
+		[]string{runtimeapi.RuntimeBin, "window-status", id})
+	switch {
+	case strings.Contains(out, "alive=true"):
+		st.Live = true
+	case strings.Contains(out, "alive=false"):
+		st.Live = false
+	default:
+		// Could not ask (pod gone, starting, exec refused): report nothing
+		// live rather than guessing either way.
 		writeJSON(w, 200, st)
 		return
 	}
-	st.Live = true
-	if code := strings.TrimSpace(out); code != "" {
-		st.ExitCode = code
-	} else {
-		st.Working = true
+	if i := strings.Index(out, "exit="); i >= 0 {
+		if code := strings.TrimSpace(out[i+len("exit="):]); code != "" && code != "-" {
+			st.ExitCode = code
+		}
 	}
+	st.Working = st.Live && st.ExitCode == ""
 	writeJSON(w, 200, st)
 }
 

@@ -104,6 +104,13 @@ const GitSecretName = "agentcell-git"
 // SessionSecretName is the per-session model-credential secret.
 func SessionSecretName(id string) string { return "cred-" + id }
 
+// SessionStateDir is where a CLI that resumes by recency keeps this
+// session's conversation, inside its owner's private tree. Per session, not
+// per user: "the most recent conversation" has to mean this one.
+func SessionStateDir(uid int64, id string) string {
+	return UserHome(uid) + "/state/" + id
+}
+
 // TmuxSocket is the owner's private tmux socket.
 //
 // Never tmux's default /tmp/tmux-<uid>/default: that path is derived from the
