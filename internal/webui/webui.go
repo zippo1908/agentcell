@@ -62,7 +62,7 @@ func (h *Handler) previewHostFor(r *http.Request, cell string, zone Zone) string
 	// Without a preview domain every zone shares one host; the ticket and
 	// path-scoped cookie are then the only separation. Documented as a
 	// non-production configuration in ADR-0007.
-	return hostOnly(r) + portSuffix(h.PreviewPort)
+	return h.Auth.hostOnly(r) + portSuffix(h.PreviewPort)
 }
 
 func portSuffix(port string) string {
@@ -80,7 +80,7 @@ func (h *Handler) previewBaseFor(r *http.Request, cell string, zone Zone) string
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+	if p := h.Auth.forwarded(r, "X-Forwarded-Proto"); p != "" {
 		scheme = p
 	}
 	return scheme + "://" + h.previewHostFor(r, cell, zone)
@@ -242,7 +242,7 @@ func (h *Handler) previewOriginFor(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+	if p := h.Auth.forwarded(r, "X-Forwarded-Proto"); p != "" {
 		scheme = p
 	}
 	host := r.Host

@@ -16,6 +16,14 @@ import (
 // are a later layer that can wrap or replace this.
 type Authenticator struct {
 	tokens map[string]struct{}
+	// TrustForwardedHeaders enables X-Forwarded-Proto/Host. Off by default:
+	// if celld is reachable without the proxy — or the proxy forwards
+	// client-supplied values instead of overwriting them — an attacker
+	// could otherwise dictate what we believe our own origin is and walk
+	// straight through the same-origin check. Turn it on only behind a
+	// gateway that OVERWRITES these headers (e.g. APISIX must set, not
+	// append, X-Forwarded-*).
+	TrustForwardedHeaders bool
 }
 
 // NewAuthenticator builds an authenticator from raw token material. An
@@ -45,6 +53,14 @@ func (a *Authenticator) sortedTokens() []string {
 // Enabled reports whether any token is configured.
 func (a *Authenticator) Enabled() bool { return len(a.tokens) > 0 }
 
+// forwarded returns the header value only if forwarded headers are trusted.
+func (a *Authenticator) forwarded(r *http.Request, name string) string {
+	if a == nil || !a.TrustForwardedHeaders {
+		return ""
+	}
+	return r.Header.Get(name)
+}
+
 // valid does a constant-time comparison against every configured token so
 // a match doesn't leak timing about which token (or how many) exist.
 func (a *Authenticator) valid(presented string) bool {
@@ -73,8 +89,10 @@ func credential(r *http.Request) (token string, viaCookie bool) {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, p) {
 		return strings.TrimSpace(h[len(p):]), false
 	}
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		return c.Value, true
+	for _, name := range []string{"__Host-" + sessionCookie, sessionCookie} {
+		if c, err := r.Cookie(name); err == nil {
+			return c.Value, true
+		}
 	}
 	return "", false
 }
@@ -99,8 +117,8 @@ func unsafeMethod(m string) bool {
 //
 // Bearer callers are exempt: a token in a header cannot be attached by a
 // browser on someone else's behalf.
-func sameOriginRequest(r *http.Request) bool {
-	self := requestOrigin(r)
+func (a *Authenticator) sameOriginRequest(r *http.Request) bool {
+	self := a.requestOrigin(r)
 	if o := r.Header.Get("Origin"); o != "" {
 		// "null" is what a sandboxed (opaque-origin) document sends —
 		// exactly the preview case we are defending against.
@@ -120,19 +138,35 @@ func sameOriginRequest(r *http.Request) bool {
 
 // requestOrigin reconstructs this server's own origin as the browser sees
 // it, honouring a trusted reverse proxy's forwarded headers.
-func requestOrigin(r *http.Request) string {
+func (a *Authenticator) requestOrigin(r *http.Request) string { //nolint:revive // nil-safe by design
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+	if p := a.forwarded(r, "X-Forwarded-Proto"); p != "" {
 		scheme = p
 	}
 	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+	if h := a.forwarded(r, "X-Forwarded-Host"); h != "" {
 		host = h
 	}
 	return scheme + "://" + host
+}
+
+// secureRequest reports whether the browser reached us over TLS.
+func (a *Authenticator) secureRequest(r *http.Request) bool {
+	return strings.HasPrefix(a.requestOrigin(r), "https://")
+}
+
+// consoleCookieName uses the __Host- prefix over TLS. The prefix is a
+// browser-enforced guarantee that the cookie is host-only, Secure and
+// Path=/ — which also means a sibling subdomain cannot "toss" a cookie of
+// the same name up to us. Plain HTTP (dev port-forward) cannot use it.
+func consoleCookieName(secure bool) string {
+	if secure {
+		return "__Host-" + sessionCookie
+	}
+	return sessionCookie
 }
 
 // Middleware wraps a handler, requiring a valid token on every request
@@ -158,7 +192,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 		// CSRF: a valid cookie is not enough for a state-changing request —
 		// it must also demonstrably come from our own UI.
-		if viaCookie && unsafeMethod(r.Method) && !sameOriginRequest(r) {
+		if viaCookie && unsafeMethod(r.Method) && !a.sameOriginRequest(r) {
 			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return
 		}
@@ -186,10 +220,11 @@ func (a *Authenticator) LoginRoutes(mux *http.ServeMux) {
 		}
 		// Secure whenever the browser reached us over TLS (directly or via a
 		// trusted proxy); a plain-HTTP port-forward still works for dev.
+		secure := a.secureRequest(r)
 		http.SetCookie(w, &http.Cookie{
-			Name: sessionCookie, Value: tok, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode,
-			Secure: strings.HasPrefix(requestOrigin(r), "https://"),
+			Name: consoleCookieName(secure), Value: tok, Path: "/",
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
+			// No Domain: host-only, so a subdomain cannot receive it.
 		})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})

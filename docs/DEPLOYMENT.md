@@ -2,15 +2,15 @@
 
 This guide takes you from a bare Kubernetes cluster to a running AgentCell
 control plane with a first project Cell serving a live preview. It reflects
-what the code actually does as of `v0.1.0-alpha.2`.
+what the code actually does on `main`.
 
-> **Maturity.** Alpha. The full path — auth → Cell → preview → dispatch →
-> settle → pushed branch → release → production — passes real-cluster e2e
-> ([E2E_RESULTS.md](E2E_RESULTS.md)). What is **not** here yet: a review /
-> PR approval queue (dispatch→settle→branch works; approval is roadmap),
-> terminal attach, and a git-token broker (the anchor still holds the git
-> token for clone/fetch). Evaluate accordingly before trusting it with
-> sensitive repositories.
+> **Maturity.** Alpha. The dispatch → settle → pushed-branch → release path
+> passed real-cluster e2e at v0.1.0-alpha.2 ([E2E_RESULTS.md](E2E_RESULTS.md)).
+> Landed since, and **not yet re-verified on a real cluster**: the
+> git-broker (no workload pod holds the forge token), the review queue with
+> automatic PRs, the React console, and the separate untrusted-content
+> origin. Terminal attach is still roadmap. Evaluate accordingly before
+> trusting it with sensitive repositories.
 
 ---
 
@@ -19,9 +19,11 @@ what the code actually does as of `v0.1.0-alpha.2`.
 Two tiers (see [ADR-0003](adr/0003-kubernetes-foundation.md)):
 
 - **`celld`** — a controller-manager (reconciles the `Cell` and `Session`
-  CRDs) plus the HTTP surface: authenticated API, calibration web UI, and a
-  reverse proxy that exposes each Cell's preview at `/preview/<cell>/` and
-  production at `/app/<cell>/`. Runs in the `agentcell-system` namespace.
+  CRDs) plus two HTTP surfaces: the **console** (authenticated API + React
+  UI, `:8080`) and, on a **separate origin**, the reverse proxy for each
+  Cell's untrusted content (`:8081`). Runs in `agentcell-system`.
+- **`git-broker`** — the only component holding forge credentials; workload
+  pods reach git through it ([ADR-0005](adr/0005-git-broker.md)).
 - **Per-project Cells** — each `Cell` gets its own namespace `cell-<name>`
   containing an anchor pod (clone + resident preview), a workspace PVC,
   session pods (dispatched work), and, after a release, an isolated
@@ -233,6 +235,18 @@ celld over HTTPS**; the login cookie is `HttpOnly` + `SameSite=Lax`.
   nodes, set `spec.storageClassName` to an **RWX** class (NFS, Ceph, cloud
   NAS/CFS). This is where cloud presets (Alibaba ACK NAS, Tencent TKE CFS)
   will plug in.
+- **Untrusted content origin.** celld serves preview/production on a second
+  listener (`--preview-addr`, default `:8081`). Set `--preview-domain` so
+  each Cell zone gets its own host (`<cell>-dev.<domain>`,
+  `<cell>-prod.<domain>`) — required wherever repositories aren't fully
+  trusted; it needs wildcard DNS and a wildcard certificate. Prefer a
+  **different registrable domain** from the console so the two never share
+  a cookie scope.
+- **Behind a gateway (APISIX / Casdoor / ingress).** celld ignores
+  `X-Forwarded-Proto/Host` unless you pass `--trust-forwarded-headers`.
+  Enable it only when the gateway **overwrites** those headers (set, not
+  append) and celld cannot be reached bypassing the gateway — otherwise a
+  direct caller could dictate what celld believes its own origin is.
 - **Egress policy.** Cell namespaces allow egress only to **DNS (53)** and
   **HTTPS (443)**. Your git remote and model endpoints must be reachable
   over 443. A self-hosted git server on another port would be blocked —

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -46,6 +47,8 @@ func main() {
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		tokenFile = flag.String("token-file", "/etc/agentcell/auth/tokens",
 			"file of API access tokens (whitespace-separated); enables auth when present")
+		trustForwarded = flag.Bool("trust-forwarded-headers", false,
+			"honour X-Forwarded-Proto/Host; enable ONLY behind a gateway that OVERWRITES them (e.g. APISIX), never where celld is directly reachable")
 		allowNoAuth = flag.Bool("allow-no-auth", false,
 			"start with the HTTP surface unauthenticated (dev only)")
 		showVersion = flag.Bool("version", false, "print version and exit")
@@ -97,6 +100,7 @@ func main() {
 	}
 
 	auth := webui.NewAuthenticator(readTokenFile(*tokenFile))
+	auth.TrustForwardedHeaders = *trustForwarded
 	if !auth.Enabled() {
 		if !*allowNoAuth {
 			log.Error(nil, "no API tokens found and --allow-no-auth not set; refusing to expose an unauthenticated control plane",
@@ -104,6 +108,15 @@ func main() {
 			os.Exit(1)
 		}
 		log.Info("WARNING: HTTP surface is UNAUTHENTICATED (--allow-no-auth)")
+	}
+
+	// Cookie tossing: a sibling subdomain can set a cookie that the parent
+	// also receives. The console cookie uses __Host- over TLS, which blocks
+	// that for the session itself, but sharing a registrable domain with
+	// untrusted content is still a weaker posture than separating them.
+	if *previewDomain != "" && registrableSuffix(*previewDomain) != "" {
+		log.Info("NOTE: give preview content its own registrable domain (not a subdomain of the console's) to rule out cookie tossing",
+			"previewDomain", *previewDomain)
 	}
 
 	_, previewPort, _ := net.SplitHostPort(*previewAddr)
@@ -164,6 +177,16 @@ func main() {
 		log.Error(err, "manager exited")
 		os.Exit(1)
 	}
+}
+
+// registrableSuffix is a crude eTLD+1 for the advisory log above; it is
+// informational only and deliberately does not gate anything.
+func registrableSuffix(host string) string {
+	parts := strings.Split(strings.Trim(host, "."), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
 }
 
 func envOr(key, def string) string {

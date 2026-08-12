@@ -170,7 +170,7 @@ func (a *Authenticator) PreviewMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		zone := ZoneOfPreviewRequest(r)
-		host := hostOnly(r)
+		host := a.hostOnly(r)
 		cookieName := previewCookieName(cell, zone)
 
 		if raw := r.URL.Query().Get(previewTicketQS); raw != "" {
@@ -195,7 +195,7 @@ func (a *Authenticator) PreviewMiddleware(next http.Handler) http.Handler {
 			http.SetCookie(w, &http.Cookie{
 				Name: cookieName, Value: session, Path: zonePath(cell, zone),
 				HttpOnly: true, SameSite: http.SameSiteLaxMode,
-				Secure: strings.HasPrefix(requestOrigin(r), "https://"),
+				Secure: a.secureRequest(r),
 				MaxAge: int(previewSessionTTL.Seconds()),
 			})
 			q := r.URL.Query()
@@ -230,9 +230,9 @@ func previewCookieName(cell string, zone Zone) string {
 
 // hostOnly is the request's host without a port, which is what the ticket
 // binds to (the port cannot be trusted to distinguish origins for cookies).
-func hostOnly(r *http.Request) string {
+func (a *Authenticator) hostOnly(r *http.Request) string {
 	h := r.Host
-	if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
+	if fh := a.forwarded(r, "X-Forwarded-Host"); fh != "" {
 		h = fh
 	}
 	if i := strings.LastIndex(h, ":"); i > 0 && !strings.Contains(h[i:], "]") {

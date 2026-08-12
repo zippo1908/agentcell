@@ -109,7 +109,7 @@ func TestUntrustedContentCSP(t *testing.T) {
 // origin must not expose the console API or SPA — that separation IS the
 // security boundary.
 func TestConsoleAndPreviewOriginsAreDisjoint(t *testing.T) {
-	h := &Handler{Registry: nil}
+	h := &Handler{Registry: nil, Auth: NewAuthenticator("t")}
 
 	previewMux := h.PreviewRoutes()
 	for _, p := range []string{"/api/cells", "/api/meta", "/reviews", "/cells"} {
@@ -121,7 +121,7 @@ func TestConsoleAndPreviewOriginsAreDisjoint(t *testing.T) {
 	}
 
 	// The console mux must not proxy untrusted content any more.
-	consoleMux := (&Handler{}).Routes()
+	consoleMux := (&Handler{Auth: NewAuthenticator("t")}).Routes()
 	for _, p := range []string{"/preview/shop/", "/app/shop/"} {
 		rec := httptest.NewRecorder()
 		consoleMux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
@@ -133,14 +133,14 @@ func TestConsoleAndPreviewOriginsAreDisjoint(t *testing.T) {
 
 // The UI must be told an absolute, different origin for untrusted content.
 func TestPreviewOriginIsAbsoluteAndDistinct(t *testing.T) {
-	h := &Handler{PreviewPort: "8081"}
+	h := &Handler{PreviewPort: "8081", Auth: NewAuthenticator("t")}
 	req := httptest.NewRequest(http.MethodGet, "/api/meta", nil)
 	req.Host = "console.example:8080"
 	if got := h.previewOriginFor(req); got != "http://console.example:8081" {
 		t.Errorf("derived preview origin = %q", got)
 	}
 
-	h = &Handler{PreviewOrigin: "https://preview.example.com/"}
+	h = &Handler{PreviewOrigin: "https://preview.example.com/", Auth: NewAuthenticator("t")}
 	if got := h.previewOriginFor(req); got != "https://preview.example.com" {
 		t.Errorf("configured preview origin = %q", got)
 	}
@@ -156,7 +156,7 @@ func TestProxyStampsCSPOnUpstreamResponse(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := &Handler{}
+	h := &Handler{Auth: NewAuthenticator("t")}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/preview/shop/index.html", nil)
 	h.proxyToURL(rec, req, upstream.URL, "/preview/shop")
@@ -316,7 +316,7 @@ func TestProxyStripsPlatformCredentials(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "casdoor_session", Value: "sso"})
 	req.AddCookie(&http.Cookie{Name: "app_session", Value: "keep-me"})
 
-	(&Handler{}).proxyToURL(httptest.NewRecorder(), req, upstream.URL, "/preview/shop")
+	(&Handler{Auth: NewAuthenticator("t")}).proxyToURL(httptest.NewRecorder(), req, upstream.URL, "/preview/shop")
 	if got == nil {
 		t.Fatal("upstream never saw the request")
 	}
@@ -331,5 +331,90 @@ func TestProxyStripsPlatformCredentials(t *testing.T) {
 	// The previewed application keeps its own cookies.
 	if c, err := got.Cookie("app_session"); err != nil || c.Value != "keep-me" {
 		t.Error("the app's own cookie must be preserved")
+	}
+}
+
+// A client-supplied X-Forwarded-* must not be able to redefine our own
+// origin — otherwise the same-origin check can simply be told to agree.
+func TestForwardedHeadersAreNotTrustedByDefault(t *testing.T) {
+	auth := NewAuthenticator("tok")
+	reached := false
+	h := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// The attacker claims we are evil.example so their Origin matches.
+	r := httptest.NewRequest(http.MethodPost, "http://celld.example/api/x", nil)
+	r.Host = "celld.example"
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	r.Header.Set("Origin", "http://evil.example")
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "tok"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden || reached {
+		t.Errorf("spoofed X-Forwarded-Host defeated the origin check: %d", rec.Code)
+	}
+
+	// Behind a gateway that overwrites them, they are honoured.
+	trusting := NewAuthenticator("tok")
+	trusting.TrustForwardedHeaders = true
+	h2 := trusting.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	r2 := httptest.NewRequest(http.MethodPost, "http://internal:8080/api/x", nil)
+	r2.Host = "internal:8080"
+	r2.Header.Set("X-Forwarded-Proto", "https")
+	r2.Header.Set("X-Forwarded-Host", "console.example.com")
+	r2.Header.Set("Origin", "https://console.example.com")
+	r2.AddCookie(&http.Cookie{Name: sessionCookie, Value: "tok"})
+	rec2 := httptest.NewRecorder()
+	h2.ServeHTTP(rec2, r2)
+	if rec2.Code != http.StatusOK {
+		t.Errorf("trusted proxy origin rejected: %d", rec2.Code)
+	}
+}
+
+// Over TLS the console cookie carries the __Host- prefix, which the browser
+// enforces as host-only + Secure + Path=/ — the defence against a sibling
+// subdomain tossing a same-named cookie up to the console.
+func TestConsoleCookieUsesHostPrefixOverTLS(t *testing.T) {
+	auth := NewAuthenticator("tok")
+	auth.TrustForwardedHeaders = true
+	mux := http.NewServeMux()
+	auth.LoginRoutes(mux)
+
+	login := func(proto string) *http.Cookie {
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("token=tok"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Host = "console.example.com"
+		if proto != "" {
+			r.Header.Set("X-Forwarded-Proto", proto)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		cookies := rec.Result().Cookies()
+		if len(cookies) == 0 {
+			t.Fatalf("login set no cookie (status %d)", rec.Code)
+		}
+		return cookies[0]
+	}
+
+	c := login("https")
+	if !strings.HasPrefix(c.Name, "__Host-") {
+		t.Errorf("TLS cookie name = %q, want __Host- prefix", c.Name)
+	}
+	if !c.Secure || c.Path != "/" || c.Domain != "" {
+		t.Errorf("__Host- requires Secure, Path=/ and no Domain: %+v", c)
+	}
+	// Plain HTTP (dev port-forward) cannot use the prefix.
+	if c := login(""); strings.HasPrefix(c.Name, "__Host-") {
+		t.Error("__Host- used without TLS; the browser would reject it")
+	}
+	// Either name is accepted on the way in.
+	r := httptest.NewRequest(http.MethodGet, "/api/x", nil)
+	r.AddCookie(&http.Cookie{Name: "__Host-" + sessionCookie, Value: "tok"})
+	if tok, viaCookie := credential(r); tok != "tok" || !viaCookie {
+		t.Error("__Host- cookie not recognised on input")
 	}
 }
