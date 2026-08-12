@@ -7,7 +7,7 @@ LDFLAGS  := -s -w \
 
 BINARIES := celld git-broker cell-runtime cellctl
 
-.PHONY: all build $(BINARIES) test vet fmt-check lint clean
+.PHONY: all build $(BINARIES) test vet fmt-check lint clean web web-install
 
 all: build
 
@@ -22,6 +22,14 @@ $(BINARIES):
 build-runtime-static:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '$(LDFLAGS)' \
 	  -o $(BINDIR)/cell-runtime-linux-amd64 ./cmd/cell-runtime
+
+# The UI is embedded into celld; build it before the Go binaries when it
+# changed. dist/ is committed so `go build` works without Node.
+web-install:
+	cd web && pnpm install --frozen-lockfile
+
+web:
+	cd web && pnpm build
 
 test:
 	go test ./...

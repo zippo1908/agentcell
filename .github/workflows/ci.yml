@@ -25,6 +25,22 @@ jobs:
       - name: build
         run: make build build-runtime-static
 
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: {version: 9}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: pnpm, cache-dependency-path: web/pnpm-lock.yaml}
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: typecheck + build
+        run: pnpm build
+        working-directory: web
+      - name: dist/ is committed and up to date
+        run: git diff --exit-code -- web/dist || (echo "web/dist is stale — run 'make web' and commit"; exit 1)
+
   # Real-machine e2e (useradd/podman/quadlet need root + systemd) cannot run
   # on hosted runners; it runs via `make e2e` on a self-hosted runner or a
   # developer box, and its output is attached to the PR as evidence.
