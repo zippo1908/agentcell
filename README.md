@@ -174,6 +174,11 @@ Open celld (`kubectl -n agentcell-system port-forward svc/celld 8080:80`) at `ht
 
 Deploy anywhere conformant: bring-your-own K8s (k3s single node = on-prem private cloud quick path) or managed K8s — Alibaba ACK / Tencent TKE presets planned in `deploy/presets/` ([ADR-0003](docs/adr/0003-kubernetes-foundation.md)).
 
+## Docs
+
+- [Architecture](docs/ARCHITECTURE.md) — diagrams of the control plane, Cell, lifecycle, git-broker
+- [Deployment](docs/DEPLOYMENT.md) · [Roadmap](docs/ROADMAP.md) · [ADRs](docs/adr/) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

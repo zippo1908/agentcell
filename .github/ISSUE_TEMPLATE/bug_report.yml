@@ -1,0 +1,55 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not use this for security issues** — see
+        [SECURITY.md](../blob/main/SECURITY.md) and report privately.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+      placeholder: |
+        I ran `cellctl cell create ...` and the Cell stayed Pending.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Exact commands / manifests. Minimal is best.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: |
+        Relevant logs and state. Cell/session resources live in the
+        `cell-<name>` namespace, e.g.
+        `kubectl -n cell-<name> get pods,events` and
+        `kubectl -n cell-<name> logs <pod> -c <container>`.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: v0.1.0-alpha.2 or a commit SHA
+    validations:
+      required: true
+  - type: input
+    id: cluster
+    attributes:
+      label: Cluster
+      placeholder: single-node k3s v1.30 / ACK / …
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I confirmed my CNI enforces NetworkPolicy (or this isn't network-related)
+        - label: This is not a security vulnerability (those go through SECURITY.md)
+          required: true

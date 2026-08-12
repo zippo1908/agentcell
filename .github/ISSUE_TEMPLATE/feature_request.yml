@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose a capability or change
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that AgentCell makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        What you'd like. If it touches architecture, note which ADR it
+        extends or challenges (docs/adr/).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit
+      options:
+        - label: This orchestrates existing primitives rather than re-building what Kubernetes/git already provide
+        - label: I've checked the Roadmap (docs/ROADMAP.md) and this isn't already planned
