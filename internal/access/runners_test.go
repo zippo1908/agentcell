@@ -241,3 +241,70 @@ func TestCrossVendorPairingIsReportedNotBlocked(t *testing.T) {
 		}
 	})
 }
+
+// The catalogue exists so the UI cannot offer a combination the API refuses.
+func TestCatalogueOnlyPairsCompatibleProtocols(t *testing.T) {
+	reg, err := LoadWithRunners(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, provs := reg.Catalogue()
+	byName := map[string]ProviderInfo{}
+	for _, p := range provs {
+		byName[p.Name] = p
+	}
+	if len(runs) == 0 || len(provs) == 0 {
+		t.Fatal("empty catalogue")
+	}
+	for _, r := range runs {
+		if len(r.Providers) == 0 {
+			t.Errorf("runner %s can drive nothing", r.Name)
+		}
+		for _, pn := range r.Providers {
+			// Every offered pairing must actually resolve.
+			if _, err := reg.Resolve(r.Name, pn, ""); err != nil {
+				t.Errorf("catalogue offers %s+%s but Resolve refuses it: %v", r.Name, pn, err)
+			}
+		}
+		// And nothing compatible is hidden.
+		for _, p := range provs {
+			offered := containsArg(r.Providers, p.Name)
+			_, err := reg.Resolve(r.Name, p.Name, "")
+			if (err == nil) != offered {
+				t.Errorf("%s+%s: offered=%v but resolvable=%v", r.Name, p.Name, offered, err == nil)
+			}
+		}
+	}
+}
+
+// A runner defaults to its own vendor's models where possible: that is the
+// pairing with no third-party licence question to answer.
+func TestRunnerDefaultsToItsOwnVendor(t *testing.T) {
+	reg, err := LoadWithRunners(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, _ := reg.Catalogue()
+	want := map[string]string{"claude": "anthropic", "codex": "openai", "kimi": "moonshot"}
+	for _, r := range runs {
+		if w, ok := want[r.Name]; ok && r.DefaultProvider != w {
+			t.Errorf("%s defaults to %q, want its own vendor %q", r.Name, r.DefaultProvider, w)
+		}
+		if r.DefaultProvider != "" && !containsArg(r.Providers, r.DefaultProvider) {
+			t.Errorf("%s defaults to %q, which is not in its own list", r.Name, r.DefaultProvider)
+		}
+	}
+}
+
+// The UI has to tell a user when a follow-up will start fresh instead of
+// continuing — assuming continuity that is not there is the expensive
+// mistake.
+func TestCatalogueReportsResumeHonestly(t *testing.T) {
+	reg, _ := LoadWithRunners(nil, nil)
+	runs, _ := reg.Catalogue()
+	for _, r := range runs {
+		if r.Resumable != Resumable(r.Name) {
+			t.Errorf("%s: catalogue says resumable=%v, runner says %v", r.Name, r.Resumable, Resumable(r.Name))
+		}
+	}
+}

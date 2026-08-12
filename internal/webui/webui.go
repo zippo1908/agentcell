@@ -231,9 +231,13 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 }
 
 func (h *Handler) meta(w http.ResponseWriter, r *http.Request) {
+	// The catalogue, not two flat name lists: a runner can only drive
+	// providers that speak one of its protocols, and the UI should not be
+	// able to offer a combination the API will refuse.
+	runners, providers := h.Registry.Catalogue()
 	writeJSON(w, 200, map[string]any{
-		"runners":   access.Runners(),
-		"providers": h.Registry.Providers(),
+		"runners":   runners,
+		"providers": providers,
 		// Absolute base for preview/app URLs. It is a different origin from
 		// the console on purpose; the UI must not build these as relative
 		// paths or the isolation collapses.
