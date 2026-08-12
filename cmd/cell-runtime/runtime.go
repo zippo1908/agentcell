@@ -81,8 +81,20 @@ func runUserRuntime() error {
 // /proc by every other window this user has open — same user, but a session
 // is still the boundary a credential is scoped to.
 func runWindowOpen(args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("window-open: need <session-id> <agent argv...>")
+	// -restore rebuilds the terminal WITHOUT running the agent again.
+	//
+	// A runtime that disappears (evicted, node rebooted) takes its windows
+	// with it, but not the work: the worktree is on the volume and the CLI's
+	// own conversation is in the private $HOME. Re-running the agent would
+	// duplicate whatever it had already done; restoring the window hands the
+	// session back to its owner, who continues the conversation when they
+	// choose — which is what the CLIs are good at.
+	restore := len(args) > 0 && args[0] == "-restore"
+	if restore {
+		args = args[1:]
+	}
+	if len(args) < 1 || (!restore && len(args) < 2) {
+		return fmt.Errorf("window-open: need [-restore] <session-id> <agent argv...>")
 	}
 	id, argv := args[0], args[1:]
 	uid := int64(os.Getuid())
@@ -106,6 +118,11 @@ func runWindowOpen(args []string) error {
 	wt := ids.WorktreePath(uid, id)
 	if err := prepareWorktree(wt, id, os.Getenv(runtimeapi.EnvBaseBranch)); err != nil {
 		return err
+	}
+	// 0700 like everything else under the private tree: this holds the
+	// conversation itself.
+	if err := os.MkdirAll(ids.SessionStateDir(uid, id), 0o700); err != nil {
+		return fmt.Errorf("session state dir: %w", err)
 	}
 	sock := ids.TmuxSocket(uid)
 	window := ids.TmuxWindow(id)
@@ -132,6 +149,15 @@ func runWindowOpen(args []string) error {
 		_ = os.Remove(envFile)
 		return fmt.Errorf("tmux new-window: %v: %s", err, out)
 	}
+	if restore {
+		// Source the environment so a follow-up runs with the model key, but
+		// start nothing.
+		if err := sendCommand(sock, window, []string{"true"}, false, id, envFile); err != nil {
+			return err
+		}
+		fmt.Printf("window %s restored in %s\n", window, wt)
+		return nil
+	}
 	if err := sendCommand(sock, window, argv, true, id, envFile); err != nil {
 		return err
 	}
@@ -154,6 +180,46 @@ func writeEnvFile(path string, env []string) error {
 		if _, err := fmt.Fprintf(f, "export %s=%s\n", k, shellQuote(v)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// runWindowStatus answers whether one session's window still exists, and
+// whether its agent has finished.
+//
+// The window is the session, not the pod. A pod that answers exec only means
+// the runtime is up: the owner may have closed this window, or the runtime
+// container may have restarted and taken every window with it while the pod
+// itself stayed. Reporting on the pod would call all of those "running".
+func runWindowStatus(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("window-status: need <session-id>")
+	}
+	id := args[0]
+	sock := ids.TmuxSocket(int64(os.Getuid()))
+	out, err := tmux(sock, "list-windows", "-a", "-F", "#{window_name}")
+	alive := false
+	if err == nil {
+		for _, name := range strings.Split(out, "\n") {
+			if strings.TrimSpace(name) == ids.TmuxWindow(id) {
+				alive = true
+				break
+			}
+		}
+	}
+	exit := ""
+	if b, err := os.ReadFile(runtimeapi.DoneMarkerFor(id)); err == nil {
+		exit = strings.TrimSpace(string(b))
+	}
+	// One line, parsed by the control plane: alive=<bool> exit=<code|->
+	code := exit
+	if code == "" {
+		code = "-"
+	}
+	fmt.Printf("alive=%t exit=%s\n", alive, code)
+	if !alive {
+		// Non-zero so a caller can branch on the exit status alone.
+		os.Exit(3)
 	}
 	return nil
 }

@@ -60,6 +60,7 @@ spec:
                 phase: {type: string}
                 sessionID: {type: string}
                 runnerSessionID: {type: string}
+                recoveries: {type: integer}
                 podName: {type: string}
                 branch: {type: string}
                 produced: {type: boolean}

@@ -8,7 +8,7 @@
 //	         report {produced,branch} via the termination message
 //	runtime  PID 1 of a user's runtime pod: one tmux server for all their
 //	         sessions in this Cell
-//	window-open / window-close
+//	window-open / window-status / window-close
 //	         start or end one session inside that runtime
 //	attach   attach to this resident session's tmux window (interactive)
 //	tell     type another instruction into a resident session's tmux window
@@ -45,6 +45,8 @@ func main() {
 		err = runUserRuntime()
 	case "window-open":
 		err = runWindowOpen(os.Args[2:])
+	case "window-status":
+		err = runWindowStatus(os.Args[2:])
 	case "window-close":
 		err = runWindowClose(os.Args[2:])
 	case "attach":

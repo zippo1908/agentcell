@@ -107,8 +107,16 @@ CLI's own conversation instead of typing at a bare shell — which is the
 difference between adding a sentence and starting over.
 
 The runtime holds no credential. Model keys arrive per window over the exec
-channel, because argv is readable from `/proc` by every other window the user
-has open: same user, but a session is still the boundary a key is scoped to.
+channel and through a `0600` file the window sources and unlinks, so they stay
+out of process listings, shell history and disk.
+
+**The boundary that buys is the user, not the session.** Every window in a
+runtime runs as the same uid, and under the default `/proc` model a process
+can read a sibling's environment. Per-session secrecy would need per-session
+uids or pods — precisely what sharing a runtime trades away. Sharing is still
+the right trade, because the alternative is a pod per conversation for CLIs
+that already manage conversations themselves; but the guarantee should be
+stated as it is.
 
 The slot is reclaimed when the user has nothing open in the Cell — "a tmux
 takes one slot; log off and it is reclaimed" — not when any one agent

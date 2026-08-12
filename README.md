@@ -171,8 +171,10 @@ curl -X DELETE ... .../api/sessions/$S                              # settle: co
 ```
 
 Every session of yours in a Cell is a window in **your** runtime, on a tmux
-socket only your uid can open. Someone else's running session is not visible
-to you at all until they settle it.
+socket only your uid can open. Someone else's running session is invisible **in
+the console** until they settle it — that is ownership filtering in the API.
+Anyone with cluster access can of course read the CRs; that is a different
+level of authorization, and AgentCell does not pretend otherwise.
 
 ## Multi-user
 

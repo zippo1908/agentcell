@@ -2,12 +2,15 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -278,5 +281,294 @@ func TestConcurrentStartsDoNotFailOnTheLosingCreate(t *testing.T) {
 	// A second caller that did not see the first one's write.
 	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, 100002); err != nil {
 		t.Errorf("the second session failed on an existing runtime: %v", err)
+	}
+}
+
+// A runtime that disappears takes its windows, not the work: the worktree is
+// on the volume and the CLI's conversation is in the private $HOME. Settling
+// there would throw away a session its owner never ended.
+func TestLostRuntimeIsRebuiltRatherThanSettled(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Status.Phase = acv1.SessionRunning
+	s.Status.SessionID = "a"
+	s.Status.PodName = "runtime-100002"
+	now := metav1.Now()
+	s.Status.StartTime = &now
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = rec.exec
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}
+
+	// The runtime is absent: first pass creates it, and nothing settles.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Phase == acv1.SessionSettling || got.Status.Phase == acv1.SessionSettled {
+		t.Fatalf("a lost runtime settled the session: %s", got.Status.Phase)
+	}
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	var pod corev1.Pod
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod); err != nil {
+		t.Fatalf("the runtime was not rebuilt: %v", err)
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+
+	// The window is restored, NOT re-run: a second agent run would duplicate
+	// whatever the first had already committed to the worktree.
+	var restore *struct {
+		pod   string
+		argv  []string
+		stdin string
+	}
+	for i := range rec.calls {
+		if len(rec.calls[i].argv) > 2 && rec.calls[i].argv[2] == "-restore" {
+			restore = &rec.calls[i]
+		}
+	}
+	if restore == nil {
+		t.Fatalf("no window restore among %d calls", len(rec.calls))
+	}
+	if !strings.Contains(restore.stdin, "sk-test") {
+		t.Error("the restored window has no model credential; a follow-up could not run")
+	}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Recoveries != 1 {
+		t.Errorf("recoveries = %d, want 1", got.Status.Recoveries)
+	}
+}
+
+// Recovery is bounded. A node that keeps evicting must eventually settle the
+// work rather than rebuild forever.
+func TestRepeatedRuntimeLossEventuallySettles(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Status.Phase = acv1.SessionRunning
+	s.Status.SessionID = "a"
+	s.Status.PodName = "runtime-100002"
+	s.Status.Recoveries = maxRecoveries
+	now := metav1.Now()
+	s.Status.StartTime = &now
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = (&recorder{}).exec
+	ctx := context.Background()
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Phase != acv1.SessionSettling {
+		t.Errorf("phase = %s, want the work settled after %d losses", got.Status.Phase, maxRecoveries)
+	}
+}
+
+// One session's TTL must not take its owner's other sessions with it. The
+// pod behind a resident session is the SHARED runtime, so deleting it on
+// timeout killed every window that user had open — their unpublished work
+// included.
+func TestTTLClosesTheWindowNotTheSharedRuntime(t *testing.T) {
+	old := residentSession("sess-old", "u-aaaa1111", "expired")
+	old.Spec.TTLSeconds = 60
+	old.Status.Phase = acv1.SessionRunning
+	old.Status.SessionID = "old"
+	// PodName is set after the uid is allocated, below.
+	long := metav1.NewTime(metav1.Now().Add(-2 * time.Hour))
+	old.Status.StartTime = &long
+
+	live := residentSession("sess-live", "u-aaaa1111", "still working")
+	live.Status.Phase = acv1.SessionRunning
+	live.Status.SessionID = "live"
+
+	now := metav1.Now()
+	live.Status.StartTime = &now
+
+	c := newFake(t, testCell(), credSecret("bailian-key"), old, live)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = rec.exec
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, uid); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	for _, n := range []string{"sess-old", "sess-live"} {
+		var sx acv1.Session
+		_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: n}, &sx)
+		sx.Status.PodName = ids.UserRuntimePod(uid)
+		_ = c.Status().Update(ctx, &sx)
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-old"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The runtime survives...
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod); err != nil {
+		t.Fatalf("a TTL expiry deleted the shared runtime: %v", err)
+	}
+	// ...and the expired session's window was closed instead.
+	closed := false
+	for _, call := range rec.calls {
+		if len(call.argv) > 2 && call.argv[1] == "window-close" && call.argv[2] == "old" {
+			closed = true
+		}
+	}
+	if !closed {
+		t.Errorf("the expired session's window was not closed: %v", rec.calls)
+	}
+	// The other session is untouched.
+	var other acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-live"}, &other)
+	if other.Status.Phase != acv1.SessionRunning {
+		t.Errorf("the sibling session became %s", other.Status.Phase)
+	}
+}
+
+// The window is the session. A runtime that answers exec may have lost it —
+// the owner closed it, or the container restarted while the pod stayed —
+// and reporting on the pod called all of that Running.
+func TestClosedWindowSettlesTheSession(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Status.Phase = acv1.SessionRunning
+	s.Status.SessionID = "a"
+	// PodName is set after allocation, below.
+	now := metav1.Now()
+	s.Status.StartTime = &now
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	// The runtime is up, but this session's window is gone.
+	r.Exec = func(_ context.Context, _, _ string, argv []string, _ io.Reader) (string, error) {
+		if len(argv) > 1 && argv[1] == "window-status" {
+			return "alive=false exit=-\n", nil
+		}
+		return "", nil
+	}
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, uid); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	var sx acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &sx)
+	sx.Status.PodName = ids.UserRuntimePod(uid)
+	_ = c.Status().Update(ctx, &sx)
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Phase != acv1.SessionSettling {
+		t.Errorf("phase = %s; a closed window left the session reported as running", got.Status.Phase)
+	}
+}
+
+// An exec that fails is not proof the window died. Settling on a transient
+// API hiccup would destroy exactly what a resident session exists to keep.
+func TestTransientExecFailureDoesNotSettle(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Status.Phase = acv1.SessionRunning
+	s.Status.SessionID = "a"
+	// PodName is set after allocation, below.
+	now := metav1.Now()
+	s.Status.StartTime = &now
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = func(_ context.Context, _, _ string, _ []string, _ io.Reader) (string, error) {
+		return "", errors.New("etcdserver: request timed out")
+	}
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	_, _ = r.ensureUserRuntime(ctx, testCell(), ns, uid)
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	var sx acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &sx)
+	sx.Status.PodName = ids.UserRuntimePod(uid)
+	_ = c.Status().Update(ctx, &sx)
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	if got.Status.Phase != acv1.SessionRunning {
+		t.Errorf("a failed exec settled the session (%s)", got.Status.Phase)
+	}
+}
+
+// Two of a user's Codex sessions share a runtime and a $HOME, so "resume the
+// last conversation" would resume into each other. Each session gets its own
+// state directory to make "last" mean this one.
+func TestRecencyResumingRunnersGetTheirOwnStateDir(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "work")
+	s.Spec.Runner = "codex"
+	s.Spec.Provider = "deepseek"
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = rec.exec
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "sess-a"}}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	ns := ids.WorkloadNamespace("shop")
+	var pod corev1.Pod
+	_ = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.UserRuntimePod(uid)}, &pod)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "runtime", Ready: true}}
+	_ = c.Status().Update(ctx, &pod)
+	for range 2 {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var open *struct {
+		pod   string
+		argv  []string
+		stdin string
+	}
+	for i := range rec.calls {
+		if len(rec.calls[i].argv) > 1 && rec.calls[i].argv[1] == "window-open" {
+			open = &rec.calls[i]
+		}
+	}
+	if open == nil {
+		t.Fatal("no window opened")
+	}
+	var got acv1.Session
+	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
+	want := "CODEX_HOME=" + ids.SessionStateDir(uid, got.Status.SessionID)
+	if !strings.Contains(open.stdin, want) {
+		t.Errorf("window environment has no per-session state dir (%s):\n%s", want, open.stdin)
 	}
 }

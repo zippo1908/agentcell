@@ -109,6 +109,25 @@ type Runner struct {
 	// ResumeArgv continues an existing conversation with more instructions.
 	// Nil means this runner cannot resume and a follow-up starts fresh.
 	ResumeArgv func(task, runnerSessionID string) []string
+	// SessionHomeEnv names the variable that points this CLI at its state
+	// directory, for runners that resume by recency rather than by id. Giving
+	// each session its own directory is what makes "the most recent
+	// conversation" mean this session's — otherwise two of a user's sessions,
+	// sharing a runtime and a $HOME, would resume into each other.
+	//
+	// Empty for CLIs that address conversations by id, which need no such
+	// separation.
+	SessionHomeEnv string
+}
+
+// SessionHomeVar returns the state-directory variable a runner needs scoped
+// per session, or "" if it addresses conversations by id instead.
+func SessionHomeVar(runner string) string {
+	r, ok := runners[runner]
+	if !ok {
+		return ""
+	}
+	return r.SessionHomeEnv
 }
 
 // Resumable reports whether a runner can continue its own conversation.
@@ -178,14 +197,18 @@ var runners = map[string]Runner{
 			return []string{"codex", "exec", "--sandbox", "danger-full-access", task}
 		},
 		// Codex names its own sessions, so there is no id to hand it up
-		// front. It can continue the most recent one, and because each
-		// session has its own worktree and its own $HOME, "most recent here"
-		// is unambiguous — the isolation from ADR-0009 is what makes this
-		// safe rather than a race between users.
+		// front — it resumes "the last one". That is only unambiguous if
+		// "last" is scoped to this session, and it is NOT: one user's windows
+		// share a runtime and a $HOME, so two concurrent Codex sessions would
+		// see each other's conversation as the most recent one.
+		//
+		// So each session gets its own CODEX_HOME (see SessionHomeEnv), which
+		// makes "the last one here" mean this session and nothing else.
 		ResumeArgv: func(task, _ string) []string {
 			return []string{"codex", "exec", "resume", "--last",
 				"--sandbox", "danger-full-access", task}
 		},
+		SessionHomeEnv: "CODEX_HOME",
 	},
 	"pi": {
 		Name:      "pi",
