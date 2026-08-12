@@ -29,8 +29,13 @@ func TestSessionDerivations(t *testing.T) {
 	if got := SessionBranch(id); got != "session/"+id {
 		t.Errorf("SessionBranch = %q", got)
 	}
-	if got := WorktreePath(id); got != "/workspace/.cells/"+id {
+	// A worktree lives inside its owner's private tree, never in a shared
+	// directory: unpublished work belongs to one user (ADR-0009).
+	if got := WorktreePath(100001, id); got != "/workspace/users/100001/worktrees/"+id {
 		t.Errorf("WorktreePath = %q", got)
+	}
+	if a, b := WorktreePath(100001, id), WorktreePath(100002, id); a == b {
+		t.Error("two users' worktrees for the same session id collide")
 	}
 	if len(SessionName(id)) > 63 {
 		t.Errorf("session pod name %q exceeds DNS label limit", SessionName(id))

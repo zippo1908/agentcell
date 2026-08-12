@@ -4,6 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
+	"github.com/zippo1908/agentcell/internal/useruid"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
@@ -47,14 +48,30 @@ func withBrokerClientLabel(labels map[string]string) map[string]string {
 }
 
 // Every pod the platform renders — anchor, session, settle, prod — runs
-// non-root with the same hardened defaults. The devbox image ships a
-// uid-1000 user; fsGroup makes the shared PVC and emptyDirs writable.
+// non-root with the same hardened defaults.
+//
+// podSecurity is the project identity: the anchor and the production pod
+// serve the shared checkout and belong to nobody in particular.
 func podSecurity() *corev1.PodSecurityContext {
+	return podSecurityAs(useruid.ProjectUID)
+}
+
+// podSecurityAs runs a pod as one specific user (ADR-0009).
+//
+// The UID is the filesystem expression of the boundary, not the boundary
+// itself — that is the pod. Two users' sessions are separate pods with
+// separate UIDs, so one cannot read the other's private tree even though
+// both mount the same project volume.
+//
+// fsGroup stays the project group for exactly one reason: it is what lets
+// privately-owned processes still collaborate on the shared checkout. Group
+// membership grants the project layer, the UID withholds everything else.
+func podSecurityAs(uid int64) *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{
 		RunAsNonRoot:   ptr.To(true),
-		RunAsUser:      ptr.To[int64](1000),
-		RunAsGroup:     ptr.To[int64](1000),
-		FSGroup:        ptr.To[int64](1000),
+		RunAsUser:      ptr.To(uid),
+		RunAsGroup:     ptr.To(useruid.ProjectGID),
+		FSGroup:        ptr.To(useruid.ProjectGID),
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 }

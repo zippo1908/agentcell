@@ -94,9 +94,19 @@ With identity on, a Session records its creator and:
 - asking about a session you do not own answers **404, not 403**;
 - a model credential can only be spent by the user who owns it.
 
-Not yet: per-user Unix UIDs, private storage, a resident per-user runtime
-and per-user tmux sockets. Those are runtime isolation and get their own
-ADR; today all workloads still run as `uid=1000` on the Cell's shared
-volume, so **a user who can exec into a session pod can read another user's
-worktree**. Until that lands, treat the Cell as a trust boundary between
-projects, not between users.
+Runtime isolation landed with [ADR-0009](../../docs/adr/0009-runtime-isolation.md):
+each user's pods run as their own allocated Unix UID, and worktrees, `$HOME`,
+CLI state and transcripts live in a `0700` private tree. A peer's pod runs as
+a different uid, so it cannot read them even though the project volume is
+shared.
+
+Still not isolated, stated plainly:
+
+- the **shared project volume is shared** — the checkout, the knowledge
+  directory and settled branches are the collaboration layer by design;
+- **no per-user network policy**: two users' session pods can reach each
+  other on the pod network;
+- **no resident runtime yet** — sessions are still one-shot pods, so there is
+  no long-lived tmux server to attach to and no CLI-native resume;
+- **same node, same kernel**: for tenants who do not trust each other, use
+  separate node pools or a sandboxed runtime, not a UID.
