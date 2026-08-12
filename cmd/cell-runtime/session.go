@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,6 +89,10 @@ func runSession() error {
 		}
 	}
 
+	if os.Getenv(runtimeapi.EnvResident) == "1" {
+		return runResident(uid, id, wt, argv)
+	}
+
 	fmt.Printf("session %s: running %v in %s\n", id, argv, wt)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = wt
@@ -99,6 +104,80 @@ func runSession() error {
 		return fmt.Errorf("agent exited: %w", err)
 	}
 	return nil
+}
+
+// runResident hosts the agent in a tmux server the owner can attach to, and
+// keeps the slot alive after it finishes.
+//
+// The socket lives in the owner's private tree, never in the shared
+// /tmp/tmux-<uid> that tmux picks by default. That default is the whole
+// problem: it is derived from the uid, so on a shared volume two users could
+// end up naming the same socket, and anything that could reach it could
+// attach to somebody else's terminal. Application-level separation would not
+// help — the socket is the authority.
+//
+// The agent runs as a command typed into a shell rather than as the window's
+// process, so the window survives it. That is what makes "look at what it
+// did, then tell it one more thing" possible in the same context instead of
+// a fresh session that has to rediscover everything.
+func runResident(uid int64, id, wt string, argv []string) error {
+	sock := ids.TmuxSocket(uid)
+	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+		return fmt.Errorf("tmux socket dir: %w", err)
+	}
+	if err := os.Chmod(filepath.Dir(sock), 0o700); err != nil {
+		return err
+	}
+	window := ids.TmuxWindow(id)
+	if out, err := exec.Command("tmux", "-S", sock, "new-session", "-d",
+		"-s", window, "-c", wt).CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux new-session: %v: %s", err, out)
+	}
+	// The marker is how anything outside the pod can tell "still working"
+	// from "waiting for you" without a Kubernetes token in here (ADR-0005).
+	done := filepath.Join(wt, ".agentcell", "agent.done")
+	_ = os.Remove(done)
+	line := shellJoin(argv) + "; printf '%s' \"$?\" > " + shellQuote(done)
+	if out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window,
+		line, "Enter").CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys: %v: %s", err, out)
+	}
+	fmt.Printf("session %s: resident in tmux %s (socket %s), window %s\n", id, window, sock, window)
+
+	// PID 1 from here on: hold the pod so the slot stays attachable. The
+	// controller ends it — TTL, an explicit settle, or the Cell going away —
+	// which is what keeps mandatory settle intact.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	for {
+		select {
+		case <-stop:
+			fmt.Println("session: stop requested, leaving the worktree for settle")
+			return nil
+		case <-time.After(30 * time.Second):
+			if err := exec.Command("tmux", "-S", sock, "has-session", "-t", window).Run(); err != nil {
+				// The user killed the window: nothing left to attach to, so
+				// stop holding the slot and let settle run.
+				fmt.Println("session: tmux window gone, releasing the slot")
+				return nil
+			}
+		}
+	}
+}
+
+// shellJoin renders argv as one command line for send-keys. The agent's own
+// arguments are operator- and task-supplied, so they are quoted rather than
+// pasted: a task containing a semicolon must not become two commands.
+func shellJoin(argv []string) string {
+	out := make([]string, 0, len(argv))
+	for _, a := range argv {
+		out = append(out, shellQuote(a))
+	}
+	return strings.Join(out, " ")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 func waitForRepo(timeout time.Duration) error {
@@ -168,5 +247,42 @@ func ensureSharedParent(dir string) error {
 	if info.Mode().Perm()&0o070 == 0 {
 		return fmt.Errorf("users directory %s is %v — not group-writable, so other users cannot create their own trees", dir, info.Mode())
 	}
+	return nil
+}
+
+// runTell types another instruction into this session's tmux window.
+//
+// It runs INSIDE the session pod, as the session's own user, so it needs no
+// credential and cannot address anyone else's tmux: the socket path is
+// derived from the uid it is running as, and that socket is 0700.
+//
+// The text arrives as one argv element and is handed to tmux as one
+// argument. It is never spliced into a shell string — it is user input, and a
+// semicolon in a task description must stay a semicolon rather than becoming
+// the start of another command.
+func runTell(args []string) error {
+	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
+		return fmt.Errorf("tell: nothing to say")
+	}
+	id := os.Getenv(runtimeapi.EnvSessionID)
+	if id == "" {
+		return fmt.Errorf("tell: %s not set", runtimeapi.EnvSessionID)
+	}
+	sock := ids.TmuxSocket(int64(os.Getuid()))
+	window := ids.TmuxWindow(id)
+	text := strings.Join(args, " ")
+	// Clear whatever half-typed line is sitting there first, so a follow-up
+	// cannot be concatenated onto it.
+	if out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window, "C-u").CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys: %v: %s", err, out)
+	}
+	out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window, "-l", text).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux send-keys: %v: %s", err, out)
+	}
+	if out, err := exec.Command("tmux", "-S", sock, "send-keys", "-t", window, "Enter").CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys Enter: %v: %s", err, out)
+	}
+	fmt.Println("sent")
 	return nil
 }

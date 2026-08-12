@@ -30,7 +30,10 @@ rules:
     resources: ["cells/status", "sessions/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
-    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods", "serviceaccounts", "configmaps"]
+    # pods/exec: the console reaches a resident session's tmux by
+    # exec'ing in, rather than by giving the session pod an API token
+    # it would run untrusted code alongside (ADR-0005).
+    resources: ["namespaces", "persistentvolumeclaims", "secrets", "services", "pods", "pods/exec", "serviceaccounts", "configmaps"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["statefulsets", "deployments"]

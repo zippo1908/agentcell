@@ -53,6 +53,7 @@ spec:
                 credentialSecret: {type: string}
                 ttlSeconds: {type: integer, format: int64, minimum: 60}
                 followPreview: {type: boolean}
+                resident: {type: boolean}
             status:
               type: object
               properties:

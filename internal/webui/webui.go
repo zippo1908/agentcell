@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
@@ -48,6 +50,11 @@ type Handler struct {
 	// Auth mints the short-lived per-Cell tickets that authorize the
 	// preview origin (the console credential is never accepted there).
 	Auth *Authenticator
+	// RESTConfig and Kube back exec into a resident session's pod. They are
+	// how the console reaches a live tmux without the session pod holding an
+	// API token of its own (ADR-0005).
+	RESTConfig *rest.Config
+	Kube       kubernetes.Interface
 }
 
 // previewBaseFor returns the origin serving a specific Cell's untrusted
@@ -113,6 +120,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{session}/diff", h.sessionDiff)
 	mux.HandleFunc("POST /api/sessions/{session}/review", h.reviewSession)
 	mux.HandleFunc("DELETE /api/sessions/{session}", h.settleSession)
+	mux.HandleFunc("GET /api/sessions/{session}/state", h.sessionState)
+	mux.HandleFunc("POST /api/sessions/{session}/continue", h.continueSession)
 	// The SPA is last: it serves built assets and falls back to index.html
 	// so client-side routes (/cells/x, /reviews) survive a hard reload.
 	mux.Handle("/", spaHandler())
@@ -378,6 +387,9 @@ type dispatchRequest struct {
 	Model            string `json:"model"`
 	CredentialSecret string `json:"credentialSecret"`
 	FollowPreview    bool   `json:"followPreview"`
+	// Resident keeps the slot alive in tmux after the agent finishes, so the
+	// owner can look at the result and keep going in the same context.
+	Resident bool `json:"resident"`
 }
 
 func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
@@ -413,6 +425,7 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	sess.Spec = acv1.SessionSpec{
 		Cell: cellName, Task: req.Task, Runner: req.Runner, Provider: req.Provider,
 		Model: req.Model, CredentialSecret: req.CredentialSecret, FollowPreview: req.FollowPreview,
+		Resident:    req.Resident,
 		OwnerUserID: identity.FromContext(r.Context()).ID(),
 	}
 	if err := h.Client.Create(r.Context(), sess); err != nil {

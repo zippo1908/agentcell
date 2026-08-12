@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -161,8 +162,14 @@ func main() {
 	}
 
 	_, previewPort, _ := net.SplitHostPort(*previewAddr)
+	kubeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		log.Error(err, "kubernetes client")
+		os.Exit(1)
+	}
 	ui := &webui.Handler{
 		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
+		RESTConfig: mgr.GetConfig(), Kube: kubeClient,
 		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
 		PreviewDomain: *previewDomain, Auth: auth,
 	}
