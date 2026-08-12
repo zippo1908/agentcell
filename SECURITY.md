@@ -39,10 +39,18 @@ design. In short:
   with an audience-bound ServiceAccount token; only the settle role may push,
   and only to its own `session/<id>` branch. Session pods carry no token at
   all.
+- **Trust assumption — tenants must not have direct Kubernetes access to
+  `cell-*` namespaces.** The broker binds identity to the pod's
+  audience-scoped token, verifies the pod's uid and its controller
+  ownerReference (settle pushes require a real `settle-<id>` Job pod), and
+  requires a `repo_url` binding on each credential. These raise the bar, but
+  a tenant who can create pods/Jobs in a cell namespace could still forge a
+  workload identity — so cluster RBAC must not grant tenants that access.
 - **Known limits (tracked, not hidden):** single celld replica (no HA); the
   git-broker is a high-value component holding all forge credentials (harden
-  the cluster accordingly); a non-enforcing CNI silently ignores our
-  NetworkPolicies — verify yours enforces them.
+  the cluster accordingly; its RBAC has no cluster-wide secret access); a
+  non-enforcing CNI silently ignores our NetworkPolicies — verify yours
+  enforces them.
 
 If you find a way to cross any of these boundaries — exfiltrate a token,
 reach another cell, push outside `session/*`, or escape a pod — that is

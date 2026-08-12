@@ -127,8 +127,13 @@ maps them to the git askpass helper).
 kubectl -n agentcell-system create secret generic git-cred \
   --type=kubernetes.io/basic-auth \
   --from-literal=username=<git-user> \
-  --from-literal=password=<PAT-with-push-access>
+  --from-literal=password=<PAT-with-push-access> \
+  --from-literal=repo_url=<https-clone-url>   # REQUIRED in broker mode
 ```
+
+`repo_url` binds the credential to exactly one repository: the broker
+rejects any Cell whose `spec.repo.url` doesn't match it (normalized), so a
+Cell creator cannot forward the credential to a different (attacker) URL.
 
 > **git-broker (default, ADR-0005).** `config/install.yaml` deploys a
 > `git-broker` and starts celld with `--git-broker-url`, so anchor / settle /

@@ -66,7 +66,8 @@ TOKEN="e2e-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 kubectl -n "$NS" delete secret celld-tokens git-cred e2e-model >/dev/null 2>&1 || true
 kubectl -n "$NS" create secret generic celld-tokens --from-literal=tokens="$TOKEN"
 kubectl -n "$NS" create secret generic git-cred --type=kubernetes.io/basic-auth \
-  --from-literal=username="$E2E_GIT_USER" --from-literal=password="$E2E_GIT_TOKEN"
+  --from-literal=username="$E2E_GIT_USER" --from-literal=password="$E2E_GIT_TOKEN" \
+  --from-literal=repo_url="$E2E_REPO_URL"
 # Fake agent ignores the model key, but the controller requires the secret.
 kubectl -n "$NS" create secret generic e2e-model --from-literal=key=dummy
 kubectl -n "$NS" rollout restart deploy/celld

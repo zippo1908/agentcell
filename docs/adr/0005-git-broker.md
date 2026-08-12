@@ -82,6 +82,16 @@ GitHub / GitLab(真实 remote,443)
 5. **会话身份精确绑定**:settle 的 push ref 必须**恰好等于** `refs/heads/session/<session-id>`,其中 `<session-id>` 从 **settle Pod 名**(TokenReview 的 bound-token 声明,不可伪造)派生——一个 settle Pod 无法 push 到别的会话的分支,也无法碰 base 分支。
 6. **repo↔凭据不可伪造绑定**:git Secret 可声明 `repo_url`;broker 校验 Cell 的 repo.url 与之一致——建 Cell 的人无法把某凭据配到另一个(如攻击者的)URL 上,也无法用别人的令牌配自己的 URL。
 
+## 加固(v1.2,fail-closed 修订,已实现)
+
+回应安全复审,把默认路径从 fail-open 改为 fail-closed:
+
+- **audience 严格校验**:TokenReview 返回的 audiences 必须**包含** broker audience;空 audiences(仅对 apiserver 有效的令牌)一律拒绝——不再 `len>0 &&` 放行。
+- **repo_url 强制**:broker 模式下 git Secret **必须**声明 `repo_url`,缺失即拒;比较前归一化 scheme/host(小写)、去尾斜杠与 `.git`。默认路径下"凭据配到别的 URL"被真正关闭(Quick Start / e2e / 部署文档同步补 `repo_url`)。
+- **Pod uid + OwnerReference 校验**:push 路径不再只信 SA 名/Pod 名字符串——broker 读取该 Pod,校验 uid 与令牌声明一致,并要求其 controller ownerReference 指向一个 `settle-<id>` Job,**session id 从 Job 名派生**(不可伪造)。架构前提写进 SECURITY.md:租户不得直连 cell 命名空间的 kube API。
+- **分支不可篡改(create-only)**:session 分支的 push 必须是创建(old 全零)——禁止 force-update / 覆盖已结算分支。
+- **RBAC 最小化**:broker 的 ClusterRole 只留 `tokenreviews:create` 与 `pods:get,list`;**Cell 与 Secret 的读取收敛为 agentcell-system 内的 namespaced Role**——broker 被攻破也无法经 RBAC 读全集群 Secret。
+
 ## 实现清单(v1)
 
 1. `cmd/git-broker`:smart-HTTP 反代 + TokenReview 鉴权 + namespace↔cell 校验 + Cell/Secret 查询;

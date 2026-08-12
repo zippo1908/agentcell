@@ -113,6 +113,10 @@ metadata:
   name: git-broker
   namespace: agentcell-system
 ---
+# Cluster-scoped: only TokenReview (cluster API) and read pods (for uid /
+# ownerReference verification across dynamic cell-<name> namespaces). NO
+# cluster-wide secret access — a compromised broker cannot read cluster
+# secrets via RBAC.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -121,12 +125,9 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
-  - apiGroups: ["agentcell.io"]
-    resources: ["cells"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -135,6 +136,35 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: agentcell-git-broker
+subjects:
+  - kind: ServiceAccount
+    name: git-broker
+    namespace: agentcell-system
+---
+# Namespaced: Cell CRs and forge Secrets are read ONLY in the control
+# namespace, not cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentcell-git-broker
+  namespace: agentcell-system
+rules:
+  - apiGroups: ["agentcell.io"]
+    resources: ["cells"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentcell-git-broker
+  namespace: agentcell-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: agentcell-git-broker
 subjects:
   - kind: ServiceAccount

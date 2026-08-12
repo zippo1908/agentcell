@@ -96,6 +96,13 @@ func checkRefPolicy(cmds []refUpdate, sessionID string) error {
 		if isZeroOID(c.New) {
 			return &refPolicyError{fmt.Sprintf("deleting %q is not permitted", c.Ref)}
 		}
+		// Create-only: the old value must be all-zero. A session branch is
+		// pushed exactly once, so this makes it immutable — no force-update,
+		// no rewrite of an already-settled branch.
+		if !isZeroOID(c.Old) {
+			return &refPolicyError{fmt.Sprintf(
+				"updating an existing %q is not permitted (session branches are create-only)", c.Ref)}
+		}
 	}
 	return nil
 }

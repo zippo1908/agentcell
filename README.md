@@ -150,7 +150,8 @@ kubectl -n agentcell-system create secret generic celld-tokens \
 # 3. Create the credentials your sessions will burn
 kubectl -n agentcell-system create secret generic bailian-key --from-literal=key=sk-...
 kubectl -n agentcell-system create secret generic git-cred \
-  --type=kubernetes.io/basic-auth --from-literal=username=bot --from-literal=password=ghp_...
+  --type=kubernetes.io/basic-auth --from-literal=username=bot --from-literal=password=ghp_... \
+  --from-literal=repo_url=https://github.com/you/shop.git   # required: binds the credential to this repo
 
 # 4. A cell with a resident product preview
 cellctl cell create shop --repo https://github.com/you/shop.git \

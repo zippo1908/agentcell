@@ -18,12 +18,13 @@ import (
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
-// identity is the verified caller: namespace and ServiceAccount from the
-// TokenReview, plus the bound-token pod name (unforgeable) when available.
+// identity is the verified caller from the TokenReview: namespace and
+// ServiceAccount, plus the bound-token pod name and uid (unforgeable).
 type identity struct {
 	namespace string
 	saName    string
 	podName   string
+	podUID    string
 }
 
 // handleGit serves one git smart-HTTP request at /<cell>/<rest>.
@@ -63,10 +64,16 @@ func (s *server) handleGit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "git secret not found", http.StatusInternalServerError)
 		return
 	}
-	// Unforgeable repo↔credential binding: if the secret declares the repo
-	// it is authorized for, the Cell's URL must match it. A Cell creator
-	// cannot pair a credential with a different (e.g. attacker) URL.
-	if bound := strings.TrimSpace(string(secret.Data["repo_url"])); bound != "" && bound != c.Spec.Repo.URL {
+	// Unforgeable repo↔credential binding (REQUIRED, not optional): the
+	// secret must declare the repo it is authorized for, and the Cell's URL
+	// must match it after normalization. This closes credential-forwarding /
+	// SSRF: a Cell creator cannot point a credential at another URL.
+	bound := strings.TrimSpace(string(secret.Data["repo_url"]))
+	if bound == "" {
+		http.Error(w, "git secret is missing the required repo_url binding", http.StatusForbidden)
+		return
+	}
+	if !sameRepo(bound, c.Spec.Repo.URL) {
 		http.Error(w, "cell repo url is not authorized by this credential", http.StatusForbidden)
 		return
 	}
@@ -76,10 +83,10 @@ func (s *server) handleGit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. v2/v1.1 action-level boundary: a push must be from the settle role
-	//    and may only update that session's own branch.
+	// 3. A push must come from a real settle Job pod (verified by uid +
+	//    owner reference) and may only update that session's own branch.
 	if push && r.Method == http.MethodPost {
-		sessionID, err := settleSessionID(id)
+		sessionID, err := s.settleSession(id)
 		if err != nil {
 			http.Error(w, "push identity: "+err.Error(), http.StatusForbidden)
 			return
@@ -136,8 +143,10 @@ func (s *server) authenticate(r *http.Request) (identity, error) {
 	if !res.Status.Authenticated {
 		return identity{}, fmt.Errorf("token not authenticated")
 	}
-	// The token must be scoped to the broker, not the apiserver at large.
-	if len(res.Status.Audiences) > 0 && !contains(res.Status.Audiences, runtimeapi.BrokerAudience) {
+	// Fail closed: the token must be explicitly scoped to the broker. An
+	// empty audiences response means the token is only valid for the
+	// apiserver, not us — reject it.
+	if !contains(res.Status.Audiences, runtimeapi.BrokerAudience) {
 		return identity{}, fmt.Errorf("token audience does not include the broker")
 	}
 	return identityFromReview(res.Status.User)
@@ -152,6 +161,9 @@ func identityFromReview(u authnv1.UserInfo) (identity, error) {
 	id := identity{namespace: parts[2], saName: parts[3]}
 	if v, ok := u.Extra["authentication.kubernetes.io/pod-name"]; ok && len(v) > 0 {
 		id.podName = v[0]
+	}
+	if v, ok := u.Extra["authentication.kubernetes.io/pod-uid"]; ok && len(v) > 0 {
+		id.podUID = v[0]
 	}
 	return id, nil
 }
@@ -168,32 +180,39 @@ func authorize(id identity, cell string, push bool) error {
 			return fmt.Errorf("service account %q may not push", id.saName)
 		}
 	case runtimeapi.SASettle:
-		// push permitted; the exact branch is bound in settleSessionID.
+		// push permitted; the exact branch is bound in settleSession.
 	default:
 		return fmt.Errorf("service account %q is not permitted", id.saName)
 	}
 	return nil
 }
 
-// settleSessionID derives the session id from the settle pod's own name
-// (from the unforgeable bound-token claim), so a push can be pinned to
-// exactly that session's branch. Job "settle-<id>" → pod "settle-<id>-<rand>".
-func settleSessionID(id identity) (string, error) {
+// settleSession verifies the caller is a genuine settle Job pod and returns
+// the session id from the OWNING Job (unforgeable), not a caller-supplied
+// value: it reads the pod, checks its uid matches the token claim, and
+// requires a controller ownerReference to a Job named settle-<id>.
+func (s *server) settleSession(id identity) (string, error) {
 	if id.saName != runtimeapi.SASettle {
 		return "", fmt.Errorf("only the settle role may push")
 	}
-	if id.podName == "" {
+	if id.podName == "" || id.podUID == "" {
 		return "", fmt.Errorf("bound pod identity unavailable (need projected token)")
 	}
-	rest, ok := strings.CutPrefix(id.podName, "settle-")
-	if !ok {
-		return "", fmt.Errorf("unexpected settle pod name %q", id.podName)
+	var pod corev1.Pod
+	if err := s.k8s.Get(s.ctx(), types.NamespacedName{Namespace: id.namespace, Name: id.podName}, &pod); err != nil {
+		return "", fmt.Errorf("pod not found")
 	}
-	i := strings.LastIndex(rest, "-")
-	if i <= 0 {
-		return "", fmt.Errorf("cannot derive session id from %q", id.podName)
+	if string(pod.UID) != id.podUID {
+		return "", fmt.Errorf("pod uid mismatch")
 	}
-	return rest[:i], nil
+	for _, o := range pod.OwnerReferences {
+		if o.Controller != nil && *o.Controller && o.Kind == "Job" {
+			if sess, ok := strings.CutPrefix(o.Name, "settle-"); ok && sess != "" {
+				return sess, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("pod is not controlled by a settle Job")
 }
 
 func isReceivePack(r *http.Request, rest string) bool {
@@ -202,6 +221,24 @@ func isReceivePack(r *http.Request, rest string) bool {
 	}
 	// info/refs advertisement for push.
 	return rest == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack"
+}
+
+// sameRepo compares two git remote URLs after normalizing scheme/host case,
+// a trailing slash, and a ".git" suffix, so cosmetic differences don't
+// weaken (or falsely fail) the repo↔credential binding.
+func sameRepo(a, b string) bool {
+	na, oka := normalizeRepo(a)
+	nb, okb := normalizeRepo(b)
+	return oka && okb && na == nb
+}
+
+func normalizeRepo(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	path := strings.TrimSuffix(strings.TrimRight(u.Path, "/"), ".git")
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host) + path, true
 }
 
 func contains(ss []string, v string) bool {

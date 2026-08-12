@@ -17,6 +17,12 @@ import (
 	"time"
 
 	authnv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	ktypes "k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // pkt encodes one git pkt-line.
@@ -51,6 +57,11 @@ func TestParseAndCheckRefPolicy(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "update of existing branch rejected (create-only)",
+			body:    pkt("abc123 def456 refs/heads/session/01xyz") + flushPkt,
+			wantErr: true,
+		},
+		{
 			name:    "empty rejected",
 			body:    flushPkt,
 			wantErr: true,
@@ -73,39 +84,77 @@ func TestParseAndCheckRefPolicy(t *testing.T) {
 	}
 }
 
-func TestAuthorizeRolesAndSettleSessionID(t *testing.T) {
+func TestAuthorizeRoles(t *testing.T) {
 	cellNS := "cell-shop"
-	// namespace binding
 	if err := authorize(identity{namespace: "cell-other", saName: "anchor"}, "shop", false); err == nil {
 		t.Error("wrong namespace must be rejected")
 	}
-	// anchor/prod may not push
 	if err := authorize(identity{namespace: cellNS, saName: "anchor"}, "shop", true); err == nil {
 		t.Error("anchor must not push")
 	}
 	if err := authorize(identity{namespace: cellNS, saName: "prod"}, "shop", true); err == nil {
 		t.Error("prod must not push")
 	}
-	// anchor may fetch
 	if err := authorize(identity{namespace: cellNS, saName: "anchor"}, "shop", false); err != nil {
 		t.Errorf("anchor fetch should be allowed: %v", err)
 	}
-	// unknown SA rejected
 	if err := authorize(identity{namespace: cellNS, saName: "default"}, "shop", false); err == nil {
 		t.Error("unknown service account must be rejected")
 	}
-	// settle session id derived from bound pod name
-	id, err := settleSessionID(identity{saName: "settle", podName: "settle-01hxyz-ab12z"})
-	if err != nil || id != "01hxyz" {
-		t.Errorf("settleSessionID = %q, %v; want 01hxyz", id, err)
+}
+
+func TestSettleSessionVerifiesPodOwner(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	jobPod := func(name, uid, jobName string, controller bool) *corev1.Pod {
+		p := &corev1.Pod{}
+		p.Name, p.Namespace, p.UID = name, "cell-shop", ktypes.UID(uid)
+		p.OwnerReferences = []metav1.OwnerReference{{Kind: "Job", Name: jobName, Controller: &controller}}
+		return p
 	}
-	// non-settle role cannot push
-	if _, err := settleSessionID(identity{saName: "anchor", podName: "x"}); err == nil {
-		t.Error("only settle derives a push session")
+	good := jobPod("settle-01hxyz-abc", "uid-1", "settle-01hxyz", true)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(good).Build()
+	s := &server{k8s: fc, controlNS: "agentcell-system"}
+
+	id := identity{namespace: "cell-shop", saName: "settle", podName: "settle-01hxyz-abc", podUID: "uid-1"}
+	sess, err := s.settleSession(id)
+	if err != nil || sess != "01hxyz" {
+		t.Fatalf("settleSession = %q, %v; want 01hxyz", sess, err)
 	}
-	// missing bound identity rejected
-	if _, err := settleSessionID(identity{saName: "settle"}); err == nil {
-		t.Error("missing pod name must be rejected")
+
+	// uid mismatch → rejected (stolen token replayed from another pod)
+	if _, err := s.settleSession(identity{namespace: "cell-shop", saName: "settle", podName: "settle-01hxyz-abc", podUID: "wrong"}); err == nil {
+		t.Error("uid mismatch must be rejected")
+	}
+	// non-settle role
+	if _, err := s.settleSession(identity{namespace: "cell-shop", saName: "anchor", podName: "x", podUID: "y"}); err == nil {
+		t.Error("only settle may push")
+	}
+	// pod not owned by a Job
+	bad := &corev1.Pod{}
+	bad.Name, bad.Namespace, bad.UID = "rogue", "cell-shop", "uid-2"
+	fc2 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bad).Build()
+	s2 := &server{k8s: fc2, controlNS: "agentcell-system"}
+	if _, err := s2.settleSession(identity{namespace: "cell-shop", saName: "settle", podName: "rogue", podUID: "uid-2"}); err == nil {
+		t.Error("pod without a settle Job owner must be rejected")
+	}
+}
+
+func TestSameRepoNormalization(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"https://github.com/You/Repo.git", "https://GitHub.com/You/Repo", true},
+		{"https://github.com/you/repo", "https://github.com/you/repo/", true},
+		{"https://github.com/you/repo.git", "https://github.com/you/other.git", false},
+		{"https://github.com/you/repo", "https://evil.com/you/repo", false},
+		{"", "https://github.com/you/repo", false},
+	}
+	for _, c := range cases {
+		if got := sameRepo(c.a, c.b); got != c.want {
+			t.Errorf("sameRepo(%q,%q) = %v, want %v", c.a, c.b, got, c.want)
+		}
 	}
 }
 
