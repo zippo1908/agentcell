@@ -9,6 +9,9 @@ controlNamespace: agentcell-system
 image:
   # Point at wherever the internal registry mirrors the images.
   registry: ghcr.io/zippo1908
+  # Bump deliberately, and only to a tag that has been verified here. The
+  # cluster runs whatever this says, so "latest" would mean "whatever CI
+  # produced last", which is not a deployment decision.
   tag: v0.1.0-alpha.3
   # Always, deliberately. Run 4 lost half an hour to IfNotPresent: a tag
   # already cached on the node was reused, so the cluster silently kept
@@ -43,6 +46,21 @@ preview:
     tls:
       enabled: false
       secretName: ""   # must cover *.<preview.domain>
+
+# User identity (ADR-0008). Empty keeps the single shared principal that
+# static tokens imply — which is honest, but means every Session is owned by
+# "whoever had the token". Point this at the Casdoor in deploy/identity/ (or
+# any OIDC provider) to get per-user ownership, private runtimes and per-user
+# Unix uids (ADR-0009).
+oidc:
+  issuer: ""
+  clientID: ""
+  existingSecret: ""   # holds `clientSecret`; created out-of-band
+
+# Preview tickets are signed with this. Empty regenerates per process, so
+# preview links break across a celld restart. Create a Secret with key
+# `previewKey` once the deployment matters.
+previewKeySecret: ""
 
 gitBroker:
   enabled: true

@@ -39,6 +39,28 @@ kubectl -n agentcell-system create secret docker-registry regcred \
 Both paths are verified end to end in [Run 4](../../docs/E2E_RESULTS.md):
 k3s + self-hosted GitLab + private registry, 16 checks, 0 failures.
 
+## Turning on user identity
+
+Without an issuer this deployment has one principal: whoever holds the token.
+That is fine for a single operator and dishonest for a team — every Session
+is owned by the same anonymous caller, so nothing is private from anyone.
+
+With `oidc.issuer` set (see [deploy/identity](../identity/)), each user gets:
+
+- Sessions they own, invisible to peers until settle publishes them;
+- a stable Unix uid and a `0700` private tree — worktrees, `$HOME`, CLI state
+  and the tmux socket (ADR-0009);
+- one resident tmux runtime per user, holding their sessions as windows
+  (ADR-0010).
+
+Verified on this cluster: [Run 5](../../docs/E2E_RESULTS.md) (two users, one
+Cell, neither can read the other), [Run 6](../../docs/E2E_RESULTS.md)
+(resident slot, follow-ups, settle still publishes) and
+[Run 7](../../docs/E2E_RESULTS.md) (two concurrent sessions in one runtime).
+
+The images must carry `tmux` for resident sessions; the runtime refuses with
+a clear message rather than failing obscurely if they do not.
+
 Two reasons this rule is absolute: the repository may become public (this
 branch would go with it), and secrets committed to git survive in history
 even after deletion.
