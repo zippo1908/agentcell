@@ -111,7 +111,9 @@ func (h *Handler) previewURL(r *http.Request, cell string, zone Zone, path strin
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/meta", h.meta)
+	mux.HandleFunc("GET /api/me", h.me)
 	mux.HandleFunc("GET /api/cells", h.listCells)
+	mux.HandleFunc("POST /api/cells", h.createCell)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
@@ -168,13 +170,21 @@ func CellFromPreviewRequest(r *http.Request) string {
 // hard reload of it should be answered with index.html. Anything else —
 // unknown API paths, missing assets, other prefixes — must NOT be masked
 // as a 200 HTML page.
+// isClientRoute lists the paths the SPA router owns, so a hard reload of one
+// is answered with index.html.
+//
+// It is an allow-list rather than a catch-all because answering 200 HTML for
+// an unknown /api path or a mistyped asset turns a programming error into a
+// silently "successful" response. The cost is that a new page must be added
+// here — a real trap, and the reason the test below enumerates them.
 func isClientRoute(p string) bool {
-	switch {
-	case p == "/" || p == "/cells" || p == "/reviews":
+	switch p {
+	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities":
 		return true
-	case strings.HasPrefix(p, "/cells/"):
+	}
+	if rest, ok := strings.CutPrefix(p, "/cells/"); ok {
 		// /cells/<name> only; no deeper synthetic paths.
-		return !strings.Contains(strings.TrimPrefix(p, "/cells/"), "/")
+		return !strings.Contains(rest, "/")
 	}
 	return false
 }
@@ -242,6 +252,25 @@ func (h *Handler) meta(w http.ResponseWriter, r *http.Request) {
 		// the console on purpose; the UI must not build these as relative
 		// paths or the isolation collapses.
 		"previewOrigin": h.previewOriginFor(r),
+	})
+}
+
+// me tells the UI who it is acting as.
+//
+// Ownership is invisible without it: a user needs to know whether they are
+// themselves or the shared static-token principal, because that decides
+// which sessions they can see and whether "private" means anything here.
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	p := identity.FromContext(r.Context())
+	writeJSON(w, 200, map[string]any{
+		"subject": p.ID(),
+		"name":    p.Display(),
+		"email":   p.Email,
+		"kind":    string(p.Kind),
+		// Shared means every caller is the same principal, so nothing is
+		// private from anyone else holding the token. Saying so plainly beats
+		// a UI that implies isolation it does not have.
+		"shared": p.Kind == identity.KindToken,
 	})
 }
 

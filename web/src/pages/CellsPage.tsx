@@ -1,54 +1,106 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { Badge, EmptyState, SkeletonTable } from '../ui/primitives'
+import { NONE, cellTone } from '../lib/format'
 
-/** Fleet view: every Cell with its phase, slot usage and zone links. */
+/**
+ * One card, one wide table: a monochrome grid with a constellation of small
+ * status dots. The point of this page is to see every project's state
+ * without scrolling, so density is the feature.
+ */
 export function CellsPage() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['cells'],
-    queryFn: api.cells,
-  })
+  const nav = useNavigate()
+  const { data: cells, isLoading, error } = useQuery({ queryKey: ['cells'], queryFn: api.cells })
 
   return (
-    <main>
-      <div className="card grow">
-        <h2>Cells</h2>
-        {isLoading && <div className="empty">加载中…</div>}
-        {error && <div className="err">{(error as Error).message}</div>}
-        <div className="scroll">
-          {data?.map((c) => (
-            <div className="item" key={c.name}>
-              <div className="title">
-                <Link to={`/cells/${c.name}`}>
-                  <strong>{c.name}</strong>
-                </Link>
-                {c.description ? ` — ${c.description}` : ''}
-              </div>
-              <div className="sub">
-                <span className={`chip ${c.phase}`}>{c.phase || '…'}</span>
-                <span>
-                  槽位 {c.activeSessions}/{c.maxSessions}
-                </span>
-                {c.followSession && <span>预览跟随 {c.followSession.slice(0, 8)}…</span>}
-                <a href={c.previewPath} target="_blank" rel="noreferrer">
-                  开发区 ↗
-                </a>
-                {c.productionPath && (
-                  <a href={c.productionPath} target="_blank" rel="noreferrer">
-                    正式区 ↗
-                  </a>
-                )}
-                {c.message && <span title={c.message}>ℹ</span>}
-              </div>
-            </div>
-          ))}
-          {data?.length === 0 && (
-            <div className="empty">
-              还没有 Cell。用 <code>cellctl cell create …</code> 建第一个。
-            </div>
-          )}
-        </div>
+    <>
+      <h1 className="page-title">
+        工作区
+        <span className="spacer" />
+        <span className="btn-row">
+          <Link to="/cells/new" style={{ borderBottom: 'none' }}>
+            <button className="primary small">新建工作区</button>
+          </Link>
+        </span>
+      </h1>
+
+      {error && <div className="form-error">{(error as Error).message}</div>}
+
+      <div className="card">
+        <h3>项目</h3>
+        {isLoading ? (
+          <SkeletonTable rows={4} cols={6} />
+        ) : (cells ?? []).length === 0 ? (
+          <EmptyState
+            title="还没有工作区"
+            hint="一个工作区是一个项目:常驻的代码检出、一个预览,和一组会话槽位。建好之后就可以派工了。"
+            action={
+              <Link to="/cells/new" style={{ borderBottom: 'none' }}>
+                <button className="primary small">新建工作区</button>
+              </Link>
+            }
+          />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>状态</th>
+                  <th>槽位</th>
+                  <th>预览</th>
+                  <th>正式区</th>
+                  <th>说明</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {(cells ?? []).map((c) => (
+                  <tr key={c.name} className="clickable" onClick={() => nav(`/cells/${c.name}`)}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{c.name}</div>
+                      <div className="mono faint">{c.followSession ? `跟随 ${c.followSession.slice(0, 8)}` : ''}</div>
+                    </td>
+                    <td>
+                      <Badge tone={cellTone(c.phase)}>{c.phase || 'Unknown'}</Badge>
+                    </td>
+                    <td className="num-col">
+                      {c.activeSessions}/{c.maxSessions}
+                    </td>
+                    <td>
+                      {c.previewPath ? <Badge tone="green">就绪</Badge> : <Badge>未配置</Badge>}
+                    </td>
+                    <td>
+                      {c.releaseRef ? (
+                        <span className="mono">{c.releaseRef}</span>
+                      ) : (
+                        <span className="faint">未发布</span>
+                      )}
+                    </td>
+                    <td className="muted" style={{ maxWidth: 280 }}>
+                      {c.description || NONE}
+                    </td>
+                    <td>
+                      <div className="btn-row">
+                        <button
+                          className="ghost small"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            nav(`/cells/${c.name}`)
+                          }}
+                        >
+                          打开 →
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
-    </main>
+    </>
   )
 }

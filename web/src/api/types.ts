@@ -113,3 +113,24 @@ export interface DispatchInput {
   /** Keep the slot alive after the agent finishes, in the owner's tmux. */
   resident?: boolean
 }
+
+/** Live state of a resident session — answered by asking its tmux window,
+ * not by looking at the pod (a runtime can be up while the window is gone). */
+export interface SessionState {
+  resident: boolean
+  live: boolean
+  working: boolean
+  exitCode?: string
+  attach: string
+}
+
+/** The principal this console is acting as. `shared` means a static token:
+ * everyone is the same subject, so nothing is private from anyone else
+ * holding it. */
+export interface Me {
+  subject: string
+  name: string
+  email?: string
+  kind: string
+  shared: boolean
+}

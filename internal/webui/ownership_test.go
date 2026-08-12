@@ -215,3 +215,111 @@ func TestPrincipalIDIsStableAndLabelSafe(t *testing.T) {
 }
 
 var _ = types.NamespacedName{}
+
+// The UI has to be able to say who you are — and, when auth is a shared
+// token, that you are NOT anyone in particular. A console that implies
+// per-user privacy it does not have is worse than one that admits it.
+func TestMeReportsWhoAndWhetherItIsShared(t *testing.T) {
+	_, h := ownedFixture(t)
+	for _, tc := range []struct {
+		name       string
+		p          identity.Principal
+		wantShared bool
+	}{
+		{"an oidc user is themselves", alice, false},
+		{"a static token is shared", identity.StaticToken, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := asUser(httptest.NewRequest(http.MethodGet, "/api/me", nil), tc.p)
+			rec := httptest.NewRecorder()
+			h.me(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("me = %d", rec.Code)
+			}
+			var out struct {
+				Subject string `json:"subject"`
+				Shared  bool   `json:"shared"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if out.Shared != tc.wantShared {
+				t.Errorf("shared = %v, want %v", out.Shared, tc.wantShared)
+			}
+			if out.Subject != tc.p.ID() {
+				t.Errorf("subject = %q, want %q", out.Subject, tc.p.ID())
+			}
+			// The raw subject must not leak: it can be an email address.
+			if strings.Contains(rec.Body.String(), tc.p.Subject) {
+				t.Errorf("the response leaks the raw subject: %s", rec.Body)
+			}
+		})
+	}
+}
+
+// A Cell could only be created with cellctl, which made the console a viewer
+// of projects it could never start. Creating one from the web is the point
+// of a shared console — with the same credential rule as dispatch, because
+// pointing a Cell at a git secret you do not own would borrow it for your
+// own repository.
+func TestCreateCellRefusesABorrowedGitCredential(t *testing.T) {
+	bobsGit := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: "bob-git", Labels: map[string]string{OwnerLabel: bob.ID()},
+	}}
+	_, h := ownedFixture(t, bobsGit)
+	body := `{"name":"shop2","repoURL":"https://example/x.git","image":"img","secretName":"bob-git"}`
+	req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells", strings.NewReader(body)), alice)
+	rec := httptest.NewRecorder()
+	h.createCell(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("creating a Cell with Bob's git credential = %d, want 404", rec.Code)
+	}
+}
+
+func TestCreateCellValidatesAndRecordsItsCreator(t *testing.T) {
+	c, h := ownedFixture(t)
+	t.Run("a bad name is refused before anything is created", func(t *testing.T) {
+		for _, bad := range []string{"", "Shop", "a_b", strings.Repeat("x", 100), "../etc"} {
+			body := `{"name":"` + bad + `","repoURL":"https://example/x.git","image":"img"}`
+			req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells", strings.NewReader(body)), alice)
+			rec := httptest.NewRecorder()
+			h.createCell(rec, req)
+			if rec.Code != 400 {
+				t.Errorf("name %q = %d, want 400", bad, rec.Code)
+			}
+		}
+	})
+	t.Run("repo and image are required", func(t *testing.T) {
+		req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells",
+			strings.NewReader(`{"name":"ok","repoURL":"","image":""}`)), alice)
+		rec := httptest.NewRecorder()
+		h.createCell(rec, req)
+		if rec.Code != 400 {
+			t.Errorf("= %d, want 400", rec.Code)
+		}
+	})
+	t.Run("created, with its creator recorded and defaults applied", func(t *testing.T) {
+		req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells",
+			strings.NewReader(`{"name":"shop2","repoURL":"https://example/x.git","image":"img","preview":"npm run dev"}`)), alice)
+		rec := httptest.NewRecorder()
+		h.createCell(rec, req)
+		if rec.Code != 201 {
+			t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+		}
+		var got acv1.Cell
+		if err := c.Get(context.Background(),
+			types.NamespacedName{Namespace: ns, Name: "shop2"}, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Annotations["agentcell.io/created-by"] != alice.ID() {
+			t.Errorf("creator = %q", got.Annotations["agentcell.io/created-by"])
+		}
+		if got.Spec.Repo.Branch != "main" || got.Spec.MaxSessions != 2 {
+			t.Errorf("defaults not applied: branch=%q slots=%d", got.Spec.Repo.Branch, got.Spec.MaxSessions)
+		}
+		// "npm run dev" must become three arguments, not one string.
+		if len(got.Spec.Preview.Command) != 3 || got.Spec.Preview.Port != 3000 {
+			t.Errorf("preview = %v port=%d", got.Spec.Preview.Command, got.Spec.Preview.Port)
+		}
+	})
+}

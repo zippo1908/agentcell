@@ -3,7 +3,9 @@ import type {
   CellDetail,
   Diff,
   DispatchInput,
+  Me,
   Meta,
+  SessionState,
   Review,
 } from './types'
 
@@ -41,7 +43,14 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   meta: () => req<Meta>('/api/meta'),
+
+  /** Who am I acting as — and is this a shared principal? */
+  me: () => req<Me>('/api/me'),
   cells: () => req<Cell[]>('/api/cells'),
+
+  /** Onboard a project from the console. */
+  createCell: (body: Record<string, unknown>) =>
+    req<{ cell: string }>('/api/cells', { method: 'POST', body: JSON.stringify(body) }),
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
 
   saveDescription: (name: string, description: string) =>
@@ -69,6 +78,16 @@ export const api = {
     req<Review[]>(`/api/reviews${cell ? `?cell=${encodeURIComponent(cell)}` : ''}`),
 
   diff: (session: string) => req<Diff>(`/api/sessions/${session}/diff`),
+
+  /** Is a resident session still working, or waiting for you? */
+  sessionState: (session: string) => req<SessionState>(`/api/sessions/${session}/state`),
+
+  /** Say one more thing to a live session, in the same conversation. */
+  continueSession: (session: string, text: string) =>
+    req<{ ok: string }>(`/api/sessions/${session}/continue`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
 
   review: (session: string, decision: 'approve' | 'reject', note: string) =>
     req<Review>(`/api/sessions/${session}/review`, {
