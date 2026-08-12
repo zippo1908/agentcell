@@ -63,8 +63,13 @@ providers:
       openai:
         base_url: https://api.moonshot.cn/v1
       anthropic:
+        # Anthropic-compatible endpoint, so Claude Code (and any
+        # Anthropic-protocol runner) can drive Kimi models directly.
         base_url: https://api.moonshot.cn/anthropic
     auth_env: MOONSHOT_API_KEY
+    # Model names move faster than releases; override in providers.d.
+    models: [kimi-k2-turbo-preview, kimi-k2-0905-preview, moonshot-v1-128k]
+    docs: https://platform.moonshot.cn/docs
 
   zhipu:
     display_name: 智谱 GLM

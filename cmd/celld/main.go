@@ -46,6 +46,8 @@ func main() {
 			"namespace holding Cell/Session CRs")
 		providersDir = flag.String("providers-dir", "/etc/agentcell/providers.d",
 			"directory of provider preset overlays (*.yaml)")
+		runnersDir = flag.String("runners-dir", "/etc/agentcell/runners.d",
+			"directory of agent-CLI preset overlays (*.yaml); a CLI's flags change faster than releases do")
 		gitBrokerURL = flag.String("git-broker-url", os.Getenv("AGENTCELL_GIT_BROKER"),
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		imagePullSecret = flag.String("image-pull-secret", os.Getenv("AGENTCELL_IMAGE_PULL_SECRET"),
@@ -72,7 +74,7 @@ func main() {
 	ctrl.SetLogger(logzap.New())
 	log := ctrl.Log.WithName("celld")
 
-	registry, err := loadRegistry(*providersDir)
+	registry, err := loadRegistry(*providersDir, *runnersDir)
 	if err != nil {
 		log.Error(err, "load provider registry")
 		os.Exit(1)
@@ -257,20 +259,36 @@ func readTokenFile(path string) string {
 	return string(raw)
 }
 
-func loadRegistry(dir string) (*access.Registry, error) {
-	var overlays [][]byte
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
-				continue
-			}
-			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				return nil, err
-			}
-			overlays = append(overlays, raw)
-		}
+func loadRegistry(providersDir, runnersDir string) (*access.Registry, error) {
+	providers, err := readOverlays(providersDir)
+	if err != nil {
+		return nil, err
 	}
-	return access.Load(overlays...)
+	runners, err := readOverlays(runnersDir)
+	if err != nil {
+		return nil, err
+	}
+	return access.LoadWithRunners(providers, runners)
+}
+
+// readOverlays collects *.yaml from a directory. A missing directory is not
+// an error — overlays are optional by design; an unreadable FILE is, because
+// silently ignoring it would run with a configuration nobody intended.
+func readOverlays(dir string) ([][]byte, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil
+	}
+	var out [][]byte
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, raw)
+	}
+	return out, nil
 }

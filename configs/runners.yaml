@@ -1,0 +1,69 @@
+# AgentCell built-in runner presets (embedded at build time).
+# Override or extend via /etc/agentcell/runners.d/*.yaml — user files win.
+#
+# Runners are data for the same reason providers are: a CLI's flags are the
+# fastest-moving thing in this system. When an upstream release renames
+# `--resume`, an operator should fix one line, not wait for an AgentCell
+# release. Everything here is a last-known-good value.
+#
+# argv templates substitute {{task}} and {{session}} as WHOLE elements — a
+# task containing spaces or a semicolon stays one argument. See
+# docs/adr/0002-provider-access-layer.md and ADR-0010 for the conversation
+# model.
+version: 1
+
+runners:
+  claude:
+    display_name: Claude Code
+    # Preference order; first protocol the provider also speaks wins.
+    protocols: [anthropic]
+    headless: ["claude", "--dangerously-skip-permissions", "-p", "{{task}}"]
+    # Claude Code accepts a caller-chosen conversation id, and requires a
+    # UUID — AgentCell mints one per Session and records it.
+    session_id: uuid
+    start:  ["claude", "--dangerously-skip-permissions", "--session-id", "{{session}}", "-p", "{{task}}"]
+    resume: ["claude", "--dangerously-skip-permissions", "--resume", "{{session}}", "-p", "{{task}}"]
+
+  codex:
+    display_name: OpenAI Codex CLI
+    protocols: [openai]
+    # The container is the boundary; Codex's inner sandbox must yield to it.
+    headless: ["codex", "exec", "--sandbox", "danger-full-access", "{{task}}"]
+    # Codex names its own conversations and resumes the most recent one, so
+    # each Session needs its own state directory — a user's windows share a
+    # runtime and a $HOME, and "the last one" would otherwise be a sibling's.
+    session_home_env: CODEX_HOME
+    resume: ["codex", "exec", "resume", "--last", "--sandbox", "danger-full-access", "{{task}}"]
+
+  pi:
+    display_name: pi
+    protocols: [anthropic, openai]
+    headless: ["pi", "-p", "{{task}}"]
+
+  kimi:
+    display_name: Kimi CLI (月之暗面)
+    # Kimi speaks both of Moonshot's endpoints; pair it with the `moonshot`
+    # provider, or with any gateway exposing the same protocols.
+    protocols: [anthropic, openai]
+    headless: ["kimi", "--yes", "-p", "{{task}}"]
+    # DELIBERATELY no start/resume: AgentCell has not verified how this CLI
+    # names and resumes conversations, and guessing would produce follow-ups
+    # that silently start a new context instead of continuing one — the exact
+    # waste resident sessions exist to remove. Without them a follow-up
+    # honestly starts fresh in the same worktree.
+    #
+    # To enable resume once you have checked your pinned version, drop a file
+    # in /etc/agentcell/runners.d/ with the two lines that apply, e.g.
+    #
+    #   runners:
+    #     kimi:
+    #       session_id: uuid          # if it accepts one from the caller
+    #       start:  ["kimi", "--yes", "--session", "{{session}}", "-p", "{{task}}"]
+    #       resume: ["kimi", "--yes", "--resume", "{{session}}", "-p", "{{task}}"]
+    #
+    # or, if it resumes by recency instead:
+    #
+    #   runners:
+    #     kimi:
+    #       session_home_env: KIMI_HOME
+    #       resume: ["kimi", "--yes", "--continue", "-p", "{{task}}"]
