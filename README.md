@@ -102,7 +102,10 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Review queue · diff · approve→auto-PR · merge tracking (forge API via broker, celld holds no credential) | ✅ tested ([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
 | Helm chart + GHCR images + cloud presets (k3s / ACK / TKE) | ✅ `helm lint`-verified |
 | Terminal attach in the browser (tmux over WebSocket) — `kubectl exec … cell-runtime attach <id>` works today | ⬜ designed (M5) |
-| Resume a conversation after its runtime pod is replaced (the id and `$HOME` state exist; re-opening the window does not) | ⬜ designed |
+| **Git isolation without a git proxy**: per-user repositories over a shared read-only base — an unpublished commit never reaches the shared object store | ✅ tested ([Run 8](docs/E2E_RESULTS.md), [ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
+| **Production elsewhere**: a Cell runs its own isolated production zone, or hands the release to a system that owns running it (signed webhook) | ✅ tested |
+| Capacity is enforced: every workload declares requests/limits, a ResourceQuota caps each Cell | ✅ tested ([Run 8](docs/E2E_RESULTS.md)) |
+| Resume a conversation after its runtime pod is replaced (the window is restored; re-attaching it to the CLI conversation is not wired) | ⬜ designed |
 | Per-user NetworkPolicy · agent-sandbox substrate · multi-node RWX | ⬜ designed |
 
 ## Install (one command)
