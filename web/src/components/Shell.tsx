@@ -62,6 +62,9 @@ export function Shell() {
           <NavLink to="/credentials" className={link}>
             {IconKey} 我的凭据
           </NavLink>
+          <NavLink to="/teams" className={link}>
+            团队
+          </NavLink>
         </nav>
         <span className="spacer" />
         <div className="user-box">

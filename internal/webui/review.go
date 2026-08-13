@@ -76,7 +76,7 @@ func (h *Handler) listReviews(w http.ResponseWriter, r *http.Request) {
 			var cell acv1.Cell
 			if err := h.Client.Get(r.Context(),
 				types.NamespacedName{Namespace: h.Namespace, Name: s.Spec.Cell}, &cell); err == nil {
-				allowed = can(p, &cell, ActionView)
+				allowed = can(p, &cell, h.teamFor(r, &cell), ActionView)
 			}
 			visible[s.Spec.Cell] = allowed
 		}

@@ -140,6 +140,13 @@ type CellSpec struct {
 	// box. Without a way to say so, a project either takes whatever the
 	// scheduler picks or the whole cluster has to be identical.
 	Placement PlacementSpec `json:"placement,omitempty"`
+	// Team names a Team whose members carry their role into this Cell.
+	//
+	// Naming a team is naming an inside, so it closes the Cell the same way
+	// adding the first member does — a project that belongs to a group is
+	// not simultaneously open to everyone who can log in.
+	// +kubebuilder:validation:MaxLength=63
+	Team string `json:"team,omitempty"`
 }
 
 // PlacementSpec pins a Cell to a class of machine.
@@ -276,4 +283,22 @@ type Member struct {
 	UserID string `json:"userID"`
 	// +kubebuilder:validation:Enum=viewer;member;maintainer
 	Role Role `json:"role"`
+}
+
+// EffectiveAccess is whether this Cell's member list is enforced.
+//
+// It lives on the type because two places need the answer — the controller,
+// which records it in status so `kubectl get cell` can be trusted, and the
+// authorization check, which enforces it. Two copies of this rule is how a
+// Cell ends up reporting "open" while refusing everybody, or the reverse.
+//
+// Naming a team is naming an inside, exactly as adding the first member is.
+func (c *Cell) EffectiveAccess() AccessMode {
+	if c.Spec.Access != "" {
+		return c.Spec.Access
+	}
+	if len(c.Spec.Members) == 0 && c.Spec.Team == "" {
+		return AccessOpen
+	}
+	return AccessRestricted
 }

@@ -9,6 +9,7 @@ import { CellsPage } from './pages/CellsPage'
 import { CellNewPage } from './pages/CellNewPage'
 import { CapabilitiesPage } from './pages/CapabilitiesPage'
 import { CredentialsPage } from './pages/CredentialsPage'
+import { TeamsPage } from './pages/TeamsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ToastProvider } from './ui/primitives'
 import { CellPage } from './pages/CellPage'
@@ -33,6 +34,7 @@ const router = createBrowserRouter([
       { path: '/cells/new', element: <CellNewPage /> },
       { path: '/capabilities', element: <CapabilitiesPage /> },
       { path: '/credentials', element: <CredentialsPage /> },
+      { path: '/teams', element: <TeamsPage /> },
       { path: '/cells/:name', element: <CellPage /> },
       { path: '/reviews', element: <ReviewsPage /> },
     ],

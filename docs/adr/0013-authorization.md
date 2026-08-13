@@ -110,6 +110,39 @@ was not: an outsider could list every project, read a settled session's diff,
 and — worst — be handed a **preview ticket**, which is a capability rather
 than a label. Filtering happens before the view is built, not after.
 
+## Teams arrived. Casbin still has not.
+
+This ADR listed three things that would overturn "no policy engine". The
+first was **organisation-level structure — teams owning many Cells,
+inherited roles**. That has now been built, so the judgement has to be made
+again rather than inherited.
+
+The answer is still no, and the reason is that the rule which arrived is one
+line:
+
+```go
+// an entry on the Cell wins; otherwise the team's role applies
+for _, m := range cell.Spec.Members { if m.UserID == id { return m.Role } }
+if team != nil { return team.RoleOf(id) }
+```
+
+Not "inheritance" in the sense that motivates a policy engine — no
+hierarchy, no transitive groups, no deny rules, no attribute conditions. One
+default and one override, resolved without a graph walk.
+
+The override direction is the part worth stating: a Cell entry wins **in both
+directions**, so it can lower a team role as well as raise it. Taking the
+higher of the two would look generous and would make "a viewer on this one
+project" unsayable — which is precisely the exception a team exists to have.
+
+`roleOf(principal, cell, team)` stays a pure function. That is deliberate:
+the team is passed in rather than fetched inside, so the entire rule set is
+still readable on one screen and testable without a cluster. When an engine
+is finally warranted, this is still the one seam it goes into.
+
+What would change it now: deny rules, teams containing teams, or policies an
+operator edits at runtime without a release. None of those are here.
+
 ## Consequences
 
 - Deployments that never add members behave exactly as before. This is

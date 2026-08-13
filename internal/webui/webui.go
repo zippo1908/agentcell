@@ -120,6 +120,12 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("GET /api/nodepools", h.listNodePools)
+	mux.HandleFunc("GET /api/teams", h.listTeams)
+	mux.HandleFunc("POST /api/teams", h.createTeam)
+	mux.HandleFunc("PUT /api/teams/{team}/members", h.putTeamMember)
+	mux.HandleFunc("DELETE /api/teams/{team}/members/{user}", h.deleteTeamMember)
+	mux.HandleFunc("DELETE /api/teams/{team}", h.deleteTeam)
+	mux.HandleFunc("PUT /api/cells/{cell}/team", h.putCellTeam)
 	mux.HandleFunc("GET /api/sessions/{session}/terminal", h.sessionTerminal)
 	mux.HandleFunc("PUT /api/cells/{cell}/placement", h.putPlacement)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
@@ -380,7 +386,7 @@ func (h *Handler) listCells(w http.ResponseWriter, r *http.Request) {
 	p := identity.FromContext(r.Context())
 	views := make([]cellView, 0, len(list.Items))
 	for i := range list.Items {
-		if !can(p, &list.Items[i], ActionView) {
+		if !can(p, &list.Items[i], h.teamFor(r, &list.Items[i]), ActionView) {
 			continue
 		}
 		views = append(views, h.toCellView(r, &list.Items[i]))

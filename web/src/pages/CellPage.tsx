@@ -54,6 +54,17 @@ export function CellPage() {
     retry: false,
   })
 
+  const teams = useQuery({ queryKey: ['teams'], queryFn: () => api.teams(), enabled: tab === 'settings', retry: false })
+
+  const saveTeam = useMutation({
+    mutationFn: (t: string) => api.setCellTeam(name, t),
+    onSuccess: () => {
+      toast.success('归属已更新')
+      qc.invalidateQueries({ queryKey: ['cell', name] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   const savePlacement = useMutation({
     mutationFn: (label: string) => {
       const [key, ...rest] = label ? label.split('=') : ['']
@@ -296,6 +307,39 @@ export function CellPage() {
           <p className="hint">
             改动会让锚点重建,这个工作区会短暂中断;正在跑的会话会被清算。
           </p>
+        </div>
+
+        <div className="card">
+          <h3>归属团队</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            团队成员把角色带进这个工作区,不用一个个加。下面「访问」里单独点名的人以那里为准
+            ——<b>既能提高也能降低</b>。
+          </p>
+          <div className="row" style={{ marginTop: 8 }}>
+            <select
+              value={cell.team ?? ''}
+              onChange={(e) => saveTeam.mutate(e.target.value)}
+              disabled={saveTeam.isPending}
+              style={{ minWidth: 240 }}
+            >
+              <option value="">不归属任何团队</option>
+              {(teams.data ?? []).map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.displayName || t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {cell.team ? (
+            <p className="hint">
+              归属 <code className="mono">{cell.team}</code>。归属团队会让这个工作区变成按成员授权
+              ——属于某个组的项目,不该同时对所有能登录的人开放。
+            </p>
+          ) : (
+            <p className="hint">
+              你只能选自己所在的团队:否则「设置归属」就成了从外面把项目交出去、或者接管过来的办法。
+            </p>
+          )}
         </div>
 
         <div className="card">

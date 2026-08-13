@@ -7,6 +7,7 @@ import type {
   Me,
   Meta,
   NodePool,
+  Team,
   SessionState,
   Review,
 } from './types'
@@ -63,6 +64,28 @@ export const api = {
   createCell: (body: Record<string, unknown>) =>
     req<{ cell: string }>('/api/cells', { method: 'POST', body: JSON.stringify(body) }),
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
+
+  teams: () => req<Team[]>('/api/teams'),
+
+  createTeam: (name: string, displayName: string) =>
+    req<Team>('/api/teams', { method: 'POST', body: JSON.stringify({ name, displayName }) }),
+
+  putTeamMember: (team: string, userID: string, role: string) =>
+    req<{ members: { userID: string; role: string }[] }>(`/api/teams/${team}/members`, {
+      method: 'PUT',
+      body: JSON.stringify({ userID, role }),
+    }),
+
+  deleteTeamMember: (team: string, userID: string) =>
+    req<{ members: { userID: string; role: string }[] }>(
+      `/api/teams/${team}/members/${userID}`, { method: 'DELETE' }),
+
+  /** Empty team detaches the Cell and returns it to its own member list. */
+  setCellTeam: (name: string, team: string) =>
+    req<{ team: string }>(`/api/cells/${name}/team`, {
+      method: 'PUT',
+      body: JSON.stringify({ team }),
+    }),
 
   nodePools: () => req<NodePool[]>('/api/nodepools'),
 

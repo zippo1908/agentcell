@@ -76,12 +76,7 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	// Record what "who can touch this" resolves to, so an open Cell says so
 	// rather than being inferred from a missing field.
-	cell.Status.Access = acv1.AccessOpen
-	if cell.Spec.Access != "" {
-		cell.Status.Access = cell.Spec.Access
-	} else if len(cell.Spec.Members) > 0 {
-		cell.Status.Access = acv1.AccessRestricted
-	}
+	cell.Status.Access = cell.EffectiveAccess()
 	if err := r.ensureQuota(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("resource quota: %w", err))
 	}

@@ -290,6 +290,15 @@ spec:
                   StorageClassName optionally pins the PVC's storage class (cloud
                   presets set this: Alibaba disk/NAS, Tencent CBS/CFS).
                 type: string
+              team:
+                description: |-
+                  Team names a Team whose members carry their role into this Cell.
+
+                  Naming a team is naming an inside, so it closes the Cell the same way
+                  adding the first member does — a project that belongs to a group is
+                  not simultaneously open to everyone who can log in.
+                maxLength: 63
+                type: string
               workspaceSize:
                 description: WorkspaceSize is the PVC size, default "10Gi".
                 type: string

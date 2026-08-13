@@ -29,6 +29,20 @@ export interface Cell {
   pool?: string
   /** Why it has landed nowhere, in the scheduler's own words. */
   schedulingMessage?: string
+  /** The Team whose members carry a role into this Cell. */
+  team?: string
+}
+
+/** A membership list that outlives any one project. */
+export interface Team {
+  name: string
+  displayName: string
+  description: string
+  members?: { userID: string; role: string }[]
+  /** Which projects this team governs — the blast radius of a membership change. */
+  cells?: string[]
+  /** The caller's own role in this team. */
+  role: string
 }
 
 /** A class of machine a Cell can be placed on, as it exists in the cluster. */

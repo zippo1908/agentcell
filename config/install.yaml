@@ -17,10 +17,10 @@ metadata:
   name: agentcell-celld
 rules:
   - apiGroups: ["agentcell.io"]
-    resources: ["cells", "sessions"]
+    resources: ["cells", "sessions", "teams"]
     verbs: ["*"]
   - apiGroups: ["agentcell.io"]
-    resources: ["cells/status", "sessions/status"]
+    resources: ["cells/status", "sessions/status", "teams/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
     # serviceaccounts: broker mode creates a per-role SA in every Cell
