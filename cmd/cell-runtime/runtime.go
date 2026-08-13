@@ -227,9 +227,22 @@ func runWindowStatus(args []string) error {
 	// and only tmux can answer it — the control plane sees a pod either way.
 	// Reclamation policy hangs off it, so it is reported alongside the rest
 	// rather than inferred from a timer.
+	// Count only clients watching THIS session.
+	//
+	// Counting every client on the server meant one person reading session A
+	// kept session B awake too — the tmux server is per USER, so "attached"
+	// was answering a question about the user, not about the session, and
+	// the idle clock it feeds is per session.
 	attached := false
-	if out, err := tmux(sock, "list-clients", "-F", "#{client_tty}"); err == nil {
-		attached = strings.TrimSpace(out) != ""
+	if out, err := tmux(sock, "list-clients", "-F", "#{client_session}"); err == nil {
+		want := "v-" + id
+		for _, name := range strings.Split(out, "\n") {
+			name = strings.TrimSpace(name)
+			if name == want || strings.HasPrefix(name, want+"-") {
+				attached = true
+				break
+			}
+		}
 	}
 	// One line, parsed by the control plane: alive=<bool> exit=<code|->
 	code := exit

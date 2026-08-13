@@ -58,6 +58,22 @@ vet:
 fmt-check:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
+# preflight is what CI runs, before CI runs it.
+#
+# Three commits went to main red because the checks lived only in CI: gofmt
+# on files I had edited, and a web lockfile that no longer matched
+# package.json. Both are instant locally and neither is something to
+# remember — so they stop being something to remember.
+preflight: fmt-check vet test verify-generate web-lock-check
+	@echo "preflight OK"
+
+# web-lock-check fails the same way CI does, for the same reason: a
+# dependency added to package.json without updating the lockfile makes
+# `pnpm install --frozen-lockfile` refuse, and every later step is skipped.
+web-lock-check:
+	@cd web && pnpm install --frozen-lockfile --lockfile-only >/dev/null 2>&1 || { \
+	  echo "web/pnpm-lock.yaml is out of sync with package.json — run: cd web && pnpm install"; exit 1; }
+
 lint: fmt-check vet
 
 clean:

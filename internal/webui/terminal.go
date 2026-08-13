@@ -2,6 +2,8 @@ package webui
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,6 +59,16 @@ type termMessage struct {
 	Rows uint16 `json:"r,omitempty"`
 }
 
+// newViewerID names one open terminal. Random rather than sequential so two
+// replicas cannot mint the same one.
+func newViewerID() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "v0"
+	}
+	return hex.EncodeToString(b)
+}
+
 func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 	var sess acv1.Session
 	if err := h.Client.Get(r.Context(),
@@ -105,6 +117,11 @@ func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// One viewer id per websocket, so two browsers on the same session get
+	// their own grouped tmux session: closing one tab must not throw the
+	// other out, and each is counted separately as "watching".
+	viewer := newViewerID()
+
 	// Tear the viewer down when the socket goes, ALWAYS.
 	//
 	// A tmux client does not die with the exec stream that carried it: a
@@ -117,13 +134,13 @@ func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_, _ = execIn(ctx, h.RESTConfig, h.Kube, ns, sess.Status.PodName,
-			[]string{runtimeapi.RuntimeBin, "detach", id}, nil)
+			[]string{runtimeapi.RuntimeBin, "detach", id, viewer}, nil)
 	}()
 
 	// Attach rather than exec a shell: the window already exists and holds
 	// the agent's own terminal. `attach` also means several viewers see the
 	// same screen, which is what makes "come look at this" work.
-	argv := []string{runtimeapi.RuntimeBin, "attach", id}
+	argv := []string{runtimeapi.RuntimeBin, "attach", id, viewer}
 	if err := h.attach(r.Context(), conn, ns, sess.Status.PodName, argv); err != nil &&
 		!websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		// Report into the terminal itself: a websocket that simply drops

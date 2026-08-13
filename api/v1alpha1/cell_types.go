@@ -147,6 +147,12 @@ type CellSpec struct {
 	// box. Without a way to say so, a project either takes whatever the
 	// scheduler picks or the whole cluster has to be identical.
 	Placement PlacementSpec `json:"placement,omitempty"`
+	// Database is where this project's data lives. AgentCell does not run
+	// it: a database is not a thing to lock to an application server, and a
+	// platform that provisions one quietly becomes responsible for its
+	// backups, its upgrades and its outages. What the platform does is
+	// deliver the connection to the workloads that need it.
+	Database DatabaseSpec `json:"database,omitempty"`
 	// Team names a Team whose members carry their role into this Cell.
 	//
 	// Naming a team is naming an inside, so it closes the Cell the same way
@@ -156,19 +162,47 @@ type CellSpec struct {
 	Team string `json:"team,omitempty"`
 }
 
+// DatabaseSpec points a Cell's zones at their databases.
+//
+// Two entries, not one, and that is the whole point of the type. A preview
+// runs code an agent has just written, against data it may have just decided
+// to migrate; pointing it at the same database production uses is the
+// ordinary way a company loses a table. So the dev zone and the production
+// zone name SEPARATE secrets, and leaving production unset means production
+// simply gets no database — never the dev one by default.
+type DatabaseSpec struct {
+	// DevSecretName is a Secret in the control namespace whose keys become
+	// environment variables in the preview. Keys rather than one fixed
+	// variable, because "what a connection looks like" is the framework's
+	// business, not ours: DATABASE_URL, PGHOST+PGUSER, JDBC — all just keys.
+	DevSecretName string `json:"devSecretName,omitempty"`
+	// ProdSecretName is the same for the production zone. Unset means
+	// production has no database, which is a state to notice rather than a
+	// reason to fall back to the dev one.
+	ProdSecretName string `json:"prodSecretName,omitempty"`
+}
+
 // PlacementSpec pins a Cell to a class of machine.
 type PlacementSpec struct {
+	// Class names a PlacementClass an administrator has offered. This is the
+	// ONLY placement the API will set on a maintainer's behalf: the raw
+	// fields below stay writable through kubectl, which already means
+	// cluster access, and are ignored when a class is named.
+	// +kubebuilder:validation:MaxLength=63
+	Class string `json:"class,omitempty"`
 	// NodeSelector is matched against node labels. It must match at least
 	// one node at the time it is set: a selector matching nothing schedules
 	// nothing, and the symptom — pods Pending forever, with the reason
 	// buried in an event — is the kind of failure this field exists to
 	// prevent, not cause.
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-	// Tolerations let this Cell onto tainted nodes. Dedicated pools are
-	// usually tainted precisely so that nothing lands on them by accident,
-	// so a placement that names one and stops there would never schedule.
-	// The console fills these in from the chosen pool's taints rather than
-	// asking anybody to write them.
+	// Tolerations let this Cell onto tainted nodes.
+	//
+	// Only ever set by somebody editing this object directly — which means
+	// cluster access — or copied from a PlacementClass an administrator
+	// wrote. The console once derived these from whatever taints the chosen
+	// nodes carried, which turned a cluster administrator's refusal into a
+	// checkbox for anyone who maintained a project. It does not any more.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 

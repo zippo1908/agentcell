@@ -24,7 +24,7 @@ metadata:
   labels: {{- include "agentcell.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["agentcell.io"]
-    resources: ["cells", "sessions", "teams", "boards"]
+    resources: ["cells", "sessions", "teams", "boards", "placementclasses"]
     verbs: ["*"]
   - apiGroups: ["agentcell.io"]
     resources: ["cells/status", "sessions/status", "teams/status"]

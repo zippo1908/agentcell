@@ -78,7 +78,10 @@ export function DispatchForm({ cell, description }: { cell: string; description:
         credentialSecret: cred,
         followPreview: follow,
         resident,
-        ttlSeconds: ttlHours ? Math.round(Number(ttlHours) * 3600) : undefined,
+        // A resident session's field is IDLE minutes, not a TTL: the two
+        // clocks mean different things and land in different fields.
+        idleSeconds: resident && ttlHours ? Math.round(Number(ttlHours) * 60) : undefined,
+        ttlSeconds: !resident && ttlHours ? Math.round(Number(ttlHours) * 3600) : undefined,
       }),
     onSuccess: () => {
       localStorage.setItem('ac.runner', runner)
@@ -174,14 +177,26 @@ export function DispatchForm({ cell, description }: { cell: string; description:
           <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
           预览跟随这单
         </label>
-        <label className="chk" title={resident ? '空闲多久后自动清算;默认 2 小时' : '跑多久后强制清算;默认 1 小时'}>
+        {/* Two different clocks, and calling both "TTL" is how a person asks
+            for one and gets the other. Idle → dormant is minutes and gives
+            back compute; dormant → settled is days and PUBLISHES. Somebody
+            typing "2" meaning "sleep after two hours" must not be signing up
+            for "publish two hours after falling asleep". */}
+        <label
+          className="chk"
+          title={
+            resident
+              ? '闲置多久后休眠(交回槽位和运行时,worktree 和对话都留着);默认 15 分钟'
+              : '跑多久后强制清算;默认 1 小时'
+          }
+        >
           <input
             style={{ width: 56 }}
             value={ttlHours}
-            placeholder="2"
+            placeholder={resident ? '15' : '1'}
             onChange={(e) => setTtlHours(e.target.value.replace(/[^\d.]/g, ''))}
           />
-          {resident ? '小时空闲后回收' : '小时后强制清算'}
+          {resident ? '分钟闲置后休眠' : '小时后强制清算'}
         </label>
         <label className="chk" title="agent 结束后保留槽位,可以接着说">
           <input

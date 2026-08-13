@@ -96,6 +96,9 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return r.fail(ctx, &cell, fmt.Errorf("copy git secret: %w", err))
 		}
 	}
+	if err := r.copyDatabaseSecrets(ctx, &cell, ns); err != nil {
+		return r.fail(ctx, &cell, fmt.Errorf("database secrets: %w", err))
+	}
 	if err := r.ensurePVC(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
@@ -457,7 +460,30 @@ func previewTargetDir(_ *acv1.Cell) string {
 	return ids.RepoPath
 }
 
+// resolvePlacement turns a Cell's placement into a selector and tolerations.
+//
+// A named class wins and is the only thing the API can set: its selector and
+// its tolerations were written by an administrator offering that pool. The
+// raw fields remain for somebody editing the Cell directly, which already
+// requires cluster access.
+//
+// A class that has been deleted resolves to NOTHING rather than to the raw
+// fields: falling back would silently move a Cell onto whatever the last
+// hand-edit said, and "the pool was withdrawn" must not become "the pool is
+// now wherever the scheduler likes, with the old tolerations".
+func (r *CellReconciler) resolvePlacement(ctx context.Context, cell *acv1.Cell) (map[string]string, []corev1.Toleration) {
+	if cell.Spec.Placement.Class == "" {
+		return cell.Spec.Placement.NodeSelector, cell.Spec.Placement.Tolerations
+	}
+	var pc acv1.PlacementClass
+	if err := r.Get(ctx, types.NamespacedName{Name: cell.Spec.Placement.Class}, &pc); err != nil {
+		return nil, nil
+	}
+	return pc.Spec.NodeSelector, pc.Spec.Tolerations
+}
+
 func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns string) error {
+	sel, tol := r.resolvePlacement(ctx, cell)
 	previewCmd, err := json.Marshal(cell.Spec.Preview.Command)
 	if err != nil {
 		return err
@@ -508,8 +534,8 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 				// the Cell already follows it by pod affinity, so stating it
 				// once is both sufficient and the only way it cannot
 				// disagree with itself.
-				NodeSelector: cell.Spec.Placement.NodeSelector,
-				Tolerations:  cell.Spec.Placement.Tolerations,
+				NodeSelector: sel,
+				Tolerations:  tol,
 				Containers: []corev1.Container{{
 					Name:            "anchor",
 					Image:           cell.Spec.Image,
@@ -522,6 +548,7 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 						Name: "preview", ContainerPort: previewPort(cell),
 					}},
 					ReadinessProbe: previewReadiness(cell),
+					EnvFrom:        databaseEnvFrom(cell.Spec.Database.DevSecretName, devDBSecret),
 					VolumeMounts:   mounts,
 				}},
 				Volumes: volumes,
@@ -696,6 +723,7 @@ func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, 
 					SecurityContext: containerSecurity(),
 					Resources:       prodResources(cell),
 					Env:             serveEnv,
+					EnvFrom:         databaseEnvFrom(cell.Spec.Database.ProdSecretName, prodDBSecret),
 					Ports:           []corev1.ContainerPort{{Name: "prod", ContainerPort: prodPort(cell)}},
 					ReadinessProbe:  tcpReadiness(prodPort(cell)),
 					// emptyDir only + no git env: cannot share dev state or creds.
@@ -824,4 +852,46 @@ func (r *CellReconciler) handOff(ctx context.Context, cell *acv1.Cell) error {
 	cell.Status.HandedOffRelease = cell.Spec.Production.ReleaseID
 	cell.Status.HandoffMessage = ""
 	return nil
+}
+
+// Database secrets, copied per zone.
+//
+// Two names, never one shared: a preview runs code an agent has just written
+// against data it may have just decided to migrate, and pointing it at the
+// database production uses is the ordinary way a company loses a table.
+// Production unset therefore means production has NO database — falling back
+// to the dev one would be the exact mistake this shape exists to prevent.
+const (
+	devDBSecret  = "database-dev"
+	prodDBSecret = "database-prod"
+)
+
+func (r *CellReconciler) copyDatabaseSecrets(ctx context.Context, cell *acv1.Cell, ns string) error {
+	for _, m := range []struct{ from, to string }{
+		{cell.Spec.Database.DevSecretName, devDBSecret},
+		{cell.Spec.Database.ProdSecretName, prodDBSecret},
+	} {
+		if m.from == "" {
+			continue
+		}
+		if err := r.copySecret(ctx, cell.Namespace, m.from, ns, m.to); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// databaseEnvFrom turns a secret into environment for a zone. Whole-secret
+// rather than one fixed variable, because what a connection looks like is the
+// framework's business — DATABASE_URL, PGHOST+PGUSER, a JDBC string — and all
+// of those are just keys.
+func databaseEnvFrom(declared, name string) []corev1.EnvFromSource {
+	if declared == "" {
+		return nil
+	}
+	return []corev1.EnvFromSource{{
+		SecretRef: &corev1.SecretEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: name},
+		},
+	}}
 }

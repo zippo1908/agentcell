@@ -119,7 +119,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/cells", h.createCell)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
-	mux.HandleFunc("GET /api/nodepools", h.listNodePools)
+	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
 	mux.HandleFunc("GET /api/teams", h.listTeams)
 	mux.HandleFunc("GET /api/teams/{team}/board", h.listBoard)
 	mux.HandleFunc("POST /api/teams/{team}/board", h.postToBoard)
@@ -489,6 +489,11 @@ type dispatchRequest struct {
 	// TTLSeconds overrides the default. For a resident session this is IDLE
 	// time, not total age.
 	TTLSeconds int64 `json:"ttlSeconds"`
+	// IdleSeconds is the OTHER clock: how long a resident session sits
+	// unused before it sleeps. Separate field because the two mean different
+	// things — one gives back compute, the other publishes — and a single
+	// "TTL" is how somebody asks for one and gets the other.
+	IdleSeconds int64 `json:"idleSeconds"`
 }
 
 func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {

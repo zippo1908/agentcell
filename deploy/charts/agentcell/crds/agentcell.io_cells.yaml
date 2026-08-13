@@ -54,6 +54,28 @@ spec:
                 - open
                 - restricted
                 type: string
+              database:
+                description: |-
+                  Database is where this project's data lives. AgentCell does not run
+                  it: a database is not a thing to lock to an application server, and a
+                  platform that provisions one quietly becomes responsible for its
+                  backups, its upgrades and its outages. What the platform does is
+                  deliver the connection to the workloads that need it.
+                properties:
+                  devSecretName:
+                    description: |-
+                      DevSecretName is a Secret in the control namespace whose keys become
+                      environment variables in the preview. Keys rather than one fixed
+                      variable, because "what a connection looks like" is the framework's
+                      business, not ours: DATABASE_URL, PGHOST+PGUSER, JDBC — all just keys.
+                    type: string
+                  prodSecretName:
+                    description: |-
+                      ProdSecretName is the same for the production zone. Unset means
+                      production has no database, which is a state to notice rather than a
+                      reason to fall back to the dev one.
+                    type: string
+                type: object
               description:
                 description: |-
                   Description is the living product description the user calibrates
@@ -111,6 +133,14 @@ spec:
                   box. Without a way to say so, a project either takes whatever the
                   scheduler picks or the whole cluster has to be identical.
                 properties:
+                  class:
+                    description: |-
+                      Class names a PlacementClass an administrator has offered. This is the
+                      ONLY placement the API will set on a maintainer's behalf: the raw
+                      fields below stay writable through kubectl, which already means
+                      cluster access, and are ignored when a class is named.
+                    maxLength: 63
+                    type: string
                   nodeSelector:
                     additionalProperties:
                       type: string
@@ -123,11 +153,13 @@ spec:
                     type: object
                   tolerations:
                     description: |-
-                      Tolerations let this Cell onto tainted nodes. Dedicated pools are
-                      usually tainted precisely so that nothing lands on them by accident,
-                      so a placement that names one and stops there would never schedule.
-                      The console fills these in from the chosen pool's taints rather than
-                      asking anybody to write them.
+                      Tolerations let this Cell onto tainted nodes.
+
+                      Only ever set by somebody editing this object directly — which means
+                      cluster access — or copied from a PlacementClass an administrator
+                      wrote. The console once derived these from whatever taints the chosen
+                      nodes carried, which turned a cluster administrator's refusal into a
+                      checkbox for anyone who maintained a project. It does not any more.
                     items:
                       description: |-
                         The pod this Toleration is attached to tolerates any taint that matches

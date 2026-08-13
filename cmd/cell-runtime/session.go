@@ -296,10 +296,21 @@ func runTell(args []string) error {
 // environment. That is deliberate: an operator attaching should not have to
 // know, or be told, another user's private paths.
 func runAttach(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("attach: need <session-id>")
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("attach: need <session-id> [viewer-id]")
 	}
 	id := args[0]
+	// One grouped session PER VIEWER, not per session.
+	//
+	// Sharing v-<session> between browsers made any single tab closing kill
+	// the view for everybody else watching — and, because a tmux client is
+	// counted at the SERVER, it also made "somebody is watching session A"
+	// read as "somebody is watching every session this user has", so a
+	// sibling session could never go idle.
+	viewer := ""
+	if len(args) == 2 {
+		viewer = args[1]
+	}
 	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
 		return fmt.Errorf("attach: tmux is not in this image")
@@ -322,7 +333,7 @@ func runAttach(args []string) error {
 	// The grouped sessions are one per session id, hold no windows of their
 	// own, and go away with the runtime pod — cheap enough that reaping them
 	// is not worth a race.
-	view := "v-" + id
+	view := viewName(id, viewer)
 	if out, err := tmux(sock, "new-session", "-d", "-s", view, "-t", ids.TmuxHolder); err != nil &&
 		!strings.Contains(out, "duplicate session") {
 		return fmt.Errorf("attach: %v: %s", err, out)
@@ -345,14 +356,30 @@ func runAttach(args []string) error {
 // Killing the grouped session is safe: it owns no windows of its own, only a
 // view onto the holder's.
 func runDetach(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("detach: need <session-id>")
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("detach: need <session-id> [viewer-id]")
+	}
+	viewer := ""
+	if len(args) == 2 {
+		viewer = args[1]
 	}
 	sock := ids.TmuxSocket(int64(os.Getuid()))
-	out, err := tmux(sock, "kill-session", "-t", "v-"+args[0])
+	// Kills only THIS viewer's grouped session, so closing one tab does not
+	// throw everybody else out.
+	out, err := tmux(sock, "kill-session", "-t", viewName(args[0], viewer))
 	if err != nil && !strings.Contains(out, "can't find session") {
 		return fmt.Errorf("detach: %v: %s", err, out)
 	}
 	fmt.Println("detached")
 	return nil
+}
+
+// viewName is one viewer's window onto one session. Prefixed by session so
+// "is anybody watching THIS session" is answerable by prefix, and suffixed
+// per viewer so tabs do not share a fate.
+func viewName(id, viewer string) string {
+	if viewer == "" {
+		return "v-" + id
+	}
+	return "v-" + id + "-" + viewer
 }

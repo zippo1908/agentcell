@@ -478,6 +478,10 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	if sess.IsResident() {
 		host = sess.Status.PodName
 	}
+	// Hoisted: whether the agent is mid-run is observed in one place and
+	// needed in two — the idle clock, and the refusal to sleep a session
+	// whose agent is still going.
+	var working, alive bool
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: host}, &pod)
 	switch {
@@ -513,7 +517,10 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		if inst := runtimeInstance(&pod); inst != "" && sess.Status.RuntimeInstance != "" && inst != sess.Status.RuntimeInstance {
 			return r.recoverResident(ctx, sess, cell, ns, id)
 		}
-		alive, working, attached, err := r.windowState(ctx, sess, ns, id)
+		var attached bool
+		var wErr error
+		alive, working, attached, wErr = r.windowState(ctx, sess, ns, id)
+		err = wErr
 		if err == nil && !alive {
 			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
 		}
@@ -567,6 +574,18 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	// and keeps the cheap one (a worktree and a conversation on disk).
 	if sess.IsResident() {
 		if sess.Spec.DesiredState == acv1.SessionDesiredDormant {
+			// Not while the agent is mid-run. Sleeping releases the slot and
+			// makes the runtime reapable, but the agent keeps running inside
+			// the shared runtime — so the Cell would report capacity it does
+			// not have, and the work would be killed later by a reap it
+			// never expected. The request is honoured the moment it finishes.
+			if working {
+				sess.Status.Message = "收到,agent 跑完这一段就休眠"
+				if err := r.Status().Update(ctx, sess); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{RequeueAfter: pollInterval}, nil
+			}
 			return r.goDormant(ctx, sess, id, "asked to stop")
 		}
 		idle := sess.Spec.IdleSeconds
