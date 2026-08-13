@@ -76,7 +76,12 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	// Record what "who can touch this" resolves to, so an open Cell says so
 	// rather than being inferred from a missing field.
-	cell.Status.Access = cell.EffectiveAccess()
+	cell.Status.Access = acv1.AccessOpen
+	if cell.Spec.Access != "" {
+		cell.Status.Access = cell.Spec.Access
+	} else if len(cell.Spec.Members) > 0 {
+		cell.Status.Access = acv1.AccessRestricted
+	}
 	if err := r.ensureQuota(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("resource quota: %w", err))
 	}
@@ -127,6 +132,10 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	cell.Status.ObservedGeneration = cell.Generation
 	cell.Status.ActiveSessions = active
+	cellActiveSessions.WithLabelValues(cell.Name).Set(float64(active))
+	if err := r.recordCellsTotal(ctx, cell.Namespace); err != nil {
+		log.Error(err, "recording agentcell_cells_total")
+	}
 	// Stale-lease reconciliation: a lease whose session is gone or terminal
 	// is a leaked slot (e.g. controller crash between terminal-status write
 	// and release). Drop it here so the gate self-heals.
@@ -244,6 +253,12 @@ func (r *CellReconciler) finalize(ctx context.Context, cell *acv1.Cell) (ctrl.Re
 		if err := r.Update(ctx, cell); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+	// The cell is gone: drop its per-cell gauge rather than leaving a stale
+	// series behind, and recompute the fleet total.
+	cellActiveSessions.DeleteLabelValues(cell.Name)
+	if err := r.recordCellsTotal(ctx, cell.Namespace); err != nil {
+		logf.FromContext(ctx).Error(err, "recording agentcell_cells_total")
 	}
 	return ctrl.Result{}, nil
 }
@@ -742,6 +757,18 @@ func (r *CellReconciler) observeSessions(ctx context.Context, cell *acv1.Cell) (
 		}
 	}
 	return n, live, nil
+}
+
+// recordCellsTotal sets agentcell_cells_total from a fresh List rather than
+// incrementing/decrementing on create/delete, so the gauge self-heals on the
+// next reconcile of any Cell instead of drifting if an update is ever missed.
+func (r *CellReconciler) recordCellsTotal(ctx context.Context, ns string) error {
+	var list acv1.CellList
+	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return err
+	}
+	cellsTotal.Set(float64(len(list.Items)))
+	return nil
 }
 
 // SetupWithManager wires the controller: Cell events plus Session events
