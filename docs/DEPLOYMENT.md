@@ -314,6 +314,21 @@ namespaces.
 For the full "what's implemented vs designed" matrix, see the
 [README](../README.md).
 
+## Upgrading
+
+**Apply the CRDs before the chart.** Helm installs CRDs on first install but
+does not upgrade them, so a chart upgrade alone leaves the old schema in
+place — and a field the new version writes is then accepted by the client and
+dropped by the apiserver, which looks like the feature silently not working:
+
+```sh
+kubectl apply -f https://raw.githubusercontent.com/zippo1908/agentcell/main/config/crd/agentcell.io_cells.yaml
+kubectl apply -f https://raw.githubusercontent.com/zippo1908/agentcell/main/config/crd/agentcell.io_sessions.yaml
+helm upgrade agentcell oci://ghcr.io/zippo1908/charts/agentcell --version <new>
+```
+
+Or, from a checkout: `kubectl apply -f config/crd/` then upgrade.
+
 ## Choosing a runner and a provider (and what that implies)
 
 A dispatch binds a **runner** (the agent CLI) to a **provider** (whose models

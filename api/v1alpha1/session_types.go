@@ -13,6 +13,13 @@ type SessionSpec struct {
 	// is set once and never changes — the CRD enforces that, so it holds for
 	// kubectl edits too, not just for writes through the API.
 	//
+	// The rule lives here as a marker rather than in hand-edited YAML: it is
+	// the property ADR-0008 rests on, and a hand-maintained CRD is exactly
+	// where it would be lost the next time the file was regenerated.
+	//
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="ownerUserID is immutable once set"
+	//
 	// A Session is a user-private execution and memory boundary: transcript,
 	// checkpoint and worktree belong to this user alone. Sessions created
 	// before ownership existed have an empty value and are visible only to

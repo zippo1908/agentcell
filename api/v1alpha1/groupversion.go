@@ -1,6 +1,7 @@
 // Package v1alpha1 defines the two AgentCell CRDs: Cell (a project's
 // resident instance) and Session (one disposable work session inside it).
 // +groupName=agentcell.io
+// +kubebuilder:object:generate=true
 package v1alpha1
 
 import (

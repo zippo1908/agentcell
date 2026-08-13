@@ -56,6 +56,8 @@ const (
 )
 
 type ProductionSpec struct {
+	// +kubebuilder:validation:Enum=incell;external
+	//
 	// Target selects in-Cell production or a handoff. Empty means incell,
 	// which is what every existing Cell already does.
 	Target ProductionTarget `json:"target,omitempty"`
@@ -99,6 +101,8 @@ type CellSpec struct {
 	// Description is the living product description the user calibrates
 	// while watching the preview; dispatches default to carrying it.
 	Description string `json:"description,omitempty"`
+	// +kubebuilder:validation:Enum=open;restricted
+	//
 	// Access decides whether Members are enforced.
 	//
 	// Empty is treated as "open" so an upgrade does not lock anyone out of
@@ -232,6 +236,8 @@ const (
 // Member is one user's role. UserID is the hashed principal id, the same
 // value a Session records as its owner.
 type Member struct {
+	// +kubebuilder:validation:MaxLength=63
 	UserID string `json:"userID"`
-	Role   Role   `json:"role"`
+	// +kubebuilder:validation:Enum=viewer;member;maintainer
+	Role Role `json:"role"`
 }
