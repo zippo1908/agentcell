@@ -224,7 +224,7 @@ func (r *SessionReconciler) reapUserRuntime(ctx context.Context, ns string, uid 
 	}
 	for i := range list.Items {
 		s := &list.Items[i]
-		if s.Spec.Cell != cell || !s.Spec.Resident || s.DeletionTimestamp != nil {
+		if s.Spec.Cell != cell || !s.IsResident() || s.DeletionTimestamp != nil {
 			continue
 		}
 		// In use is everything that is not finished — including a session that
@@ -296,9 +296,9 @@ func (r *SessionReconciler) recoverResident(ctx context.Context, sess *acv1.Sess
 // Errors are NOT treated as death: an exec can fail because the API server
 // is busy or the pod is mid-restart, and settling a session on a transient
 // failure would destroy exactly what resident sessions exist to keep.
-func (r *SessionReconciler) windowState(ctx context.Context, sess *acv1.Session, ns, id string) (alive, working bool, err error) {
+func (r *SessionReconciler) windowState(ctx context.Context, sess *acv1.Session, ns, id string) (alive, working, attached bool, err error) {
 	if r.Exec == nil || sess.Status.PodName == "" {
-		return true, false, nil
+		return true, false, false, nil
 	}
 	out, execErr := r.Exec(ctx, ns, sess.Status.PodName,
 		[]string{runtimeapi.RuntimeBin, "window-status", id}, nil)
@@ -306,14 +306,15 @@ func (r *SessionReconciler) windowState(ctx context.Context, sess *acv1.Session,
 		if strings.Contains(out, "alive=false") {
 			// The applet ran and reported honestly; the non-zero exit is its
 			// answer, not a failure to ask.
-			return false, false, nil
+			return false, false, false, nil
 		}
-		return true, false, execErr
+		return true, false, false, execErr
 	}
 	alive = strings.Contains(out, "alive=true")
 	// exit=- means the agent has not finished, i.e. it is still working.
 	working = alive && strings.Contains(out, "exit=-")
-	return alive, working, nil
+	attached = strings.Contains(out, "attached=true")
+	return alive, working, attached, nil
 }
 
 // runtimeResources sizes a user's runtime for the sessions it can hold.

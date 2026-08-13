@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Terminal } from './Terminal'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { Session } from '../api/types'
@@ -17,6 +18,7 @@ function ResidentControls({ session }: { session: Session }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [text, setText] = useState('')
+  const [showTerm, setShowTerm] = useState(false)
   const { data: state } = useQuery({
     queryKey: ['session-state', session.name],
     queryFn: () => api.sessionState(session.name),
@@ -49,6 +51,19 @@ function ResidentControls({ session }: { session: Session }) {
       </div>
       {state.live && (
         <>
+          <div className="row tight" style={{ marginTop: 8 }}>
+            {/* The terminal is opt-in per session: attaching is cheap, but a
+                dozen live websockets on one page is not, and most of the time
+                the badge above is the whole answer. */}
+            <button className="ghost small" onClick={() => setShowTerm((v) => !v)}>
+              {showTerm ? '收起终端' : '看终端'}
+            </button>
+          </div>
+          {showTerm && (
+            <div style={{ marginTop: 8 }}>
+              <Terminal session={session.name} />
+            </div>
+          )}
           <div className="row" style={{ marginTop: 8 }}>
             <input
               value={text}

@@ -189,7 +189,7 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	if sess.Spec.Resident {
+	if sess.IsResident() {
 		// A resident session is a window in its owner's runtime, not a pod of
 		// its own: the CLIs manage conversations, so one tmux server per user
 		// is what the platform actually needs to provide.
@@ -250,7 +250,7 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 	// recorded the runtime that hosts its window, and overwriting that sent
 	// every later lookup — status, follow-ups, attach — to a pod that does
 	// not exist.
-	if !sess.Spec.Resident {
+	if !sess.IsResident() {
 		sess.Status.PodName = ids.SessionName(id)
 	}
 	sess.Status.StartTime = &now
@@ -351,7 +351,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
 		{Name: runtimeapi.EnvDescription, Value: cell.Spec.Description},
 	}
-	if sess.Spec.Resident {
+	if sess.IsResident() {
 		env = append(env, corev1.EnvVar{Name: runtimeapi.EnvResident, Value: "1"})
 	}
 	for k, v := range r.Registry.SessionEnv(binding, "$("+runtimeapi.EnvAPIKey+")") {
@@ -458,19 +458,19 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	ttl := sess.Spec.TTLSeconds
 	if ttl == 0 {
 		ttl = defaultTTL
-		if sess.Spec.Resident {
+		if sess.IsResident() {
 			ttl = defaultResidentIdle
 		}
 	}
 	host := ids.SessionName(id)
-	if sess.Spec.Resident {
+	if sess.IsResident() {
 		host = sess.Status.PodName
 	}
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: host}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
-		if sess.Spec.Resident {
+		if sess.IsResident() {
 			// A runtime that disappears takes its windows, not the work: the
 			// worktree is on the volume and the CLI's conversation is in the
 			// private $HOME. Rebuild the terminal and hand the session back
@@ -497,17 +497,18 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	// finishing, and the session should be handed back. Only when the
 	// container is the same one the window was opened in does "no window"
 	// mean somebody closed it.
-	if sess.Spec.Resident {
+	if sess.IsResident() {
 		if inst := runtimeInstance(&pod); inst != "" && sess.Status.RuntimeInstance != "" && inst != sess.Status.RuntimeInstance {
 			return r.recoverResident(ctx, sess, cell, ns, id)
 		}
-		alive, working, err := r.windowState(ctx, sess, ns, id)
+		alive, working, attached, err := r.windowState(ctx, sess, ns, id)
 		if err == nil && !alive {
 			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
 		}
-		// An agent that is still running IS activity: the idle clock must not
-		// tick through a long build.
-		if working {
+		// An agent that is still running IS activity, and so is a person
+		// watching: the idle clock must not tick through a long build, nor
+		// through somebody reading the screen it produced.
+		if working || attached {
 			now := metav1.Now()
 			sess.Status.LastActivity = &now
 			if err := r.Status().Update(ctx, sess); err != nil {
@@ -521,11 +522,11 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 	// or the agent observed working — so an active session is never the one
 	// reclaimed.
 	since := sess.Status.StartTime
-	if sess.Spec.Resident && sess.Status.LastActivity != nil {
+	if sess.IsResident() && sess.Status.LastActivity != nil {
 		since = sess.Status.LastActivity
 	}
 	if since != nil && time.Since(since.Time) > time.Duration(ttl)*time.Second {
-		if !sess.Spec.Resident {
+		if !sess.IsResident() {
 			if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
 			}
@@ -540,7 +541,7 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 }
 
 func (r *SessionReconciler) startSettle(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id, why string) (ctrl.Result, error) {
-	if sess.Spec.Resident {
+	if sess.IsResident() {
 		// Close the window before settle takes the worktree, so nothing is
 		// still typing into it while it is committed and reclaimed.
 		if uid, err := r.ownerUID(ctx, sess); err == nil {
@@ -683,7 +684,7 @@ func (r *SessionReconciler) observeSettle(ctx context.Context, sess *acv1.Sessio
 		return ctrl.Result{}, err
 	}
 	r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
-	if sess.Spec.Resident {
+	if sess.IsResident() {
 		// Reclaim the runtime once this user has nothing open in the Cell.
 		// A tmux takes a slot; when you are done it goes away.
 		if uid, err := r.ownerUID(ctx, sess); err == nil {

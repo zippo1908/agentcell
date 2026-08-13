@@ -53,7 +53,7 @@ func (h *Handler) sessionState(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
-	if !sess.Spec.Resident {
+	if !sess.IsResident() {
 		writeJSON(w, 200, residentState{})
 		return
 	}
@@ -114,7 +114,7 @@ func (h *Handler) continueSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("text is empty"))
 		return
 	}
-	if !sess.Spec.Resident {
+	if !sess.IsResident() {
 		writeErr(w, 409, fmt.Errorf("session is not resident; dispatch with resident:true to keep a slot open"))
 		return
 	}

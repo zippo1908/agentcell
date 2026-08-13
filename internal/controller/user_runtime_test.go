@@ -48,7 +48,7 @@ func (rec *recorder) exec(_ context.Context, _, pod string, argv []string, stdin
 
 func residentSession(name, owner, task string) *acv1.Session {
 	s := newSession(name, task)
-	s.Spec.Resident = true
+	s.Spec.Resident = &[]bool{true}[0]
 	s.Spec.OwnerUserID = owner
 	return s
 }

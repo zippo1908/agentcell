@@ -351,7 +351,7 @@ func TestDispatchDoesNotDropFields(t *testing.T) {
 		{"runner", got.Runner == "claude"},
 		{"provider", got.Provider == "anthropic"},
 		{"model", got.Model == "m"},
-		{"resident", got.Resident},
+		{"resident", got.Resident != nil && *got.Resident},
 		{"followPreview", got.FollowPreview},
 		{"ttlSeconds", got.TTLSeconds == 7200},
 		{"ownerUserID", got.OwnerUserID == alice.ID()},

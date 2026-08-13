@@ -82,16 +82,24 @@ spec:
                 description: Provider is a name from the provider registry (e.g. aliyun-bailian).
                 type: string
               resident:
+                default: true
                 description: |-
                   Resident keeps the slot alive after the agent finishes: the work runs
                   inside a tmux server on the owner's private socket, so they can attach,
                   look at what happened and keep going in the same context instead of
                   dispatching a fresh session that has to rediscover everything.
 
-                  Off by default, because the one-shot shape is what the dispatch → settle
-                  → review loop is built on. A resident session still settles — on TTL, on
-                  an explicit request, or if its pod disappears — so nothing escapes the
-                  publication gate; what changes is who decides when.
+                  ON by default. A one-shot agent prints nothing until it is finished,
+                  so from outside there is no difference between working and hung — and
+                  that turned out to be the thing people actually could not live with.
+                  Resident work runs in a terminal somebody can open, read, and type
+                  into. A resident session still settles — on idle, on request, or if its
+                  pod disappears — so nothing escapes the publication gate; what changes
+                  is that the run is visible while it happens.
+
+                  A pointer so that "unset" is distinguishable from "explicitly off":
+                  with a plain bool, every client that forgot the field would silently
+                  mean false, which is exactly the wrong default to have inherited.
                 type: boolean
               runner:
                 description: 'Runner is the agent CLI: claude | codex | pi.'

@@ -279,9 +279,16 @@ func credSecret(name string) *corev1.Secret {
 func newSession(name, task string) *acv1.Session {
 	sess := &acv1.Session{}
 	sess.Name, sess.Namespace = name, controlNS
+	// Explicitly one-shot. The platform default is resident (a session
+	// somebody can watch), and these tests are about the headless pod shape:
+	// leaving it unset would silently move them onto the tmux path and they
+	// would fail looking for a pod that was never meant to exist.
+	// newResidentSession covers the other shape.
+	off := false
 	sess.Spec = acv1.SessionSpec{
 		Cell: "shop", Task: task, Runner: "claude", Provider: "aliyun-bailian",
 		Model: "qwen3-coder-plus", CredentialSecret: "bailian-key",
+		Resident: &off,
 	}
 	return sess
 }

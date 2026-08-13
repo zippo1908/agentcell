@@ -33,7 +33,7 @@ export function DispatchForm({ cell, description }: { cell: string; description:
   const [customModel, setCustomModel] = useState(false)
   const [cred, setCred] = useState(localStorage.getItem('ac.cred') ?? '')
   const [follow, setFollow] = useState(true)
-  const [resident, setResident] = useState(false)
+  const [resident, setResident] = useState(true)
   // Hours, because the unit people think in for "leave this open" is not
   // seconds. Empty means the default: 2h idle for a resident slot, 1h age
   // for a one-shot.

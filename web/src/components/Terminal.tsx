@@ -1,0 +1,103 @@
+import { useEffect, useRef, useState } from 'react'
+import { Terminal as Xterm } from 'xterm'
+import { FitAddon } from 'xterm-addon-fit'
+import 'xterm/css/xterm.css'
+
+/**
+ * The agent's actual terminal, in the browser.
+ *
+ * Not a log tail and not a progress bar: this is attached to the same tmux
+ * window the CLI is running in, so what you see is what it is doing — the
+ * file it is reading, the command it just ran, the question it is waiting
+ * on. A headless agent prints nothing until it finishes, and eight minutes
+ * of blank output is indistinguishable from a hang.
+ *
+ * It is read-WRITE. Typing goes to the agent's own prompt, so a person can
+ * interrupt, redirect, or answer it mid-run, which is the whole reason the
+ * sessions live in tmux rather than in a pipe.
+ */
+export function Terminal({ session }: { session: string }) {
+  const host = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState<'connecting' | 'open' | 'closed'>('connecting')
+
+  useEffect(() => {
+    if (!host.current) return
+    const term = new Xterm({
+      fontSize: 12,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      cursorBlink: true,
+      // Enough to scroll back through a long build without holding a
+      // session's entire life in memory.
+      scrollback: 5000,
+      theme: {
+        background: '#0f1113',
+        foreground: '#d8dce0',
+        cursor: '#d8dce0',
+        selectionBackground: '#2a3038',
+      },
+    })
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(host.current)
+    fit.fit()
+
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${proto}//${location.host}/api/sessions/${session}/terminal`)
+    ws.binaryType = 'arraybuffer'
+
+    const send = (m: object) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m))
+    const sendSize = () => {
+      fit.fit()
+      send({ c: term.cols, r: term.rows })
+    }
+
+    ws.onopen = () => {
+      setState('open')
+      sendSize()
+    }
+    ws.onmessage = (e) => {
+      term.write(
+        typeof e.data === 'string' ? e.data : new Uint8Array(e.data as ArrayBuffer),
+      )
+    }
+    ws.onclose = () => {
+      setState('closed')
+      // Say so in the terminal itself. A window that simply stops updating
+      // reads exactly like an agent that is thinking hard.
+      term.write('\r\n\x1b[90m—— 连接已断开 ——\x1b[0m\r\n')
+    }
+    ws.onerror = () => setState('closed')
+
+    term.onData((d) => send({ d }))
+
+    const ro = new ResizeObserver(() => sendSize())
+    ro.observe(host.current)
+
+    return () => {
+      ro.disconnect()
+      ws.close()
+      term.dispose()
+    }
+  }, [session])
+
+  return (
+    <div>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+        <span className="hint" style={{ margin: 0 }}>
+          这是 agent 真正的终端——可以直接打字插话、按 Ctrl-C 打断。
+        </span>
+        <span className={`dot ${state === 'open' ? 'green' : state === 'closed' ? 'red' : 'amber'}`} />
+      </div>
+      <div
+        ref={host}
+        style={{
+          height: 420,
+          padding: 8,
+          background: '#0f1113',
+          border: '1px solid var(--line)',
+          borderRadius: 4,
+        }}
+      />
+    </div>
+  )
+}

@@ -300,11 +300,59 @@ func runAttach(args []string) error {
 		return fmt.Errorf("attach: need <session-id>")
 	}
 	id := args[0]
-	tmux, err := exec.LookPath("tmux")
+	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
 		return fmt.Errorf("attach: tmux is not in this image")
 	}
 	sock := ids.TmuxSocket(int64(os.Getuid()))
+	window := ids.TmuxWindow(id)
+
+	// A session's terminal is a WINDOW inside this user's one tmux server,
+	// and `attach -t` addresses sessions, not windows. Attaching to the
+	// holder directly would also mean every viewer shares one cursor: two
+	// people looking at two different sessions would fight over which window
+	// is current.
+	//
+	// So each session gets a grouped session — same windows, independent
+	// current-window — which is exactly the tmux idiom for this. It is
+	// created on demand and reused by later viewers of the same session.
+	//
+	// Deliberately NOT destroy-unattached: setting it here destroys the
+	// session immediately, because at this instant nobody is attached yet.
+	// The grouped sessions are one per session id, hold no windows of their
+	// own, and go away with the runtime pod — cheap enough that reaping them
+	// is not worth a race.
+	view := "v-" + id
+	if out, err := tmux(sock, "new-session", "-d", "-s", view, "-t", ids.TmuxHolder); err != nil &&
+		!strings.Contains(out, "duplicate session") {
+		return fmt.Errorf("attach: %v: %s", err, out)
+	}
+	if out, err := tmux(sock, "select-window", "-t", view+":"+window); err != nil {
+		return fmt.Errorf("attach: this session has no window open (%s)", strings.TrimSpace(out))
+	}
 	// Replace this process so the terminal is tmux's, not ours.
-	return syscall.Exec(tmux, []string{"tmux", "-S", sock, "attach", "-t", ids.TmuxWindow(id)}, os.Environ())
+	return syscall.Exec(tmuxBin, []string{"tmux", "-S", sock, "attach", "-t", view}, os.Environ())
+}
+
+// runDetach tears down a viewer's grouped session.
+//
+// It exists because a tmux client does NOT die when the exec stream that
+// carried it goes away: closing the browser tab left `tmux attach` running
+// in the pod forever. That is not merely untidy — "is anybody watching" is
+// the signal reclamation hangs off, so a leaked client pins the session
+// awake permanently and nothing is ever reclaimed.
+//
+// Killing the grouped session is safe: it owns no windows of its own, only a
+// view onto the holder's.
+func runDetach(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("detach: need <session-id>")
+	}
+	sock := ids.TmuxSocket(int64(os.Getuid()))
+	out, err := tmux(sock, "kill-session", "-t", "v-"+args[0])
+	if err != nil && !strings.Contains(out, "can't find session") {
+		return fmt.Errorf("detach: %v: %s", err, out)
+	}
+	fmt.Println("detached")
+	return nil
 }

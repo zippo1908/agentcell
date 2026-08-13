@@ -120,6 +120,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("GET /api/nodepools", h.listNodePools)
+	mux.HandleFunc("GET /api/sessions/{session}/terminal", h.sessionTerminal)
 	mux.HandleFunc("PUT /api/cells/{cell}/placement", h.putPlacement)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
 	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
@@ -473,7 +474,10 @@ type dispatchRequest struct {
 	FollowPreview    bool   `json:"followPreview"`
 	// Resident keeps the slot alive in tmux after the agent finishes, so the
 	// owner can look at the result and keep going in the same context.
-	Resident bool `json:"resident"`
+	// A pointer so an omitted field means the platform default (resident),
+	// not false. A caller that genuinely wants a headless one-shot has to
+	// say so.
+	Resident *bool `json:"resident"`
 	// TTLSeconds overrides the default. For a resident session this is IDLE
 	// time, not total age.
 	TTLSeconds int64 `json:"ttlSeconds"`

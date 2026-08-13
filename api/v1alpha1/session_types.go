@@ -45,11 +45,19 @@ type SessionSpec struct {
 	// look at what happened and keep going in the same context instead of
 	// dispatching a fresh session that has to rediscover everything.
 	//
-	// Off by default, because the one-shot shape is what the dispatch → settle
-	// → review loop is built on. A resident session still settles — on TTL, on
-	// an explicit request, or if its pod disappears — so nothing escapes the
-	// publication gate; what changes is who decides when.
-	Resident bool `json:"resident,omitempty"`
+	// ON by default. A one-shot agent prints nothing until it is finished,
+	// so from outside there is no difference between working and hung — and
+	// that turned out to be the thing people actually could not live with.
+	// Resident work runs in a terminal somebody can open, read, and type
+	// into. A resident session still settles — on idle, on request, or if its
+	// pod disappears — so nothing escapes the publication gate; what changes
+	// is that the run is visible while it happens.
+	//
+	// A pointer so that "unset" is distinguishable from "explicitly off":
+	// with a plain bool, every client that forgot the field would silently
+	// mean false, which is exactly the wrong default to have inherited.
+	// +kubebuilder:default=true
+	Resident *bool `json:"resident,omitempty"`
 	// FollowPreview points the Cell's resident preview at this session's
 	// worktree while it runs, so the user watches the work live.
 	FollowPreview bool `json:"followPreview,omitempty"`
@@ -148,4 +156,11 @@ type SessionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Session `json:"items"`
+}
+
+// IsResident reports whether this session runs in a terminal somebody can
+// open. Unset means yes — see the field's comment; the pointer exists so a
+// client that omits it gets the default rather than silently getting false.
+func (s *Session) IsResident() bool {
+	return s.Spec.Resident == nil || *s.Spec.Resident
 }

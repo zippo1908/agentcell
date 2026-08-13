@@ -222,12 +222,21 @@ func runWindowStatus(args []string) error {
 	if b, err := os.ReadFile(runtimeapi.DoneMarkerFor(id)); err == nil {
 		exit = strings.TrimSpace(string(b))
 	}
+	// Whether anybody is watching. This is the signal that separates "a
+	// person is using this" from "an agent finished and nobody came back",
+	// and only tmux can answer it — the control plane sees a pod either way.
+	// Reclamation policy hangs off it, so it is reported alongside the rest
+	// rather than inferred from a timer.
+	attached := false
+	if out, err := tmux(sock, "list-clients", "-F", "#{client_tty}"); err == nil {
+		attached = strings.TrimSpace(out) != ""
+	}
 	// One line, parsed by the control plane: alive=<bool> exit=<code|->
 	code := exit
 	if code == "" {
 		code = "-"
 	}
-	fmt.Printf("alive=%t exit=%s\n", alive, code)
+	fmt.Printf("alive=%t exit=%s attached=%t\n", alive, code, attached)
 	if !alive {
 		// Non-zero so a caller can branch on the exit status alone.
 		os.Exit(3)

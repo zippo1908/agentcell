@@ -11,7 +11,7 @@ import (
 
 func residentSession(name string, resident bool, phase acv1.SessionPhase) *acv1.Session {
 	s := sessionOwnedBy(name, alice, phase, false)
-	s.Spec.Resident = resident
+	s.Spec.Resident = &resident
 	return s
 }
 
