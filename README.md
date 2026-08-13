@@ -7,8 +7,8 @@
 # AgentCell
 
 **A workshop for AI coding agents.** One resident, Kubernetes-backed instance
-per project (a *Cell*); work sessions as slots inside it, each in a terminal
-you can open and type into; a live product preview to steer against; and an
+per project (a *Cell*); one live working session per person inside it, each
+in a terminal you can open and type into; a live product preview to steer against; and an
 SDLC loop — dispatch → work → settle → review → release — closed within the
 instance.
 
@@ -27,11 +27,17 @@ instance.
 
 ## Why
 
-- **Resident Cell, disposable Slot.** Ephemeral sandboxes pay a cold-start tax
-  per task; human workspaces don't manage agents. AgentCell keeps the project
-  environment warm while each session gets its own git worktree and resource
-  budget, and is *settled* on the way out — commits pushed to a `session/<id>`
-  branch, empty sessions discarded, nothing left behind.
+- **The project is the atom.** Ephemeral sandboxes pay a cold-start tax per
+  task; human workspaces don't manage agents. AgentCell keeps one project
+  environment warm — its repo, its preview, its production zone — and gives
+  each person working there a single live session inside it: their own git
+  worktree, their own terminal, their own conversation. Not one session per
+  task; the agent CLIs already open and switch conversations, and a second
+  layer of that only ever got in the way.
+- **Idle is asleep, not finished.** A session nobody is using gives back its
+  slot and its runtime and keeps its worktree and conversation, so coming
+  back costs a few seconds rather than starting over — and nothing is
+  published because you went to lunch.
 - **Watch while you steer.** Each Cell keeps the product's dev server running;
   the UI puts the living product description next to the live preview so you
   recalibrate against what the agent is building, in real time.
@@ -61,7 +67,7 @@ those, and which one owns which, is most of learning the system.
 | **DesiredState** | whether a session is *meant* to be awake (`running`/`dormant`) — written by the reconciler when nobody is using it, by the console when somebody opens its terminal | which of the two clocks applies |
 | **Dormant** | the phase of a session that gave back its slot and its runtime and kept its worktree and conversation | costs storage, costs no compute |
 | **Wake** | reclaiming a slot and a runtime and restoring the terminal where it was — never re-running the agent | queues behind the slot gate like any other work |
-| **Slot** | permission for a Session to hold compute | the Cell's concurrency |
+| **Slot** | permission to hold compute in a Cell — one per person working there, not one per task | how many people can work in this project at once |
 | **Credential** | a model key, owned by whoever spends it | one Session at a time |
 | **Review** | a settled Session awaiting judgement | whether it becomes a PR, then a Release |
 
@@ -167,7 +173,13 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Re-attaching a restored window to the CLI's own conversation (the window comes back; the CLI is not told to resume into it) | ⬜ designed |
 | **celld leader election**: one replica reconciles, every replica serves the console, ~4s takeover measured on a killed leader | ✅ tested |
 | Single-use preview tickets enforced across replicas (redemption is an atomic create against the API server, not a map in one process) | ✅ tested |
+| **Board**: `@cell do the thing` on a team stream dispatches and answers in the same place; `@user` mentions; the team's board conversation is its own session, not the asker's | ✅ tested |
+| **One live session per person per Cell**, with follow-ups queued and delivered on wake; the slot cap bounds people, not tasks | ✅ tested |
+| **PlacementClass**: an administrator offers machine pools; nothing a maintainer sends can become a node selector or a toleration | ✅ tested |
+| **Create-a-project by choosing**: devbox, runner and provider as cards narrowed to what can be driven; only name and repo are typed | ✅ |
+| Database *configuration* per zone (dev and prod name separate secrets; the platform injects, never provisions) | ✅ |
 | Per-user NetworkPolicy · agent-sandbox substrate · multi-node RWX | ⬜ designed |
+| Provisioning a database, or deploying a Cell to another cluster or cloud account | ⬜ not built |
 
 ## Install (one command)
 
