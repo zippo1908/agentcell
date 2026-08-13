@@ -76,6 +76,13 @@ func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, fmt.Errorf("this session is not resident, so it has no terminal"))
 		return
 	}
+	if woke, err := h.wakeIfDormant(r, &sess); err != nil {
+		writeErr(w, 500, err)
+		return
+	} else if woke {
+		writeErr(w, 409, fmt.Errorf("这个会话在休眠,正在唤醒——终端马上回来"))
+		return
+	}
 	if sess.Status.PodName == "" {
 		writeErr(w, 409, fmt.Errorf("no runtime yet — the session is still starting"))
 		return

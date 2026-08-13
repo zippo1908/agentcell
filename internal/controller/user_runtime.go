@@ -233,6 +233,10 @@ func (r *SessionReconciler) reapUserRuntime(ctx context.Context, ns string, uid 
 		// session that was still coming up.
 		switch s.Status.Phase {
 		case acv1.SessionSettled, acv1.SessionDiscarded, acv1.SessionError:
+		case acv1.SessionDormant:
+			// Asleep, so it is not holding this runtime — that is the whole
+			// point of dormancy. Its worktree and conversation are on the
+			// volume and waking rebuilds the window.
 		default:
 			return nil // still in use
 		}

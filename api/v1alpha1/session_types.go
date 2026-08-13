@@ -37,9 +37,33 @@ type SessionSpec struct {
 	// CredentialSecret references a Secret in the control namespace whose
 	// "key" entry is the provider API key. Injected into this session only.
 	CredentialSecret string `json:"credentialSecret"`
-	// TTLSeconds force-settles a session still running after this long.
-	// Defaults to 3600.
+	// TTLSeconds force-settles a session after this long. For a one-shot
+	// session it is measured from the start (default 3600); for a resident
+	// one it bounds how long a DORMANT session is kept before its work is
+	// published and its worktree reclaimed (default 604800 — a week), since
+	// a dormant session costs storage but no compute.
 	TTLSeconds int64 `json:"ttlSeconds,omitempty"`
+	// IdleSeconds is how long a resident session may sit with no agent
+	// working and nobody watching before it goes dormant. Defaults to 900.
+	//
+	// Short on purpose: this is not a deadline, it is a yawn. Nothing is
+	// lost — the terminal comes back where it was — so the cost of being
+	// wrong is a few seconds of waking, while the cost of never sleeping is
+	// a project's slots held by work that finished hours ago.
+	IdleSeconds int64 `json:"idleSeconds,omitempty"`
+	// DesiredState is what this session is supposed to be doing: "running"
+	// or "dormant". Both the control plane and a person write it — the
+	// reconciler sets "dormant" when nobody is using the session, and the
+	// console sets "running" the moment somebody opens its terminal or sends
+	// it a follow-up.
+	//
+	// A desired state rather than a timer, because "should this be awake" is
+	// a question with an answer, and burying that answer in elapsed
+	// milliseconds makes it unaskable. `kubectl get session` says which
+	// sessions are meant to be up; the phase says which ones are.
+	// +kubebuilder:validation:Enum=running;dormant
+	// +kubebuilder:default=running
+	DesiredState string `json:"desiredState,omitempty"`
 	// Resident keeps the slot alive after the agent finishes: the work runs
 	// inside a tmux server on the owner's private socket, so they can attach,
 	// look at what happened and keep going in the same context instead of
@@ -67,10 +91,25 @@ type SessionSpec struct {
 type SessionPhase string
 
 const (
+	// Desired states. A session is meant to be awake or asleep; the phase
+	// says which it currently is.
+	SessionDesiredRunning = "running"
+	SessionDesiredDormant = "dormant"
+)
+
+const (
 	// SessionQueued: all slots busy, waiting for one to free up.
 	SessionQueued SessionPhase = "Queued"
 	// SessionRunning: pod exists and the agent is working.
 	SessionRunning SessionPhase = "Running"
+	// SessionDormant: nobody is using this session, so it holds no compute.
+	//
+	// Not an ending. The worktree and the CLI's own conversation live on the
+	// volume, so waking restores the terminal where it was — what was given
+	// up is the runtime process and the slot, which is the expensive part.
+	// Before this existed, an idle session was force-settled: five minutes of
+	// work cost a slot for hours and then had its session ended for it.
+	SessionDormant SessionPhase = "Dormant"
 	// SessionSettling: work finished (or was interrupted); settle job runs.
 	SessionSettling SessionPhase = "Settling"
 	// SessionSettled: produced commits, branch pushed, worktree reclaimed.
@@ -115,6 +154,9 @@ type SessionStatus struct {
 	// runtime was replaced and the session should be handed back, not
 	// settled out from under its owner.
 	RuntimeInstance string `json:"runtimeInstance,omitempty"`
+	// DormantSince is when this session stopped holding compute. The TTL
+	// that eventually publishes its work is measured from here.
+	DormantSince *metav1.Time `json:"dormantSince,omitempty"`
 	// Recoveries counts how often this session's runtime had to be rebuilt
 	// under it. Bounded: a session that cannot stay up is settled rather than
 	// rebuilt forever, so a failing node does not become an infinite loop.

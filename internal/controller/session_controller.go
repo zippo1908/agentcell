@@ -35,6 +35,15 @@ const (
 	// was built to host. Two hours of nothing happening is the default, and
 	// spec.ttlSeconds overrides it.
 	defaultResidentIdle = int64(7200)
+	// defaultIdle is how long a resident session sits unused before it stops
+	// holding compute. Short, because going dormant costs nothing: the
+	// worktree and the CLI's conversation stay on the volume and the
+	// terminal comes back where it was.
+	defaultIdle = int64(900)
+	// defaultDormantTTL bounds how long a session nobody returns to keeps a
+	// worktree. It publishes rather than deletes — a week of not looking at
+	// something is not consent to throw it away.
+	defaultDormantTTL = int64(7 * 24 * 3600)
 	pollInterval        = 10 * time.Second
 )
 
@@ -136,6 +145,8 @@ func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.dispatch(ctx, &sess, &cell, ns, id)
 	case acv1.SessionRunning:
 		return r.observeRunning(ctx, &sess, &cell, ns, id)
+	case acv1.SessionDormant:
+		return r.observeDormant(ctx, &sess, &cell, ns, id)
 	case acv1.SessionSettling:
 		return r.observeSettle(ctx, &sess, &cell, ns, id)
 	}
@@ -517,26 +528,148 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		}
 	}
 
-	// One-shot sessions age out; resident ones idle out. The reference point
-	// is the last thing that happened — a follow-up typed, a window opened,
-	// or the agent observed working — so an active session is never the one
-	// reclaimed.
-	since := sess.Status.StartTime
-	if sess.IsResident() && sess.Status.LastActivity != nil {
-		since = sess.Status.LastActivity
-	}
-	if since != nil && time.Since(since.Time) > time.Duration(ttl)*time.Second {
-		if !sess.IsResident() {
-			if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
+	// A resident session that nobody is using stops holding compute — it
+	// does not get its work published out from under it.
+	//
+	// Force-settling on idle was the wrong shape: five minutes of work cost
+	// a slot for hours and then ENDED, so "keep it around in case I come
+	// back" and "give the slot back" were the same decision. They are not.
+	// Going dormant gives back the expensive thing (the runtime, the slot)
+	// and keeps the cheap one (a worktree and a conversation on disk).
+	if sess.IsResident() {
+		if sess.Spec.DesiredState == acv1.SessionDesiredDormant {
+			return r.goDormant(ctx, sess, id, "asked to stop")
 		}
-		// A resident session's pod is its owner's SHARED runtime. Deleting it
-		// on one session's TTL killed every other window that user had open —
-		// their work included. startSettle closes just this window.
+		idle := sess.Spec.IdleSeconds
+		if idle == 0 {
+			idle = defaultIdle
+		}
+		since := sess.Status.LastActivity
+		if since == nil {
+			since = sess.Status.StartTime
+		}
+		if since != nil && time.Since(since.Time) > time.Duration(idle)*time.Second {
+			return r.goDormant(ctx, sess, id, "idle")
+		}
+		return ctrl.Result{RequeueAfter: pollInterval}, nil
+	}
+
+	// A one-shot session has no terminal to come back to, so its only clock
+	// is total age.
+	if since := sess.Status.StartTime; since != nil &&
+		time.Since(since.Time) > time.Duration(ttl)*time.Second {
+		if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
 		return r.startSettle(ctx, sess, cell, ns, id, "TTL exceeded")
 	}
 
+	return ctrl.Result{RequeueAfter: pollInterval}, nil
+}
+
+// goDormant releases the compute a session is holding and records that it is
+// meant to be asleep.
+//
+// The window is deliberately NOT closed: closing it is what settle does, and
+// it is irreversible. What happens instead is that the runtime pod becomes
+// reapable — once every session a user has in this Cell is dormant or
+// finished, the pod goes, and with it the tmux server. The worktree and the
+// CLI's own state are on the volume, so waking rebuilds the terminal rather
+// than starting over.
+func (r *SessionReconciler) goDormant(ctx context.Context, sess *acv1.Session, id, why string) (ctrl.Result, error) {
+	if sess.Spec.DesiredState != acv1.SessionDesiredDormant {
+		// Say it in the spec, not only in the phase: "should this be awake"
+		// is the question, and it has to be answerable — and overridable —
+		// without reading a timer.
+		sess.Spec.DesiredState = acv1.SessionDesiredDormant
+		if err := r.Update(ctx, sess); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	now := metav1.Now()
+	sess.Status.Phase = acv1.SessionDormant
+	sess.Status.DormantSince = &now
+	sess.Status.Message = "休眠中(" + why + ")——打开终端或追问即可继续"
+	if err := r.Status().Update(ctx, sess); err != nil {
+		return ctrl.Result{}, err
+	}
+	// The slot goes back now. A dormant session consumes nothing, so holding
+	// one would be charging a project for work that finished.
+	r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+	// Reaping the runtime is the reclamation: it is shared, so it can only go
+	// when none of this user's sessions still need it.
+	if uid, err := r.ownerUID(ctx, sess); err == nil {
+		_ = r.reapUserRuntime(ctx, ids.WorkloadNamespace(sess.Spec.Cell), uid, sess.Spec.Cell)
+	}
+	return ctrl.Result{}, nil
+}
+
+// observeDormant waits for somebody to come back, and eventually publishes.
+func (r *SessionReconciler) observeDormant(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) (ctrl.Result, error) {
+	if sess.Spec.DesiredState == acv1.SessionDesiredRunning {
+		return r.wake(ctx, sess, cell, ns, id)
+	}
+	ttl := sess.Spec.TTLSeconds
+	if ttl == 0 {
+		ttl = defaultDormantTTL
+	}
+	if since := sess.Status.DormantSince; since != nil &&
+		time.Since(since.Time) > time.Duration(ttl)*time.Second {
+		// Publish rather than delete. Nobody came back, but that is not
+		// consent to throw the work away.
+		return r.startSettle(ctx, sess, cell, ns, id, "dormant past its TTL")
+	}
+	// Nothing is running, so this is a cheap, rare check.
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
+}
+
+// wake rebuilds what dormancy gave up: a slot, a runtime, and the terminal.
+func (r *SessionReconciler) wake(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) (ctrl.Result, error) {
+	claimed, err := r.claimSlot(ctx, sess, id)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+	if !claimed {
+		// Waking queues like any other work: a project that is full is full,
+		// and pretending otherwise would let dormancy be a way around the
+		// gate.
+		sess.Status.Message = fmt.Sprintf("等待槽位(%d 个都在用)", cell.Spec.MaxSessions)
+		if err := r.Status().Update(ctx, sess); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+	uid, err := r.ownerUID(ctx, sess)
+	if err != nil {
+		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+		return r.fail(ctx, sess, err)
+	}
+	ready, err := r.ensureUserRuntime(ctx, cell, ns, uid)
+	if err != nil {
+		r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
+		return r.fail(ctx, sess, err)
+	}
+	if !ready {
+		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
+	}
+	binding, err := r.Registry.Resolve(sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model)
+	if err != nil {
+		return r.fail(ctx, sess, err)
+	}
+	// -restore: rebuild the terminal WITHOUT running the agent again. The
+	// task already ran; re-running it would redo whatever it had done.
+	if err := r.restoreWindow(ctx, sess, cell, ns, id, uid, binding); err != nil {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	now := metav1.Now()
+	sess.Status.Phase = acv1.SessionRunning
+	sess.Status.PodName = ids.UserRuntimePod(uid)
+	sess.Status.LastActivity = &now
+	sess.Status.DormantSince = nil
+	sess.Status.Message = "已唤醒,终端恢复到原处"
+	if err := r.Status().Update(ctx, sess); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 

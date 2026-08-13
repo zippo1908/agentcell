@@ -755,19 +755,23 @@ func TestClosedWindowInTheSameContainerStillSettles(t *testing.T) {
 // A resident session idles out, it does not age out. Killing one at the
 // deadline while its agent is mid-run would be the platform interrupting the
 // work it exists to host.
+// A resident session is reclaimed on IDLE, not on age — and reclaiming it
+// means it stops holding compute, not that its work is published and its
+// session ended. See dormant_test.go for why those had to stop being the
+// same decision.
 func TestResidentSessionIdlesOutRatherThanAgesOut(t *testing.T) {
 	longAgo := metav1.NewTime(metav1.Now().Add(-3 * time.Hour))
 	recent := metav1.Now()
 
 	for _, tc := range []struct {
-		name       string
-		working    bool
-		activity   metav1.Time
-		wantSettle bool
+		name        string
+		working     bool
+		activity    metav1.Time
+		wantDormant bool
 	}{
 		{"old session, agent still working, stays", true, longAgo, false},
 		{"old session, recent activity, stays", false, recent, false},
-		{"old session, idle for hours, settles", false, longAgo, true},
+		{"old session, idle for hours, sleeps", false, longAgo, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := residentSession("sess-a", "u-aaaa1111", "work")
@@ -812,9 +816,12 @@ func TestResidentSessionIdlesOutRatherThanAgesOut(t *testing.T) {
 			}
 			var got acv1.Session
 			_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
-			settled := got.Status.Phase == acv1.SessionSettling || got.Status.Phase == acv1.SessionSettled
-			if settled != tc.wantSettle {
-				t.Errorf("phase = %s, settled=%v want %v", got.Status.Phase, settled, tc.wantSettle)
+			dormant := got.Status.Phase == acv1.SessionDormant
+			if dormant != tc.wantDormant {
+				t.Errorf("phase = %s, dormant=%v want %v", got.Status.Phase, dormant, tc.wantDormant)
+			}
+			if got.Status.Phase == acv1.SessionSettling || got.Status.Phase == acv1.SessionSettled {
+				t.Error("an idle session was published and ended rather than put to sleep")
 			}
 		})
 	}

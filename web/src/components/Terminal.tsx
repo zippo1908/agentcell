@@ -41,32 +41,58 @@ export function Terminal({ session }: { session: string }) {
     term.open(host.current)
     fit.fit()
 
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${proto}//${location.host}/api/sessions/${session}/terminal`)
-    ws.binaryType = 'arraybuffer'
-
-    const send = (m: object) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m))
+    // A dormant session is woken by asking for its terminal, and waking
+    // takes a few seconds (a slot, a runtime pod, the window restored). So
+    // the first attempt is expected to be refused, and retrying IS the
+    // normal path rather than error handling.
+    let closed = false
+    let attempt = 0
+    let ws: WebSocket | undefined
+    const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m))
     const sendSize = () => {
       fit.fit()
       send({ c: term.cols, r: term.rows })
     }
+    const connect = () => {
+      if (closed) return
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      ws = new WebSocket(`${proto}//${location.host}/api/sessions/${session}/terminal`)
+      ws.binaryType = 'arraybuffer'
 
-    ws.onopen = () => {
-      setState('open')
-      sendSize()
+      ws.onopen = () => {
+        attempt = 0
+        setState('open')
+        sendSize()
+      }
+      ws.onmessage = (e) => {
+        term.write(
+          typeof e.data === 'string' ? e.data : new Uint8Array(e.data as ArrayBuffer),
+        )
+      }
+      ws.onclose = () => {
+        if (closed) return
+        // Never opened: the session is almost certainly waking. Keep trying
+        // for a while, then say so — silently retrying forever would be its
+        // own kind of blank screen.
+        if (attempt < 12) {
+          attempt++
+          if (attempt === 1) {
+            setState('connecting')
+            term.write('\r\n\x1b[90m—— 会话在休眠,正在唤醒 ——\x1b[0m\r\n')
+          }
+          setTimeout(connect, 2500)
+          return
+        }
+        setState('closed')
+        // Say so in the terminal itself. A window that simply stops updating
+        // reads exactly like an agent that is thinking hard.
+        term.write('\r\n\x1b[90m—— 连接已断开 ——\x1b[0m\r\n')
+      }
+      ws.onerror = () => {
+        /* onclose follows, and it owns the retry */
+      }
     }
-    ws.onmessage = (e) => {
-      term.write(
-        typeof e.data === 'string' ? e.data : new Uint8Array(e.data as ArrayBuffer),
-      )
-    }
-    ws.onclose = () => {
-      setState('closed')
-      // Say so in the terminal itself. A window that simply stops updating
-      // reads exactly like an agent that is thinking hard.
-      term.write('\r\n\x1b[90m—— 连接已断开 ——\x1b[0m\r\n')
-    }
-    ws.onerror = () => setState('closed')
+    connect()
 
     term.onData((d) => send({ d }))
 
@@ -74,8 +100,9 @@ export function Terminal({ session }: { session: string }) {
     ro.observe(host.current)
 
     return () => {
+      closed = true
       ro.disconnect()
-      ws.close()
+      ws?.close()
       term.dispose()
     }
   }, [session])

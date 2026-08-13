@@ -50,11 +50,39 @@ spec:
                   CredentialSecret references a Secret in the control namespace whose
                   "key" entry is the provider API key. Injected into this session only.
                 type: string
+              desiredState:
+                default: running
+                description: |-
+                  DesiredState is what this session is supposed to be doing: "running"
+                  or "dormant". Both the control plane and a person write it — the
+                  reconciler sets "dormant" when nobody is using the session, and the
+                  console sets "running" the moment somebody opens its terminal or sends
+                  it a follow-up.
+
+                  A desired state rather than a timer, because "should this be awake" is
+                  a question with an answer, and burying that answer in elapsed
+                  milliseconds makes it unaskable. `kubectl get session` says which
+                  sessions are meant to be up; the phase says which ones are.
+                enum:
+                - running
+                - dormant
+                type: string
               followPreview:
                 description: |-
                   FollowPreview points the Cell's resident preview at this session's
                   worktree while it runs, so the user watches the work live.
                 type: boolean
+              idleSeconds:
+                description: |-
+                  IdleSeconds is how long a resident session may sit with no agent
+                  working and nobody watching before it goes dormant. Defaults to 900.
+
+                  Short on purpose: this is not a deadline, it is a yawn. Nothing is
+                  lost — the terminal comes back where it was — so the cost of being
+                  wrong is a few seconds of waking, while the cost of never sleeping is
+                  a project's slots held by work that finished hours ago.
+                format: int64
+                type: integer
               model:
                 description: Model optionally pins a model at the provider.
                 type: string
@@ -109,8 +137,11 @@ spec:
                 type: string
               ttlSeconds:
                 description: |-
-                  TTLSeconds force-settles a session still running after this long.
-                  Defaults to 3600.
+                  TTLSeconds force-settles a session after this long. For a one-shot
+                  session it is measured from the start (default 3600); for a resident
+                  one it bounds how long a DORMANT session is kept before its work is
+                  published and its worktree reclaimed (default 604800 — a week), since
+                  a dormant session costs storage but no compute.
                 format: int64
                 type: integer
             required:
@@ -126,6 +157,12 @@ spec:
               branch:
                 description: Branch is the settled output branch (session/<id>) when
                   Produced.
+                type: string
+              dormantSince:
+                description: |-
+                  DormantSince is when this session stopped holding compute. The TTL
+                  that eventually publishes its work is measured from here.
+                format: date-time
                 type: string
               lastActivity:
                 description: |-

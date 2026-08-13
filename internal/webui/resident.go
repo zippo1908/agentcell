@@ -114,6 +114,17 @@ func (h *Handler) continueSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("text is empty"))
 		return
 	}
+	if woke, err := h.wakeIfDormant(r, sess); err != nil {
+		writeErr(w, 500, err)
+		return
+	} else if woke {
+		// Waking needs a runtime scheduled and a terminal restored, which is
+		// the controller's job and takes a few seconds. Saying so beats
+		// blocking the request or, worse, typing into a window that is not
+		// there yet.
+		writeErr(w, 409, fmt.Errorf("这个会话在休眠,正在唤醒——过几秒再说一次"))
+		return
+	}
 	if !sess.IsResident() {
 		writeErr(w, 409, fmt.Errorf("session is not resident; dispatch with resident:true to keep a slot open"))
 		return
@@ -161,4 +172,22 @@ func (h *Handler) continueSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"ok": "sent"})
+}
+
+// wakeIfDormant records that somebody wants this session awake.
+//
+// The console does not wake a session by starting things itself: it states
+// the desired state and the controller reconciles it, which is the same path
+// the idle timer uses in the other direction. One mechanism, so waking
+// cannot drift from sleeping.
+func (h *Handler) wakeIfDormant(r *http.Request, sess *acv1.Session) (bool, error) {
+	if sess.Status.Phase != acv1.SessionDormant &&
+		sess.Spec.DesiredState != acv1.SessionDesiredDormant {
+		return false, nil
+	}
+	sess.Spec.DesiredState = acv1.SessionDesiredRunning
+	if err := h.Client.Update(r.Context(), sess); err != nil {
+		return false, err
+	}
+	return true, nil
 }

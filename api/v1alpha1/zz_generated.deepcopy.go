@@ -317,6 +317,10 @@ func (in *SessionStatus) DeepCopyInto(out *SessionStatus) {
 		in, out := &in.LastActivity, &out.LastActivity
 		*out = (*in).DeepCopy()
 	}
+	if in.DormantSince != nil {
+		in, out := &in.DormantSince, &out.DormantSince
+		*out = (*in).DeepCopy()
+	}
 	if in.StartTime != nil {
 		in, out := &in.StartTime, &out.StartTime
 		*out = (*in).DeepCopy()
