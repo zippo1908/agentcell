@@ -99,6 +99,11 @@ type CellSpec struct {
 	// Description is the living product description the user calibrates
 	// while watching the preview; dispatches default to carrying it.
 	Description string `json:"description,omitempty"`
+	// Members grants roles on this Cell. EMPTY means open to every
+	// authenticated user, which is what every existing Cell already does —
+	// a permission model that locked people out of their own projects on
+	// upgrade would be reverted before it was understood.
+	Members []Member `json:"members,omitempty"`
 	// MaxSessions is the slot count (instance concurrency). Defaults to 2.
 	MaxSessions int32 `json:"maxSessions,omitempty"`
 	// SessionResources is the per-slot budget. Defaults to 1 CPU / 2Gi.
@@ -186,4 +191,26 @@ type WebhookSpec struct {
 	// webhook configured without a secret is refused rather than sent
 	// unsigned.
 	SecretName string `json:"secretName,omitempty"`
+}
+
+// Role is what a member may do in a Cell.
+type Role string
+
+const (
+	// RoleViewer sees the Cell, its settled sessions and its reviews.
+	RoleViewer Role = "viewer"
+	// RoleMember also dispatches, runs sessions and reviews.
+	RoleMember Role = "member"
+	// RoleMaintainer also releases, edits settings and manages members.
+	//
+	// Release is the line that matters: everything else is recoverable, and
+	// a release is the one action that puts code in front of users.
+	RoleMaintainer Role = "maintainer"
+)
+
+// Member is one user's role. UserID is the hashed principal id, the same
+// value a Session records as its owner.
+type Member struct {
+	UserID string `json:"userID"`
+	Role   Role   `json:"role"`
 }

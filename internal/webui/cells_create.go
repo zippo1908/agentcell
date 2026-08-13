@@ -74,7 +74,17 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 	if maxSessions <= 0 {
 		maxSessions = 2
 	}
+	// The creator is the first maintainer. Creating a project and then not
+	// being able to release it would be a strange first experience — and
+	// leaving the member list empty would make the Cell open to everyone,
+	// which is not what someone who just created one expects.
+	creator := identity.FromContext(r.Context())
+	var members []acv1.Member
+	if creator.Kind == identity.KindOIDC {
+		members = []acv1.Member{{UserID: creator.ID(), Role: acv1.RoleMaintainer}}
+	}
 	cell.Spec = acv1.CellSpec{
+		Members:     members,
 		Repo:        acv1.RepoSpec{URL: req.RepoURL, Branch: branch, SecretName: req.SecretName},
 		Image:       req.Image,
 		Description: req.Description,

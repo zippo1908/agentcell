@@ -417,6 +417,9 @@ func (h *Handler) putDescription(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	if !h.authorize(w, r, &cell, ActionSettings) {
+		return
+	}
 	cell.Spec.Description = body.Description
 	if err := h.Client.Update(r.Context(), &cell); err != nil {
 		writeErr(w, 500, err)
@@ -460,6 +463,9 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	var cell acv1.Cell
 	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &cell); err != nil {
 		writeErr(w, 404, err)
+		return
+	}
+	if !h.authorize(w, r, &cell, ActionDispatch) {
 		return
 	}
 	// A caller may only spend a model credential it owns.
@@ -516,6 +522,9 @@ func (h *Handler) release(w http.ResponseWriter, r *http.Request) {
 	var cell acv1.Cell
 	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &cell); err != nil {
 		writeErr(w, 404, err)
+		return
+	}
+	if !h.authorize(w, r, &cell, ActionRelease) {
 		return
 	}
 	if body.Ref != "" {
