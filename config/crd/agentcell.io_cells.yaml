@@ -44,6 +44,7 @@ spec:
                     secretName: {type: string}
                 image: {type: string}
                 description: {type: string}
+                access: {type: string, enum: [open, restricted]}
                 members:
                   type: array
                   items:
@@ -92,6 +93,7 @@ spec:
                 activeSessions: {type: integer, format: int32}
                 previewPath: {type: string}
                 productionPath: {type: string}
+                access: {type: string}
                 handedOffRelease: {type: string}
                 handoffMessage: {type: string}
                 slotLeases:

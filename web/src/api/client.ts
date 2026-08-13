@@ -79,6 +79,16 @@ export const api = {
 
   diff: (session: string) => req<Diff>(`/api/sessions/${session}/diff`),
 
+  putMember: (cell: string, userID: string, role: string) =>
+    req<{ access: string }>(`/api/cells/${cell}/members`, {
+      method: 'PUT',
+      body: JSON.stringify({ userID, role }),
+    }),
+  removeMember: (cell: string, userID: string) =>
+    req<{ access: string }>(`/api/cells/${cell}/members/${encodeURIComponent(userID)}`, {
+      method: 'DELETE',
+    }),
+
   /** Is a resident session still working, or waiting for you? */
   sessionState: (session: string) => req<SessionState>(`/api/sessions/${session}/state`),
 

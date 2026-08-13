@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -207,18 +208,23 @@ func TestWebhookTargetCannotPointInward(t *testing.T) {
 		"file:///etc/passwd",
 		"gopher://example.com/",
 	} {
-		if err := checkWebhookTarget(bad); err == nil {
+		if _, err := checkWebhookTarget(bad); err == nil {
 			t.Errorf("%s was accepted; the control plane is a request forgery tool", bad)
 		}
 	}
 	// A public target is fine.
-	if err := checkWebhookTarget("https://example.com/hooks/agentcell"); err != nil {
+	if _, err := checkWebhookTarget("https://example.com/hooks/agentcell"); err != nil {
 		t.Errorf("a public https target was refused: %v", err)
 	}
-	// And an operator can opt in deliberately.
+	// An operator can opt in deliberately — for a name that resolves. A name
+	// that does not is still refused either way: sending anyway would be
+	// trusting DNS to be honest later, which is exactly the attack.
 	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1")
-	if err := checkWebhookTarget("http://deployer.ci.svc.cluster.local/hook"); err != nil {
+	if _, err := checkWebhookTarget("http://localhost:9000/hook"); err != nil {
 		t.Errorf("the opt-in did not take effect: %v", err)
+	}
+	if _, err := checkWebhookTarget("http://no-such-host.invalid/hook"); err == nil {
+		t.Error("an unresolvable host was accepted; DNS would decide later what we contact")
 	}
 }
 
@@ -241,5 +247,47 @@ func TestReleaseIDTravelsAsAnIdempotencyKey(t *testing.T) {
 	}
 	if gotKey != cell.Spec.Production.ReleaseID {
 		t.Errorf("idempotency key = %q, want the release id %q", gotKey, cell.Spec.Production.ReleaseID)
+	}
+}
+
+// Validating a hostname and then handing it to http.Client is not enough:
+// the client resolves AGAIN when it dials, so a name that answered with a
+// public address during the check can answer with a link-local one a
+// millisecond later. And a 302 would walk past a check performed on the
+// original URL.
+func TestWebhookClientPinsAndRefusesRedirects(t *testing.T) {
+	// A receiver that redirects — a real one would not, which is why
+	// refusing outright is affordable.
+	var reached atomic.Int32
+	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		w.WriteHeader(200)
+	}))
+	defer inner.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, inner.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1") // httptest is loopback
+	c, err := webhookClient(redirector.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Post(redirector.URL, "application/json", strings.NewReader("{}")); err == nil {
+		t.Error("a redirect was followed; the target check applies only to the first hop")
+	}
+	if reached.Load() != 0 {
+		t.Error("the redirect target was contacted")
+	}
+
+	// The pinned dialer only reaches what was approved: a client built for
+	// one host must not connect to another address, even if asked.
+	c2, err := webhookClient(inner.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c2.Post(inner.URL, "application/json", strings.NewReader("{}")); err != nil {
+		t.Errorf("the approved target became unreachable: %v", err)
 	}
 }

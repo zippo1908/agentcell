@@ -66,7 +66,7 @@ func required(a Action) acv1.Role {
 // was understood. Membership is opt-in, and taking it up is what turns the
 // rules on.
 func roleOf(p identity.Principal, cell *acv1.Cell) acv1.Role {
-	if len(cell.Spec.Members) == 0 {
+	if effectiveAccess(cell) == acv1.AccessOpen {
 		return acv1.RoleMaintainer
 	}
 	// A static-token deployment has exactly one principal, so it is the
@@ -113,4 +113,19 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, cell *acv1.C
 
 func errRequiresRole(a Action, role acv1.Role) error {
 	return fmt.Errorf("%s requires the %s role on this cell", a, role)
+}
+
+// effectiveAccess resolves the mode actually in force.
+//
+// Unset means open when there are no members — the pre-roles behaviour — and
+// restricted the moment somebody is named, because adding a member is an
+// unambiguous statement that this project has an inside and an outside.
+func effectiveAccess(cell *acv1.Cell) acv1.AccessMode {
+	if cell.Spec.Access != "" {
+		return cell.Spec.Access
+	}
+	if len(cell.Spec.Members) == 0 {
+		return acv1.AccessOpen
+	}
+	return acv1.AccessRestricted
 }

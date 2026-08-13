@@ -39,9 +39,24 @@ A Cell carries members with one of three roles:
 | `member` | everything a viewer can, plus dispatch, run sessions, review |
 | `maintainer` | everything a member can, plus release, edit settings, manage members |
 
-The creator is the first maintainer. A Cell with no members listed is open to
-every authenticated user — which is exactly today's behaviour, so existing
-deployments do not change until someone adds a member.
+The creator is the first maintainer. `spec.access` says whether the member
+list is enforced: unset with no members means `open` — exactly the pre-roles
+behaviour, so nothing breaks on upgrade — and adding the first member closes
+the Cell, because naming somebody is an unambiguous statement that this
+project has an inside and an outside.
+
+An empty array is a poor way to express a dangerous state, so the controller
+records the conclusion in `status.access`. "Who can touch this project" is
+then answerable from `kubectl get cell` rather than inferred from a missing
+field, and the console says plainly when the answer is "anyone who can log
+in".
+
+Membership is managed through the API (`PUT`/`DELETE
+/api/cells/{cell}/members`) and the console, not only by editing the CR —
+"the maintainer manages members" was documented before it was possible, and
+a maintainer of a project does not necessarily have cluster access. Removing
+the last maintainer of a restricted Cell is refused, because the recovery
+would need exactly the access this avoids requiring.
 
 **Release is the line that matters.** Everything else is recoverable; a
 release is the one action that puts code in front of users, and it now needs
@@ -87,6 +102,13 @@ and passed as a header is a decision anything on that network can forge. The
 gateway can enforce as well — defence in depth is welcome — but it cannot be
 the only enforcement, which means celld needs these rules regardless. Adding
 APISIX policy would not remove a single check from this codebase.
+
+### Reads are governed too
+
+Closing the write paths first made it easy to believe the Cell was closed. It
+was not: an outsider could list every project, read a settled session's diff,
+and — worst — be handed a **preview ticket**, which is a capability rather
+than a label. Filtering happens before the view is built, not after.
 
 ## Consequences
 
