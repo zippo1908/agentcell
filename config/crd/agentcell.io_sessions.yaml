@@ -41,6 +41,12 @@ spec:
               SessionSpec is one disposable work session: a task dispatched to an
               agent inside a Cell's slot.
             properties:
+              board:
+                description: |-
+                  Board names the team board that asked for this work, so the agent can
+                  answer where the question was asked instead of somewhere else.
+                maxLength: 63
+                type: string
               cell:
                 description: Cell names the Cell CR (same namespace as this Session
                   CR).
@@ -154,6 +160,12 @@ spec:
           status:
             description: SessionStatus is the observed state of a Session.
             properties:
+              boardNotified:
+                description: |-
+                  BoardNotified records that the board this work came from has already
+                  been told the agent finished. Without it the reconciler would say so
+                  again on every poll — a chat that repeats itself every ten seconds.
+                type: boolean
               branch:
                 description: Branch is the settled output branch (session/<id>) when
                   Produced.

@@ -8,6 +8,7 @@ import type {
   Meta,
   NodePool,
   Team,
+  Post,
   SessionState,
   Review,
 } from './types'
@@ -66,6 +67,15 @@ export const api = {
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
 
   teams: () => req<Team[]>('/api/teams'),
+
+  board: (team: string) =>
+    req<{ posts: Post[]; latest: number }>(`/api/teams/${team}/board`),
+
+  postToBoard: (team: string, body: string) =>
+    req<{ id: number }>(`/api/teams/${team}/board`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    }),
 
   createTeam: (name: string, displayName: string) =>
     req<Team>('/api/teams', { method: 'POST', body: JSON.stringify({ name, displayName }) }),

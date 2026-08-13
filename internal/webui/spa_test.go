@@ -113,6 +113,8 @@ func TestEveryClientRouteSurvivesAReload(t *testing.T) {
 	for _, p := range []string{
 		"/", "/dashboard", "/cells", "/cells/new", "/cells/shop", "/reviews", "/capabilities",
 		"/credentials",
+		"/teams",
+		"/board",
 	} {
 		if !isClientRoute(p) {
 			t.Errorf("%s would 404 on a hard reload", p)

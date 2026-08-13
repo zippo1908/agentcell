@@ -1,0 +1,125 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: boards.agentcell.io
+spec:
+  group: agentcell.io
+  names:
+    kind: Board
+    listKind: BoardList
+    plural: boards
+    shortNames:
+    - bd
+    singular: board
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.team
+      name: Team
+      type: string
+    - jsonPath: .spec.count
+      name: Posts
+      type: integer
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              count:
+                description: Count mirrors len(Posts) for a printcolumn.
+                type: integer
+              nextID:
+                description: |-
+                  NextID is the sequence for post ids, so a client can ask for
+                  everything after what it already has.
+                format: int64
+                type: integer
+              posts:
+                description: |-
+                  Posts, oldest first, bounded.
+
+                  The whole conversation lives in one object rather than one object per
+                  post: a post is not a resource anybody reconciles, and a thousand tiny
+                  CRs would be a thousand watch events for something only a person
+                  reads. Bounded because a Kubernetes object is not a database — old
+                  posts fall off the front, and the durable record of what happened is
+                  the git history the work produced, not the chat about it.
+                items:
+                  properties:
+                    at:
+                      format: date-time
+                      type: string
+                    author:
+                      description: |-
+                        Author is a user id for a person, a Cell name for an agent, empty for
+                        the platform.
+                      type: string
+                    body:
+                      maxLength: 4096
+                      type: string
+                    cell:
+                      description: |-
+                        Cell and Session link a post to the work it is about, so "what came of
+                        that" is one click rather than a search.
+                      type: string
+                    id:
+                      format: int64
+                      type: integer
+                    kind:
+                      description: |-
+                        PostKind says who wrote a post, which is the only thing the UI needs to
+                        know to render it differently.
+                      type: string
+                    mentions:
+                      description: Mentions are the user ids this post is addressed
+                        to.
+                      items:
+                        type: string
+                      type: array
+                    session:
+                      type: string
+                  required:
+                  - body
+                  - id
+                  - kind
+                  type: object
+                type: array
+              read:
+                additionalProperties:
+                  format: int64
+                  type: integer
+                description: |-
+                  Read is each member's high-water mark: the last post id they have
+                  seen. Unread mentions are derived from it, never stored — a counter
+                  somebody has to remember to decrement is a counter that goes wrong.
+                type: object
+              team:
+                description: Team this board belongs to. One board per team, named
+                  after it.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

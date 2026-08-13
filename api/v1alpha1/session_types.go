@@ -82,6 +82,10 @@ type SessionSpec struct {
 	// mean false, which is exactly the wrong default to have inherited.
 	// +kubebuilder:default=true
 	Resident *bool `json:"resident,omitempty"`
+	// Board names the team board that asked for this work, so the agent can
+	// answer where the question was asked instead of somewhere else.
+	// +kubebuilder:validation:MaxLength=63
+	Board string `json:"board,omitempty"`
 	// FollowPreview points the Cell's resident preview at this session's
 	// worktree while it runs, so the user watches the work live.
 	FollowPreview bool `json:"followPreview,omitempty"`
@@ -154,6 +158,10 @@ type SessionStatus struct {
 	// runtime was replaced and the session should be handed back, not
 	// settled out from under its owner.
 	RuntimeInstance string `json:"runtimeInstance,omitempty"`
+	// BoardNotified records that the board this work came from has already
+	// been told the agent finished. Without it the reconciler would say so
+	// again on every poll — a chat that repeats itself every ten seconds.
+	BoardNotified bool `json:"boardNotified,omitempty"`
 	// DormantSince is when this session stopped holding compute. The TTL
 	// that eventually publishes its work is measured from here.
 	DormantSince *metav1.Time `json:"dormantSince,omitempty"`

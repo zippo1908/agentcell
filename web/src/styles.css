@@ -499,3 +499,48 @@ pre.diff .meta { display: block; color: var(--text-faint); }
   .card, .toast, .modal, .modal-mask { animation: none; }
   .badge.amber .dot { animation: none; }
 }
+
+/* ── The board ────────────────────────────────────────────────────────────
+   A conversation, not a table: a full-height column that scrolls, with the
+   composer pinned to the bottom where a cursor expects to find it. */
+.board-page {
+  display: flex;
+  flex-direction: column;
+  /* Fill the viewport minus the shell's own padding, so the stream scrolls
+     rather than the page — a chat whose input walks off the bottom as it
+     fills is a chat you have to scroll to answer. */
+  height: calc(100vh - 48px);
+}
+.board-head { display: flex; align-items: center; gap: 12px; }
+.board-stream {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 14px 16px;
+  background: var(--panel);
+}
+.board-empty { padding: 40px 0; text-align: center; color: var(--text-dim); }
+.board-empty p { margin: 0 0 6px; }
+
+.post { display: flex; gap: 10px; padding: 9px 0; }
+.post + .post { border-top: 1px solid var(--border-soft); }
+.post-mark {
+  flex: 0 0 24px; height: 24px; border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-family: var(--mono); text-transform: uppercase;
+  border: 1px solid var(--border); color: var(--text-dim); background: var(--panel-2);
+}
+/* The agent is the only thing here that is not a person; it gets the one
+   solid mark on the page so a stream of replies is scannable at a glance. */
+.post-mark.agent { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+.post-mark.sys { border-style: dashed; }
+.post-body { flex: 1; min-width: 0; }
+.post-meta { display: flex; align-items: baseline; gap: 8px; font-size: 11px; }
+.post-author { font-weight: 600; }
+.post-link { margin-left: auto; font-size: 11px; }
+.post-text { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.post.system .post-text { color: var(--text-dim); }
+
+.board-composer { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+.board-composer textarea { flex: 1; resize: vertical; min-height: 44px; }

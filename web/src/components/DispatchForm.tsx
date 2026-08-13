@@ -92,7 +92,7 @@ export function DispatchForm({ cell, description }: { cell: string; description:
 
   return (
     <div className="card">
-      <h2>派工</h2>
+      <h3>派工</h3>
       <textarea
         rows={3}
         value={task}

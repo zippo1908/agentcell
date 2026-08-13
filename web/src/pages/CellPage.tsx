@@ -175,10 +175,10 @@ export function CellPage() {
             </div>
             <p style={{ margin: '10px 0 0', fontSize: 13 }}>{step.text}</p>
           </div>
-          <div className="card">
-            <h3>派工</h3>
-            <DispatchForm cell={cell.name} description={cell.description} />
-          </div>
+          {/* Not wrapped in a card: DispatchForm is one already, and a card
+              inside a card gave the page two borders and two headings of the
+              same name fighting at two different type scales. */}
+          <DispatchForm cell={cell.name} description={cell.description} />
           <div className="card">
             <h3>事实</h3>
             <Defs

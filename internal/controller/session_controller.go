@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -44,7 +45,7 @@ const (
 	// worktree. It publishes rather than deletes — a week of not looking at
 	// something is not consent to throw it away.
 	defaultDormantTTL = int64(7 * 24 * 3600)
-	pollInterval        = 10 * time.Second
+	pollInterval      = 10 * time.Second
 )
 
 // SessionReconciler drives dispatch → work → settle → reclaim. Settle is
@@ -516,6 +517,19 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		if err == nil && !alive {
 			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
 		}
+		// The board asked for this, so the board hears when it is done —
+		// at the moment the AGENT finishes, not when the session settles.
+		//
+		// Those are far apart now: a resident session stays open for
+		// follow-ups and settles only much later, so waiting for settle
+		// would leave the asker watching a stream that never answers.
+		if !working && !sess.Status.BoardNotified && sess.Spec.Board != "" {
+			r.postDoneToBoard(ctx, sess)
+			sess.Status.BoardNotified = true
+			if err := r.Status().Update(ctx, sess); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		// An agent that is still running IS activity, and so is a person
 		// watching: the idle clock must not tick through a long build, nor
 		// through somebody reading the screen it produced.
@@ -816,6 +830,10 @@ func (r *SessionReconciler) observeSettle(ctx context.Context, sess *acv1.Sessio
 	if err := r.Status().Update(ctx, sess); err != nil {
 		return ctrl.Result{}, err
 	}
+	// Answer where the question was asked. Work requested on a board that
+	// finishes silently is work nobody knows about — the asker would have to
+	// go looking, which is the habit the board exists to remove.
+	r.postSettleToBoard(ctx, sess)
 	r.releaseSlot(ctx, sess.Namespace, sess.Spec.Cell, id)
 	if sess.IsResident() {
 		// Reclaim the runtime once this user has nothing open in the Cell.
@@ -883,4 +901,64 @@ func (r *SessionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&acv1.Session{}).
 		Named("session").
 		Complete(r)
+}
+
+// postSettleToBoard tells the board what came of the work it asked for.
+//
+// Only for sessions that came FROM a board: dispatching from the Cell page
+// and being narrated on a team stream would be chatter nobody asked for.
+func (r *SessionReconciler) postSettleToBoard(ctx context.Context, sess *acv1.Session) {
+	if sess.Spec.Board == "" {
+		return
+	}
+	var body string
+	switch sess.Status.Phase {
+	case acv1.SessionSettled:
+		body = "做完了:" + sess.Status.Message + "(分支 " + sess.Status.Branch + ",待批阅)"
+	case acv1.SessionDiscarded:
+		body = "跑完了,但没有产出:" + sess.Status.Message
+	case acv1.SessionError:
+		body = "出错了:" + sess.Status.Message
+	default:
+		return
+	}
+	post := acv1.Post{
+		Kind: acv1.PostAgent, Author: sess.Spec.Cell, Cell: sess.Spec.Cell,
+		Session: sess.Name, Body: body, At: metav1.Now(),
+	}
+	r.appendBoardPost(ctx, sess, post)
+}
+
+// postDoneToBoard says the agent has finished, while the session is still
+// open. The branch does not exist yet — that is what settling is for — so it
+// says what is true now and points at where to look.
+func (r *SessionReconciler) postDoneToBoard(ctx context.Context, sess *acv1.Session) {
+	r.appendBoardPost(ctx, sess, acv1.Post{
+		Kind: acv1.PostAgent, Author: sess.Spec.Cell, Cell: sess.Spec.Cell,
+		Session: sess.Name,
+		Body:    "跑完了。终端还开着——去看一眼,不满意就直接追问;满意就清算,产出会进批阅。",
+	})
+}
+
+// appendBoardPost is the controller's half of the board: it writes where the
+// work was asked for, and does nothing at all when it was not asked there.
+func (r *SessionReconciler) appendBoardPost(ctx context.Context, sess *acv1.Session, post acv1.Post) {
+	if sess.Spec.Board == "" {
+		return
+	}
+	if post.At.IsZero() {
+		post.At = metav1.Now()
+	}
+	if sess.Spec.OwnerUserID != "" && len(post.Mentions) == 0 {
+		post.Mentions = []string{sess.Spec.OwnerUserID}
+	}
+	_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var b acv1.Board
+		key := types.NamespacedName{Namespace: sess.Namespace, Name: "board-" + sess.Spec.Board}
+		if err := r.Get(ctx, key, &b); err != nil {
+			return nil
+		}
+		b.Append(post)
+		return r.Update(ctx, &b)
+	})
 }

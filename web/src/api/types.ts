@@ -33,6 +33,20 @@ export interface Cell {
   team?: string
 }
 
+/** One post on a team board. */
+export interface Post {
+  id: number
+  kind: 'user' | 'agent' | 'system'
+  author: string
+  body: string
+  cell?: string
+  session?: string
+  at: string
+  mentions?: string[]
+  /** True when the reader wrote it. */
+  mine?: boolean
+}
+
 /** A membership list that outlives any one project. */
 export interface Team {
   name: string

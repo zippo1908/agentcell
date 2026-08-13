@@ -121,6 +121,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("GET /api/nodepools", h.listNodePools)
 	mux.HandleFunc("GET /api/teams", h.listTeams)
+	mux.HandleFunc("GET /api/teams/{team}/board", h.listBoard)
+	mux.HandleFunc("POST /api/teams/{team}/board", h.postToBoard)
 	mux.HandleFunc("POST /api/teams", h.createTeam)
 	mux.HandleFunc("PUT /api/teams/{team}/members", h.putTeamMember)
 	mux.HandleFunc("DELETE /api/teams/{team}/members/{user}", h.deleteTeamMember)
@@ -193,7 +195,7 @@ func CellFromPreviewRequest(r *http.Request) string {
 // here — a real trap, and the reason the test below enumerates them.
 func isClientRoute(p string) bool {
 	switch p {
-	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities", "/credentials":
+	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities", "/credentials", "/teams", "/board":
 		return true
 	}
 	if rest, ok := strings.CutPrefix(p, "/cells/"); ok {
