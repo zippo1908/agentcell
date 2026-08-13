@@ -131,6 +131,10 @@ func runWindowOpen(args []string) error {
 	if err := os.MkdirAll(ids.SessionStateDir(uid, id), 0o700); err != nil {
 		return fmt.Errorf("session state dir: %w", err)
 	}
+	// The endpoint some CLIs use lives in a file next to that conversation.
+	if err := writeAgentConfig(); err != nil {
+		return err
+	}
 	sock := ids.TmuxSocket(uid)
 	window := ids.TmuxWindow(id)
 	// Idempotent: a reconciler retries, and a second window for one session

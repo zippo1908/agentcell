@@ -19,6 +19,21 @@ const (
 	EnvBaseBranch  = "AGENTCELL_BASE_BRANCH"
 	EnvDescription = "AGENTCELL_DESCRIPTION" // the Cell's living product description
 	EnvResident    = "AGENTCELL_RESIDENT"    // "1" keeps the slot alive in tmux
+	// EnvAgentConfig carries a config file some CLIs need in order to honour
+	// the endpoint AgentCell chose: {"path":"<absolute>","content":"..."}.
+	// The path is resolved by the controller, which knows where this
+	// session's private state lives; the runtime only writes it.
+	EnvAgentConfig = "AGENTCELL_AGENT_CONFIG"
+)
+
+// AgentConfig is a file a runner must find before it will use the endpoint
+// it was dispatched at.
+type AgentConfig struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+const (
 
 	// KnowledgePath is the persistent, session-shared knowledge directory
 	// on the workspace PVC (outside the git checkout). The anchor creates

@@ -66,6 +66,10 @@ func runSession() error {
 		}
 	}
 
+	if err := writeAgentConfig(); err != nil {
+		return err
+	}
+
 	if os.Getenv(runtimeapi.EnvResident) == "1" {
 		return runResident(uid, id, wt, argv)
 	}
@@ -80,6 +84,34 @@ func runSession() error {
 		// Non-zero agent exit still settles; surface the cause in the log.
 		return fmt.Errorf("agent exited: %w", err)
 	}
+	return nil
+}
+
+// writeAgentConfig lays down the config file a CLI needs before it will use
+// the endpoint this session was dispatched at.
+//
+// It is written rather than passed as flags because that is what the CLI
+// reads; and it is written per session, into the session's own state
+// directory, so one of a user's sessions cannot repoint another's. Failing
+// here is fatal on purpose: the alternative is a run that looks healthy
+// while talking to the wrong vendor's endpoint with the wrong model.
+func writeAgentConfig() error {
+	raw := os.Getenv(runtimeapi.EnvAgentConfig)
+	if raw == "" {
+		return nil
+	}
+	var cfg runtimeapi.AgentConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil || cfg.Path == "" {
+		return fmt.Errorf("%s invalid: %v", runtimeapi.EnvAgentConfig, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o700); err != nil {
+		return fmt.Errorf("agent config dir: %w", err)
+	}
+	// 0600: it names no secret, but it does decide where the key gets sent.
+	if err := os.WriteFile(cfg.Path, []byte(cfg.Content), 0o600); err != nil {
+		return fmt.Errorf("agent config: %w", err)
+	}
+	fmt.Printf("session: wrote agent config %s\n", cfg.Path)
 	return nil
 }
 

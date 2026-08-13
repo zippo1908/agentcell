@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -143,6 +144,35 @@ type Runner struct {
 	// Empty for CLIs that address conversations by id, which need no such
 	// separation.
 	SessionHomeEnv string
+	// ConfigPath and ConfigTemplate describe a file this CLI must find in
+	// its state directory to honour the endpoint AgentCell chose. Empty for
+	// CLIs that take it from the environment.
+	ConfigPath     string
+	ConfigTemplate string
+}
+
+// SessionConfig renders the config file a runner needs, or ok=false if it
+// needs none. The API key is deliberately absent: the file names the
+// variable to read it from, so the key stays in the environment and never
+// reaches a file the agent can cat.
+func SessionConfig(runner string, b Binding) (path, content string, ok bool) {
+	r, found := runners[runner]
+	if !found || r.ConfigTemplate == "" {
+		return "", "", false
+	}
+	rep := strings.NewReplacer(
+		"{{model}}", tomlString(b.Model),
+		"{{base_url}}", tomlString(b.BaseURL),
+	)
+	return r.ConfigPath, rep.Replace(r.ConfigTemplate), true
+}
+
+// tomlString escapes a value for a TOML basic string. A model name arrives
+// from whoever dispatched the session, so it is not trusted to be free of
+// quotes — an unescaped one would end the string and turn the rest of the
+// file into syntax the CLI either rejects or, worse, misreads.
+func tomlString(v string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`).Replace(v)
 }
 
 // SessionHomeVar returns the state-directory variable a runner needs scoped

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -355,6 +356,23 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 	}
 	for k, v := range r.Registry.SessionEnv(binding, "$("+runtimeapi.EnvAPIKey+")") {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
+	}
+	// A CLI with its own state directory gets one here too, not only in a
+	// resident runtime: a user's one-shot pods share a $HOME on the same
+	// volume, so without this two concurrent sessions would write one
+	// another's config and conversation state.
+	stateDir := ids.SessionStateDir(uid, id)
+	if v := access.SessionHomeVar(sess.Spec.Runner); v != "" {
+		env = append(env, corev1.EnvVar{Name: v, Value: stateDir})
+	}
+	if path, content, ok := access.SessionConfig(sess.Spec.Runner, binding); ok {
+		cfgJSON, err := json.Marshal(runtimeapi.AgentConfig{
+			Path: filepath.Join(stateDir, path), Content: content,
+		})
+		if err != nil {
+			return err
+		}
+		env = append(env, corev1.EnvVar{Name: runtimeapi.EnvAgentConfig, Value: string(cfgJSON)})
 	}
 	argvJSON, err := json.Marshal(argv)
 	if err != nil {

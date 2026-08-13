@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -163,8 +164,22 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	// A CLI that resumes by recency needs its own state directory, or two of
 	// this user's sessions — same runtime, same $HOME — would resume into
 	// each other's conversation.
+	stateDir := ids.SessionStateDir(uid, id)
 	if v := access.SessionHomeVar(sess.Spec.Runner); v != "" {
-		vars[v] = ids.SessionStateDir(uid, id)
+		vars[v] = stateDir
+	}
+	// Some CLIs read the endpoint from a file rather than the environment,
+	// so the window has to carry the file too — otherwise a resident session
+	// would quietly use the CLI's own default provider while a one-shot
+	// session of the same runner used the one that was asked for.
+	if path, content, ok := access.SessionConfig(sess.Spec.Runner, binding); ok {
+		cfgJSON, err := json.Marshal(runtimeapi.AgentConfig{
+			Path: filepath.Join(stateDir, path), Content: content,
+		})
+		if err != nil {
+			return err
+		}
+		vars[runtimeapi.EnvAgentConfig] = string(cfgJSON)
 	}
 	vars[runtimeapi.EnvSessionID] = id
 	vars[runtimeapi.EnvBaseBranch] = cell.Spec.Repo.Branch

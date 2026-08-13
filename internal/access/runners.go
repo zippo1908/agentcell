@@ -3,6 +3,7 @@ package access
 import (
 	"crypto/rand"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,6 +41,18 @@ type runnerPreset struct {
 	// SessionHomeEnv points a recency-resuming CLI at a per-session state
 	// directory, so "the most recent conversation" cannot mean a sibling's.
 	SessionHomeEnv string `yaml:"session_home_env"`
+	// ConfigFile is written into that state directory before the CLI runs,
+	// for CLIs that read their endpoint from a file rather than from the
+	// environment. Same reasoning as argv: this is the shape of somebody
+	// else's tool, so it is data an operator can correct, not code.
+	ConfigFile *configFilePreset `yaml:"config_file"`
+}
+
+// configFilePreset renders {{model}} and {{base_url}} — never the key, which
+// stays in the environment and is referenced from the file by name.
+type configFilePreset struct {
+	Path     string `yaml:"path"`
+	Template string `yaml:"template"`
 }
 
 type runnersFile struct {
@@ -92,6 +105,19 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 	if usesSession(p.Resume) && p.SessionID == "" {
 		return Runner{}, fmt.Errorf("runner %q resumes by id but declares no session_id shape", name)
 	}
+	if p.ConfigFile != nil {
+		if p.ConfigFile.Path == "" || p.ConfigFile.Template == "" {
+			return Runner{}, fmt.Errorf("runner %q: config_file needs both path and template", name)
+		}
+		// The file lands inside the state directory, so a runner asking for
+		// one without declaring where its state lives has nowhere to put it.
+		if p.SessionHomeEnv == "" {
+			return Runner{}, fmt.Errorf("runner %q: config_file requires session_home_env", name)
+		}
+		if filepath.IsAbs(p.ConfigFile.Path) || strings.Contains(p.ConfigFile.Path, "..") {
+			return Runner{}, fmt.Errorf("runner %q: config_file path must stay inside the state directory", name)
+		}
+	}
 	r := Runner{
 		Name:           name,
 		Display:        p.DisplayName,
@@ -99,6 +125,9 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 		Protocols:      p.Protocols,
 		SessionHomeEnv: p.SessionHomeEnv,
 		HeadlessArgv:   func(task string) []string { return render(p.Headless, task, "") },
+	}
+	if p.ConfigFile != nil {
+		r.ConfigPath, r.ConfigTemplate = p.ConfigFile.Path, p.ConfigFile.Template
 	}
 	switch p.SessionID {
 	case "":

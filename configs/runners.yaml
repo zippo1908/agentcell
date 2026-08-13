@@ -36,6 +36,30 @@ runners:
     # runtime and a $HOME, and "the last one" would otherwise be a sibling's.
     session_home_env: CODEX_HOME
     resume: ["codex", "exec", "resume", "--last", "--sandbox", "danger-full-access", "{{task}}"]
+    # Codex picks its endpoint and model from config, NOT from OPENAI_BASE_URL
+    # and OPENAI_MODEL. Setting only the environment leaves it talking to
+    # api.openai.com with its own default model — which is how a session
+    # dispatched at DeepSeek announced itself as gpt-5.6-sol and then spent
+    # its life reconnecting to a host the cluster cannot reach. The failure
+    # is silent in the worst way: the run looks alive, and nothing says the
+    # provider you chose was discarded.
+    #
+    # wire_api: Codex 0.147 REMOVED "chat" — it now speaks only the Responses
+    # API. That is upstream's call, and it narrows this runner sharply: most
+    # vendors' "OpenAI-compatible" endpoint is Chat Completions and nothing
+    # else. Pair Codex with a provider that actually serves /responses, or
+    # pair the provider with a runner that speaks Chat.
+    config_file:
+      path: config.toml
+      template: |
+        model = "{{model}}"
+        model_provider = "agentcell"
+
+        [model_providers.agentcell]
+        name = "AgentCell"
+        base_url = "{{base_url}}"
+        env_key = "OPENAI_API_KEY"
+        wire_api = "responses"
 
   pi:
     display_name: pi
