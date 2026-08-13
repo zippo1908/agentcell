@@ -12,12 +12,18 @@ you can open and type into; a live product preview to steer against; and an
 SDLC loop — dispatch → work → settle → review → release — closed within the
 instance.
 
-> **Status: alpha.** The full path passes an 8-step end-to-end run on real
-> single-node k3s (auth → reconcile → preview → dispatch → settle → pushed
-> branch → release → production, [E2E results](docs/E2E_RESULTS.md)). Not yet
-> a review/PR approval queue (roadmap). Evaluate before trusting it with
-> production apps — the table below says exactly what's implemented vs
-> designed.
+> **Status: alpha.** The full path is verified on real single-node k3s —
+> auth → reconcile → preview → dispatch → **terminal** → settle → pushed
+> branch → **review → PR** → release → production
+> ([E2E results](docs/E2E_RESULTS.md)). The review queue and the browser
+> terminal both shipped; what is still designed-only is listed in the table
+> below, which is the honest version of this paragraph. Evaluate before
+> trusting it with production apps.
+>
+> **One machine is a real deployment here.** k3s on a single node gives
+> namespaces, quotas, declarative reconciliation and volumes — most of what
+> AgentCell uses it for. What one node cannot give is high availability, or
+> more than one machine pool: add a node and both become real.
 
 ## Why
 
@@ -51,7 +57,10 @@ those, and which one owns which, is most of learning the system.
 | **Cell** | one project, resident | a repo checkout, a preview, a production zone, N slots |
 | **Pool** | a class of machine the Cell may run on | which node the whole Cell lives on |
 | **Runtime** | one user's tmux server inside a Cell | that user's `$HOME`, uid, private tree |
-| **Session** | one unit of work, in a terminal | a git worktree and a CLI conversation |
+| **Session** | one person's live line of work in a project — one per user per Cell, plus the team's own for board asks | a git worktree, a CLI conversation, a terminal |
+| **DesiredState** | whether a session is *meant* to be awake (`running`/`dormant`) — written by the reconciler when nobody is using it, by the console when somebody opens its terminal | which of the two clocks applies |
+| **Dormant** | the phase of a session that gave back its slot and its runtime and kept its worktree and conversation | costs storage, costs no compute |
+| **Wake** | reclaiming a slot and a runtime and restoring the terminal where it was — never re-running the agent | queues behind the slot gate like any other work |
 | **Slot** | permission for a Session to hold compute | the Cell's concurrency |
 | **Credential** | a model key, owned by whoever spends it | one Session at a time |
 | **Review** | a settled Session awaiting judgement | whether it becomes a PR, then a Release |

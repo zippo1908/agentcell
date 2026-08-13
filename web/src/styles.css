@@ -544,3 +544,32 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 
 .board-composer { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
 .board-composer textarea { flex: 1; resize: vertical; min-height: 44px; }
+
+/* ── Choice cards ─────────────────────────────────────────────────────────
+   Creating a project is a series of choices the platform can already offer,
+   not a form to fill in. Cards rather than a <select> because the options
+   carry a sentence each — a size, a vendor, how many machines — and that is
+   exactly the information somebody needs to choose without asking. */
+.pick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.pick {
+  display: flex; flex-direction: column; gap: 3px;
+  text-align: left; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--panel); color: var(--text); cursor: pointer;
+  font: inherit;
+}
+.pick:hover { border-color: var(--border-strong); }
+/* The chosen one is the only solid thing on the page, so "what did I pick"
+   is answered from across the room. */
+.pick.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.pick-name { font-size: 13px; font-weight: 600; }
+.pick-sub { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.pick-desc { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+/* Cards hold prose, and prose without this spills out of the grid cell —
+   which is what it did: a description ran out past the panel's left edge. */
+.pick > span { min-width: 0; overflow-wrap: anywhere; }

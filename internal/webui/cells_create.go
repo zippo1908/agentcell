@@ -3,6 +3,7 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/types"
 	"net/http"
 	"strings"
 
@@ -29,6 +30,15 @@ type createCellRequest struct {
 	ExternalURL      string `json:"externalURL"`
 	WebhookURL       string `json:"webhookURL"`
 	WebhookSecret    string `json:"webhookSecret"`
+	// Runner, Provider and Model are the pairing this project works with.
+	// A property of the project — this codebase, this team's account — so
+	// chosen once here rather than re-answered on every task.
+	Runner   string `json:"runner"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	// PlacementClass is a machine pool an administrator offered. A name
+	// only: nothing sent here can become a node selector or a toleration.
+	PlacementClass string `json:"placementClass"`
 }
 
 // createCell onboards a project from the console.
@@ -83,11 +93,24 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 	if creator.Kind == identity.KindOIDC {
 		members = []acv1.Member{{UserID: creator.ID(), Role: acv1.RoleMaintainer}}
 	}
+	if req.PlacementClass != "" {
+		// Must be an offer that exists. The API never invents a placement,
+		// and a name that resolves to nothing would strand the Cell Pending.
+		var pc acv1.PlacementClass
+		if err := h.Client.Get(r.Context(), types.NamespacedName{Name: req.PlacementClass}, &pc); err != nil {
+			writeErr(w, 400, fmt.Errorf("没有这个机器池"))
+			return
+		}
+	}
 	cell.Spec = acv1.CellSpec{
 		Members:     members,
 		Repo:        acv1.RepoSpec{URL: req.RepoURL, Branch: branch, SecretName: req.SecretName},
 		Image:       req.Image,
 		Description: req.Description,
+		Defaults: acv1.RunDefaults{
+			Runner: req.Runner, Provider: req.Provider, Model: req.Model,
+		},
+		Placement:   acv1.PlacementSpec{Class: req.PlacementClass},
 		MaxSessions: maxSessions,
 	}
 	if req.ProductionTarget == string(acv1.ProductionExternal) {

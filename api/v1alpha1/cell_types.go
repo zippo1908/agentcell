@@ -147,6 +147,14 @@ type CellSpec struct {
 	// box. Without a way to say so, a project either takes whatever the
 	// scheduler picks or the whole cluster has to be identical.
 	Placement PlacementSpec `json:"placement,omitempty"`
+	// Defaults is the runner/provider/model pairing this project works with.
+	//
+	// Chosen once, when the project is created, because it is a property of
+	// the project — this codebase, this team's account — not of each task.
+	// The dispatch form prefills from it, and the board uses it instead of
+	// inferring a pairing from whatever was dispatched last, which was a
+	// guess dressed up as a memory.
+	Defaults RunDefaults `json:"defaults,omitempty"`
 	// Database is where this project's data lives. AgentCell does not run
 	// it: a database is not a thing to lock to an application server, and a
 	// platform that provisions one quietly becomes responsible for its
@@ -160,6 +168,16 @@ type CellSpec struct {
 	// not simultaneously open to everyone who can log in.
 	// +kubebuilder:validation:MaxLength=63
 	Team string `json:"team,omitempty"`
+}
+
+// RunDefaults is what this project runs with unless a task says otherwise.
+type RunDefaults struct {
+	// +kubebuilder:validation:MaxLength=63
+	Runner string `json:"runner,omitempty"`
+	// +kubebuilder:validation:MaxLength=63
+	Provider string `json:"provider,omitempty"`
+	// +kubebuilder:validation:MaxLength=200
+	Model string `json:"model,omitempty"`
 }
 
 // DatabaseSpec points a Cell's zones at their databases.

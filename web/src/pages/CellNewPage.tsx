@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useToast } from '../ui/primitives'
 
@@ -8,9 +8,15 @@ import { useToast } from '../ui/primitives'
  * Onboarding a project used to require cellctl, which made the console a
  * viewer of projects it could never start.
  *
- * One column, one card, sections separated by hairline titles rather than
- * nested cards — the rest lives behind 高级 because most projects never
- * touch it.
+ * It then asked six free-text questions, one of which was a container image
+ * path. Every one of those is something the platform already knows — which
+ * devboxes an operator offers, which git credentials exist, which runners
+ * and providers are configured, which machine pools were defined. Asking a
+ * person to retype an answer the system has is how a project ends up in
+ * ImagePullBackOff over a typo made two layers away.
+ *
+ * So it offers. Only the repository URL and a name are typed, because only
+ * those are genuinely new information.
  */
 export function CellNewPage() {
   const nav = useNavigate()
@@ -21,6 +27,10 @@ export function CellNewPage() {
     branch: 'main',
     secretName: '',
     image: '',
+    runner: '',
+    provider: '',
+    model: '',
+    placementClass: '',
     description: '',
     preview: '',
     previewPort: 3000,
@@ -32,6 +42,24 @@ export function CellNewPage() {
   })
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF({ ...f, [k]: e.target.value })
+  const pick = (k: keyof typeof f, v: string | number) => setF({ ...f, [k]: v })
+
+  const opts = useQuery({ queryKey: ['new-project-options'], queryFn: () => api.newProjectOptions() })
+
+  // Preselect the obvious: the first devbox, the only git credential, the
+  // runner's own vendor. A form that starts empty makes somebody choose
+  // things they have no opinion about.
+  useEffect(() => {
+    const o = opts.data
+    if (!o) return
+    setF((cur) => ({
+      ...cur,
+      image: cur.image || o.devboxes[0]?.image || '',
+      secretName: cur.secretName || (o.gitCredentials.length === 1 ? o.gitCredentials[0] : cur.secretName),
+      runner: cur.runner || o.runners[0]?.name || '',
+      provider: cur.provider || o.runners[0]?.vendor || o.providers[0]?.name || '',
+    }))
+  }, [opts.data])
 
   const create = useMutation({
     mutationFn: () =>
@@ -55,40 +83,106 @@ export function CellNewPage() {
       <div className="card" style={{ maxWidth: 720 }}>
         <div className="form-section-title">项目</div>
         <label className="field">
-          <span className="lbl">
-            名称<span className="req">*</span>
-          </span>
+          <span>名称</span>
           <input value={f.name} onChange={set('name')} placeholder="shop" />
-          <div className="hint">小写字母、数字和连字符。会成为命名空间 cell-&lt;名称&gt; 和预览路径的一部分。</div>
+          <em>小写字母、数字和短横;它会成为命名空间和预览域名的一部分。</em>
         </label>
         <label className="field">
-          <span className="lbl">
-            仓库 URL<span className="req">*</span>
-          </span>
-          <input value={f.repoURL} onChange={set('repoURL')} placeholder="https://git.example.com/team/shop.git" />
+          <span>仓库地址</span>
+          <input value={f.repoURL} onChange={set('repoURL')} placeholder="https://git.tinci.com/team/shop.git" />
+          <em>agent 在这个仓库上干活,产出推成 session/&lt;id&gt; 分支等你批阅。</em>
         </label>
         <div className="row">
           <label className="field" style={{ flex: 1 }}>
-            <span className="lbl">基线分支</span>
+            <span>基线分支</span>
             <input value={f.branch} onChange={set('branch')} placeholder="main" />
           </label>
           <label className="field" style={{ flex: 1 }}>
-            <span className="lbl">git 凭据 Secret</span>
-            <input value={f.secretName} onChange={set('secretName')} placeholder="git-cred" />
+            <span>git 凭据</span>
+            <select value={f.secretName} onChange={set('secretName')}>
+              <option value="">不需要(公开仓库)</option>
+              {(opts.data?.gitCredentials ?? []).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
-        <div className="hint" style={{ marginTop: -6, marginBottom: 14 }}>
-          凭据由 git-broker 持有,任何工作负载都拿不到它。只能用你自己的 Secret。
+
+        <div className="form-section-title">环境</div>
+        <div className="pick-grid">
+          {(opts.data?.devboxes ?? []).map((d) => (
+            <button
+              type="button"
+              key={d.name}
+              className={`pick ${f.image === d.image ? 'on' : ''}`}
+              onClick={() => pick('image', d.image)}
+            >
+              <span className="pick-name">{d.displayName}</span>
+              <span className="pick-sub">{d.size}</span>
+              <span className="pick-desc">{d.description}</span>
+            </button>
+          ))}
         </div>
 
-        <div className="form-section-title">运行环境</div>
-        <label className="field">
-          <span className="lbl">
-            devbox 镜像<span className="req">*</span>
-          </span>
-          <input value={f.image} onChange={set('image')} placeholder="ghcr.io/zippo1908/devbox-e2e:v0.1.0-alpha.3" />
-          <div className="hint">要包含 agent CLI、git,以及 tmux(常驻会话需要)。</div>
-        </label>
+        <div className="form-section-title">agent 与模型</div>
+        <div className="pick-grid">
+          {(opts.data?.runners ?? []).map((r) => (
+            <button
+              type="button"
+              key={r.name}
+              className={`pick ${f.runner === r.name ? 'on' : ''}`}
+              onClick={() => setF({ ...f, runner: r.name, provider: r.vendor || f.provider })}
+            >
+              <span className="pick-name">{r.display || r.name}</span>
+              <span className="pick-sub">{r.vendor}</span>
+            </button>
+          ))}
+        </div>
+        <div className="pick-grid">
+          {(opts.data?.providers ?? [])
+            .filter((p) => {
+              // Only providers this runner can actually drive. The server
+              // computes that list; recomputing it here from protocols would
+              // be a second implementation of the same rule, free to drift.
+              const r = opts.data?.runners.find((x) => x.name === f.runner)
+              return !r || r.providers.includes(p.name)
+            })
+            .map((p) => (
+              <button
+                type="button"
+                key={p.name}
+                className={`pick ${f.provider === p.name ? 'on' : ''}`}
+                onClick={() => pick('provider', p.name)}
+              >
+                <span className="pick-name">{p.display || p.name}</span>
+                {p.region && <span className="pick-sub">{p.region}</span>}
+              </button>
+            ))}
+        </div>
+
+        {/* Machine pools appear only when there is more than one. A choice
+            of one implies there is something to decide. */}
+        {(opts.data?.placementClasses?.length ?? 0) > 1 && (
+          <>
+            <div className="form-section-title">跑在哪类机器上</div>
+            <div className="pick-grid">
+              {opts.data!.placementClasses.map((c) => (
+                <button
+                  type="button"
+                  key={c.name}
+                  className={`pick ${f.placementClass === c.name ? 'on' : ''}`}
+                  onClick={() => pick('placementClass', c.name)}
+                >
+                  <span className="pick-name">{c.displayName || c.name}</span>
+                  <span className="pick-sub">{c.nodes} 台{c.tolerated ? ' · 专用' : ''}</span>
+                  <span className="pick-desc">{c.description}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <label className="field">
           <span className="lbl">预览命令</span>
           <input value={f.preview} onChange={set('preview')} placeholder="npm run dev -- --host" />

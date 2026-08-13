@@ -8,6 +8,7 @@ import type {
   Meta,
   NodePool,
   Team,
+  NewProjectOptions,
   Post,
   SessionState,
   Review,
@@ -65,6 +66,8 @@ export const api = {
   createCell: (body: Record<string, unknown>) =>
     req<{ cell: string }>('/api/cells', { method: 'POST', body: JSON.stringify(body) }),
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
+
+  newProjectOptions: () => req<NewProjectOptions>('/api/new-project-options'),
 
   teams: () => req<Team[]>('/api/teams'),
 

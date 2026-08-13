@@ -130,6 +130,20 @@ export interface Diff {
   deletions?: number
 }
 
+/** Everything the create-a-project form offers, so it can present choices
+ *  instead of asking somebody to retype what the platform already knows. */
+export interface NewProjectOptions {
+  devboxes: { name: string; displayName: string; image: string; description: string; size: string }[]
+  gitCredentials: string[]
+  /** Empty or single on a one-node cluster; the form then omits the control. */
+  placementClasses: {
+    name: string; displayName: string; description: string
+    selector: string; nodes: number; free?: string; tolerated?: boolean
+  }[]
+  runners: RunnerInfo[]
+  providers: ProviderInfo[]
+}
+
 export interface RunnerInfo {
   name: string
   display: string

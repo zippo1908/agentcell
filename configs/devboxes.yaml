@@ -1,0 +1,22 @@
+# Devbox images offered when creating a project.
+#
+# Data, like runners and providers, and for the same reason: which images a
+# team may use is an operator's decision that changes far faster than this
+# code does. Override or extend via /etc/agentcell/devboxes.d/*.yaml.
+#
+# An image must contain the agent CLIs, git, tmux, and cell-runtime. Nobody
+# creating a project should have to know that, let alone type a registry
+# path from memory — which is what the form used to ask for.
+version: 1
+
+devboxes:
+  - name: slim
+    display_name: 标准(轻)
+    image: ghcr.io/zippo1908/devbox-slim:v0.1.0-alpha.5
+    description: alpine · 814MB · Claude Code + Codex + git/tmux。绝大多数项目用这个。
+    size: 814MB
+  - name: full
+    display_name: 完整
+    image: ghcr.io/zippo1908/devbox:v0.1.0-alpha.5
+    description: Debian · 2GB · 额外带 apt 工具链,项目要装系统包时选它。
+    size: 2GB

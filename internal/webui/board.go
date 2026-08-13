@@ -315,10 +315,17 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 	}}
 	sess.Spec.Cell = cell
 	sess.Spec.Task = task
-	runner, provider, model, err := h.providerFor(ctx, cell)
-	if err != nil {
-		h.systemPost(ctx, team, err.Error(), cell)
-		return
+	runner, provider, model := c.Spec.Defaults.Runner, c.Spec.Defaults.Provider, c.Spec.Defaults.Model
+	if runner == "" || provider == "" {
+		// Fall back to what this Cell was last dispatched with, then say so
+		// plainly if there is nothing to follow. Guessing a vendor would
+		// spend somebody's budget somewhere they never chose.
+		var err error
+		runner, provider, model, err = h.providerFor(ctx, cell)
+		if err != nil {
+			h.systemPost(ctx, team, err.Error(), cell)
+			return
+		}
 	}
 	sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model = runner, provider, model
 	sess.Spec.CredentialSecret = cred

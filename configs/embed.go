@@ -17,3 +17,11 @@ var ProvidersYAML []byte
 //
 //go:embed runners.yaml
 var RunnersYAML []byte
+
+// DevboxesYAML is the built-in devbox image catalogue. Which images a team
+// may use is an operator's decision, and one that changes faster than this
+// code — so it is data, and nobody creating a project has to type a registry
+// path from memory.
+//
+//go:embed devboxes.yaml
+var DevboxesYAML []byte

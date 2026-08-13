@@ -120,6 +120,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
+	mux.HandleFunc("GET /api/new-project-options", h.newProjectOptions)
 	mux.HandleFunc("GET /api/teams", h.listTeams)
 	mux.HandleFunc("GET /api/teams/{team}/board", h.listBoard)
 	mux.HandleFunc("POST /api/teams/{team}/board", h.postToBoard)
