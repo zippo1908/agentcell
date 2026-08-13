@@ -12,6 +12,7 @@ package access
 import (
 	"fmt"
 	"sort"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -36,7 +37,13 @@ type Provider struct {
 	Protocols map[string]Endpoint `yaml:"protocols"`
 	AuthEnv   string              `yaml:"auth_env"`
 	Models    []string            `yaml:"models"`
-	Docs      string              `yaml:"docs"`
+	// ContextTokens is the real context window of this provider's models.
+	// It matters because a CLI that does not recognise a model name assumes
+	// its own default — Claude Code assumes 200k and starts compacting
+	// early, silently truncating long work against a model that could have
+	// held it.
+	ContextTokens int    `yaml:"context_tokens"`
+	Docs          string `yaml:"docs"`
 }
 
 type providersFile struct {
@@ -223,6 +230,9 @@ type Binding struct {
 	// AuthEnv is the provider-native key variable (informational; SessionEnv
 	// already maps the key onto protocol variables).
 	AuthEnv string
+	// ContextTokens is the provider's real context window, passed to CLIs
+	// that would otherwise guess.
+	ContextTokens int
 	// CrossVendor is set when the CLI and the model come from different
 	// vendors — e.g. Anthropic's Claude Code driving Moonshot's Kimi through
 	// Moonshot's Anthropic-compatible endpoint.
@@ -254,6 +264,7 @@ func (r *Registry) Resolve(runner, provider, model string) (Binding, error) {
 				Runner: runner, Provider: provider, Model: model,
 				Protocol: proto, BaseURL: ep.BaseURL, AuthEnv: prov.AuthEnv,
 			}
+			b.ContextTokens = prov.ContextTokens
 			b.CrossVendor, b.Advisory = vendorNote(run, provider, prov)
 			return b, nil
 		}
@@ -280,6 +291,12 @@ func (r *Registry) SessionEnv(b Binding, apiKey string) map[string]string {
 	env := map[string]string{}
 	switch b.Protocol {
 	case ProtoAnthropic:
+		// Tell the CLI the window it actually has. Without this it falls
+		// back to its own assumption for an unfamiliar model name and
+		// compacts a conversation that never needed compacting.
+		if b.ContextTokens > 0 {
+			env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = strconv.Itoa(b.ContextTokens)
+		}
 		if b.Provider == "anthropic" {
 			// Native endpoint: the CLI default base URL is correct.
 			env["ANTHROPIC_API_KEY"] = apiKey

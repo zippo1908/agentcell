@@ -308,3 +308,30 @@ func TestCatalogueReportsResumeHonestly(t *testing.T) {
 		}
 	}
 }
+
+// A CLI that does not recognise a model name falls back to its own assumed
+// context window — Claude Code assumes 200k and compacts early, which
+// silently truncates work a 256k model could have held. The provider knows
+// its window; the session should be told.
+func TestRealContextWindowIsPassedToTheCLI(t *testing.T) {
+	reg, err := LoadWithRunners(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := reg.Resolve("claude", "moonshot", "kimi-k2-turbo-preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := reg.SessionEnv(b, "sk-test")
+	if env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "" {
+		t.Error("the CLI is left to guess the context window of an unfamiliar model")
+	}
+	if env["ANTHROPIC_BASE_URL"] == "" || env["ANTHROPIC_AUTH_TOKEN"] == "" {
+		t.Errorf("the endpoint or credential is missing: %v", env)
+	}
+	// A provider that declares nothing must not fabricate a window.
+	b2, _ := reg.Resolve("claude", "anthropic", "")
+	if _, set := reg.SessionEnv(b2, "sk-test")["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]; set {
+		t.Error("a window was invented for a provider that declared none")
+	}
+}
