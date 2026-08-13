@@ -14,6 +14,9 @@ export interface Cell {
   previewURL: string
   productionURL: string
   releaseRef: string
+  /** "open" means every authenticated user is a maintainer here. */
+  access: string
+  members?: { userID: string; role: string }[]
   /** True when productionURL points at a system we do not run: open it,
    * never embed it. */
   productionExternal?: boolean

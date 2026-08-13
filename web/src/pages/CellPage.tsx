@@ -33,6 +33,8 @@ export function CellPage() {
   const [tab, setTab] = useState<Tab>('overview')
   const [desc, setDesc] = useState<string | null>(null)
   const [releasing, setReleasing] = useState(false)
+  const [newMember, setNewMember] = useState('')
+  const [newRole, setNewRole] = useState('member')
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['cell', name],
@@ -47,6 +49,24 @@ export function CellPage() {
     onSuccess: () => {
       toast.success('描述已更新')
       setDesc(null)
+      qc.invalidateQueries({ queryKey: ['cell', name] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const member = useMutation({
+    mutationFn: (v: { id: string; role: string }) => api.putMember(name, v.id, v.role),
+    onSuccess: () => {
+      setNewMember('')
+      toast.success('成员已更新')
+      qc.invalidateQueries({ queryKey: ['cell', name] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const removeMember = useMutation({
+    mutationFn: (id: string) => api.removeMember(name, id),
+    onSuccess: () => {
+      toast.success('成员已移除')
       qc.invalidateQueries({ queryKey: ['cell', name] })
     },
     onError: (e) => toast.error((e as Error).message),
@@ -164,6 +184,70 @@ export function CellPage() {
       )}
 
       {tab === 'settings' && (
+        <>
+        <div className="card">
+          <h3>访问</h3>
+          {cell.access === 'open' ? (
+            <div className="note">
+              这个工作区<b>对所有登录用户开放</b>——任何人都能派工、批阅、发布到正式区。
+              添加第一个成员就会切换为按成员授权。
+            </div>
+          ) : (
+            <p className="hint" style={{ marginTop: 0 }}>
+              只有下面列出的人有权限。<code className="mono">maintainer</code> 才能发布和改设置。
+            </p>
+          )}
+          <div className="table-wrap" style={{ marginTop: 10 }}>
+            <table className="data">
+              <tbody>
+                {(cell.members ?? []).map((m) => (
+                  <tr key={m.userID}>
+                    <td className="mono">{m.userID}</td>
+                    <td style={{ width: 150 }}>
+                      <select
+                        value={m.role}
+                        onChange={(e) => member.mutate({ id: m.userID, role: e.target.value })}
+                      >
+                        <option value="viewer">viewer</option>
+                        <option value="member">member</option>
+                        <option value="maintainer">maintainer</option>
+                      </select>
+                    </td>
+                    <td style={{ width: 80 }}>
+                      <button className="ghost small" onClick={() => removeMember.mutate(m.userID)}>
+                        移除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {(cell.members ?? []).length === 0 && (
+                  <tr>
+                    <td className="faint">还没有成员</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <input
+              value={newMember}
+              placeholder="用户 id(形如 u-1a2b3c4d,在对方的账号里可见)"
+              onChange={(e) => setNewMember(e.target.value)}
+            />
+            <select value={newRole} onChange={(e) => setNewRole(e.target.value)} style={{ width: 150 }}>
+              <option value="viewer">viewer</option>
+              <option value="member">member</option>
+              <option value="maintainer">maintainer</option>
+            </select>
+            <button
+              className="small"
+              disabled={!newMember.trim() || member.isPending}
+              onClick={() => member.mutate({ id: newMember.trim(), role: newRole })}
+            >
+              添加
+            </button>
+          </div>
+        </div>
         <div className="card">
           <h3>产品描述</h3>
           <p className="hint" style={{ marginTop: 0 }}>
@@ -189,6 +273,7 @@ export function CellPage() {
             )}
           </div>
         </div>
+        </>
       )}
 
       {releasing && (

@@ -99,10 +99,15 @@ type CellSpec struct {
 	// Description is the living product description the user calibrates
 	// while watching the preview; dispatches default to carrying it.
 	Description string `json:"description,omitempty"`
-	// Members grants roles on this Cell. EMPTY means open to every
-	// authenticated user, which is what every existing Cell already does —
-	// a permission model that locked people out of their own projects on
-	// upgrade would be reverted before it was understood.
+	// Access decides whether Members are enforced.
+	//
+	// Empty is treated as "open" so an upgrade does not lock anyone out of
+	// their own project — but an empty array is a bad way to express a
+	// dangerous state, so the controller RECORDS the conclusion in
+	// status.access. A Cell that is open to everyone should say so, not be
+	// inferred from a missing field (ADR-0013).
+	Access AccessMode `json:"access,omitempty"`
+	// Members grants roles on this Cell. Ignored while Access is open.
 	Members []Member `json:"members,omitempty"`
 	// MaxSessions is the slot count (instance concurrency). Defaults to 2.
 	MaxSessions int32 `json:"maxSessions,omitempty"`
@@ -143,6 +148,10 @@ type CellStatus struct {
 	// first release, and empty for external production, which is not ours to
 	// serve.
 	ProductionPath string `json:"productionPath,omitempty"`
+	// Access is the mode actually in force, so "who can touch this project"
+	// is answerable from `kubectl get cell` without reasoning about whether
+	// an empty list means everyone or no one.
+	Access AccessMode `json:"access,omitempty"`
 	// HandedOffRelease is the last ReleaseID an external deployer was told
 	// about. It exists so the notification fires once per release rather
 	// than on every reconcile — a deploy trigger is not idempotent from the
@@ -192,6 +201,18 @@ type WebhookSpec struct {
 	// unsigned.
 	SecretName string `json:"secretName,omitempty"`
 }
+
+// AccessMode says whether a Cell's member list governs it.
+type AccessMode string
+
+const (
+	// AccessOpen: every authenticated user is a maintainer. This is what
+	// every Cell did before roles existed, and it is what an unset Cell with
+	// no members still does — stated rather than inferred.
+	AccessOpen AccessMode = "open"
+	// AccessRestricted: only Members have any role at all.
+	AccessRestricted AccessMode = "restricted"
+)
 
 // Role is what a member may do in a Cell.
 type Role string

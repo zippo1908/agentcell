@@ -118,6 +118,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
 	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
+	mux.HandleFunc("PUT /api/cells/{cell}/members", h.putMember)
+	mux.HandleFunc("DELETE /api/cells/{cell}/members/{user}", h.deleteMember)
 	mux.HandleFunc("GET /api/reviews", h.listReviews)
 	mux.HandleFunc("GET /api/sessions/{session}/diff", h.sessionDiff)
 	mux.HandleFunc("POST /api/sessions/{session}/review", h.reviewSession)
@@ -318,6 +320,10 @@ type cellView struct {
 	ReleaseRef         string `json:"releaseRef"`
 	FollowSession      string `json:"followSession"`
 	Message            string `json:"message"`
+	// Access and Members let the console show who can touch this project —
+	// and say so when the answer is "anyone who can log in".
+	Access  string        `json:"access"`
+	Members []acv1.Member `json:"members,omitempty"`
 }
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
@@ -327,6 +333,7 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		PreviewPath: c.Status.PreviewPath, ProductionPath: c.Status.ProductionPath,
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message, HandoffMessage: c.Status.HandoffMessage,
+		Access: string(effectiveAccess(c)), Members: c.Spec.Members,
 	}
 	v.PreviewURL = h.previewURL(r, c.Name, ZoneDev, c.Status.PreviewPath)
 	v.ProductionURL = h.previewURL(r, c.Name, ZoneProd, c.Status.ProductionPath)
@@ -347,8 +354,16 @@ func (h *Handler) listCells(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
+	// Filter BEFORE building the view. toCellView mints preview and
+	// production tickets, and a ticket is a capability, not a label — so
+	// building one for a Cell the caller cannot see would hand out access
+	// while "only" leaking a name.
+	p := identity.FromContext(r.Context())
 	views := make([]cellView, 0, len(list.Items))
 	for i := range list.Items {
+		if !can(p, &list.Items[i], ActionView) {
+			continue
+		}
 		views = append(views, h.toCellView(r, &list.Items[i]))
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
@@ -372,6 +387,9 @@ func (h *Handler) getCell(w http.ResponseWriter, r *http.Request) {
 	var cell acv1.Cell
 	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: name}, &cell); err != nil {
 		writeErr(w, 404, err)
+		return
+	}
+	if !h.authorize(w, r, &cell, ActionView) {
 		return
 	}
 	var list acv1.SessionList

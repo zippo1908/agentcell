@@ -84,7 +84,8 @@ func (r *CellReconciler) notifyExternal(ctx context.Context, cell *acv1.Cell) er
 	mac := hmac.New(sha256.New, key)
 	mac.Write(body)
 
-	if err := checkWebhookTarget(w.URL); err != nil {
+	client, err := webhookClient(w.URL)
+	if err != nil {
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
@@ -100,7 +101,6 @@ func (r *CellReconciler) notifyExternal(ctx context.Context, cell *acv1.Cell) er
 	// header so a receiver can dedupe without parsing the body.
 	req.Header.Set(deliveryHeader, cell.Spec.Production.ReleaseID)
 
-	client := &http.Client{Timeout: handoffTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -123,8 +123,54 @@ func prodRef(cell *acv1.Cell) string {
 	return cell.Spec.Repo.Branch
 }
 
+// webhookClient builds a client that can only reach the address this URL
+// resolved to when it was checked.
+//
+// Validating a hostname and then handing it to http.Client is not enough:
+// the client resolves again when it dials, so a name that answered with a
+// public address during the check can answer with 169.254.169.254 a
+// millisecond later — DNS rebinding, and the check becomes decoration. The
+// dialer is therefore pinned to the IPs that were actually approved.
+//
+// Redirects are refused outright for the same reason: a 302 to an internal
+// address would walk straight past a check performed on the original URL,
+// and a deploy webhook has no business redirecting.
+func webhookClient(raw string) (*http.Client, error) {
+	ips, err := checkWebhookTarget(raw)
+	if err != nil {
+		return nil, err
+	}
+	allowed := map[string]bool{}
+	for _, ip := range ips {
+		allowed[ip.String()] = true
+	}
+	dialer := &net.Dialer{Timeout: handoffTimeout}
+	return &http.Client{
+		Timeout: handoffTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return fmt.Errorf("webhook redirected to %s; refusing (a redirect would bypass the target check)", req.URL)
+		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				// Dial only what was approved. Resolving again here is the
+				// hole this closes.
+				for ip := range allowed {
+					if c, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port)); err == nil {
+						return c, nil
+					}
+				}
+				return nil, fmt.Errorf("webhook host %s no longer resolves to an approved address", host)
+			},
+		},
+	}, nil
+}
+
 // checkWebhookTarget refuses to make the control plane a request forgery
-// tool.
+// tool, and returns the addresses it approved.
 //
 // celld reaches this URL with the cluster's network position — it can talk
 // to the apiserver, to other namespaces, and on a cloud node to the instance
@@ -136,34 +182,34 @@ func prodRef(cell *acv1.Cell) string {
 // address. Operators whose deployer genuinely lives inside the cluster set
 // AGENTCELL_WEBHOOK_ALLOW_INTERNAL, which is a decision they take
 // deliberately rather than one the default makes for them.
-func checkWebhookTarget(raw string) error {
+func checkWebhookTarget(raw string) ([]net.IP, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("webhook url: %w", err)
+		return nil, fmt.Errorf("webhook url: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("webhook url must be http or https, got %q", u.Scheme)
-	}
-	if os.Getenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL") == "1" {
-		return nil
+		return nil, fmt.Errorf("webhook url must be http or https, got %q", u.Scheme)
 	}
 	host := u.Hostname()
 	if host == "" {
-		return fmt.Errorf("webhook url has no host")
+		return nil, fmt.Errorf("webhook url has no host")
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		// A name that does not resolve cannot be checked, and sending
 		// anyway would be trusting DNS to be honest later.
-		return fmt.Errorf("webhook host %q does not resolve: %w", host, err)
+		return nil, fmt.Errorf("webhook host %q does not resolve: %w", host, err)
+	}
+	if os.Getenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL") == "1" {
+		return ips, nil
 	}
 	for _, ip := range ips {
 		if isInternal(ip) {
-			return fmt.Errorf("webhook host %q resolves to the internal address %s; "+
+			return nil, fmt.Errorf("webhook host %q resolves to the internal address %s; "+
 				"set AGENTCELL_WEBHOOK_ALLOW_INTERNAL=1 if that is deliberate", host, ip)
 		}
 	}
-	return nil
+	return ips, nil
 }
 
 // isInternal covers the addresses a request forgery would actually aim at.

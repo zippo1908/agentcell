@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
+	"github.com/zippo1908/agentcell/internal/identity"
 )
 
 // ADR-0006: the review queue is Sessions that settled with output. Approval
@@ -56,6 +57,11 @@ func (h *Handler) listReviews(w http.ResponseWriter, r *http.Request) {
 	}
 	cellFilter := r.URL.Query().Get("cell")
 	stateFilter := r.URL.Query().Get("state")
+	p := identity.FromContext(r.Context())
+	// A review names a branch, a task and a project. Listing every Cell's
+	// queue to anyone who logs in is the same disclosure as listing the
+	// Cells themselves, one level down.
+	visible := map[string]bool{}
 	out := []reviewView{}
 	for i := range list.Items {
 		s := &list.Items[i]
@@ -63,6 +69,18 @@ func (h *Handler) listReviews(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if cellFilter != "" && s.Spec.Cell != cellFilter {
+			continue
+		}
+		allowed, known := visible[s.Spec.Cell]
+		if !known {
+			var cell acv1.Cell
+			if err := h.Client.Get(r.Context(),
+				types.NamespacedName{Namespace: h.Namespace, Name: s.Spec.Cell}, &cell); err == nil {
+				allowed = can(p, &cell, ActionView)
+			}
+			visible[s.Spec.Cell] = allowed
+		}
+		if !allowed {
 			continue
 		}
 		v := toReviewView(s)
@@ -82,6 +100,17 @@ func (h *Handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	var sess acv1.Session
 	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: name}, &sess); err != nil {
 		writeErr(w, 404, err)
+		return
+	}
+	// A diff is the code. Knowing a session name must not be enough — the
+	// Cell it belongs to decides who reads it.
+	var cell acv1.Cell
+	if err := h.Client.Get(r.Context(),
+		types.NamespacedName{Namespace: h.Namespace, Name: sess.Spec.Cell}, &cell); err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	if !h.authorize(w, r, &cell, ActionView) {
 		return
 	}
 	if !h.Forge.Enabled() {
