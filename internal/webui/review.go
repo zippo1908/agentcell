@@ -121,6 +121,17 @@ func (h *Handler) reviewSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("only a settled session with output can be reviewed"))
 		return
 	}
+	// Reviewing is a project-layer act, so the Cell governs it — not the
+	// session's owner, who is precisely the person who should not be the
+	// only one able to approve their own work.
+	var cell acv1.Cell
+	if err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: sess.Spec.Cell}, &cell); err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	if !h.authorize(w, r, &cell, ActionReview) {
+		return
+	}
 	// The verdict is a one-way transition, enforced here rather than by the
 	// UI hiding buttons: Pending → Approved | Rejected, and no reversal.
 	// Re-deciding an approved session is especially dangerous once a PR

@@ -39,8 +39,11 @@ func reviewFixture(t *testing.T, mutate func(*acv1.Session)) (client.Client, *Ha
 	if mutate != nil {
 		mutate(sess)
 	}
+	// Reviewing is governed by the Cell (ADR-0013), so the fixture needs one.
+	cell := &acv1.Cell{}
+	cell.Name, cell.Namespace = "shop", ns
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(sess, &corev1.Namespace{}).
+		WithObjects(sess, cell, &corev1.Namespace{}).
 		WithStatusSubresource(&acv1.Session{}).Build()
 	return c, &Handler{Client: c, Namespace: ns}
 }

@@ -107,6 +107,14 @@ design. In short:
   is what withholds them. `fsGroup` stays the project group, which is what
   still lets everyone collaborate on the checkout.
 
+- **Authorization (ADR-0013):** a Cell carries members with `viewer` /
+  `member` / `maintainer` roles. Release and settings need `maintainer` —
+  release is the one action that puts code in front of users. A Cell with no
+  members is open to every authenticated user, which is what every Cell did
+  before roles existed; membership is opt-in and taking it up is what turns
+  the rules on. Refusals answer 404 from outside the Cell and 403 with the
+  required role from inside it.
+
 - **Known limits (tracked, not hidden):** single celld replica (no HA); the
   git-broker is a high-value component holding all forge credentials (harden
   the cluster accordingly; its RBAC has no cluster-wide secret access); a

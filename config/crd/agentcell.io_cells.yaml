@@ -44,6 +44,14 @@ spec:
                     secretName: {type: string}
                 image: {type: string}
                 description: {type: string}
+                members:
+                  type: array
+                  items:
+                    type: object
+                    required: [userID, role]
+                    properties:
+                      userID: {type: string, maxLength: 63}
+                      role: {type: string, enum: [viewer, member, maintainer]}
                 maxSessions: {type: integer, format: int32, minimum: 1}
                 sessionResources:
                   type: object
