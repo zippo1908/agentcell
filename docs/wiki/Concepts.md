@@ -1,32 +1,74 @@
 # 概念模型
 
-AgentCell 做的每件事,都是几个名词之一在作用于另一个。**搞清这些名词、
-以及谁归谁管,就学会了这套系统的大半。**
+这一页解释 AgentCell 里那几个名词分别是什么、谁归谁管。
+**看懂这张表和下面那张图,基本就会用了。**
 
-| 名词 | 是什么 | 归它管 / 由它界定 |
+| 东西 | 一句话 | 你为什么要在意 |
 |---|---|---|
-| **Team 团队** | 一份比任何单个项目活得更久的成员名单 | 点了它名字的项目里的默认角色 |
-| **Cell 工作区(项目)** | 一个项目,常驻 | 一份仓库检出、一个预览、一个正式区、N 个槽位 |
-| **PlacementClass 机器池** | 管理员**提供**的一类机器 | 整个项目住在哪个节点 |
-| **Runtime 运行时** | 一个人在这个项目里的 tmux 服务 | 该用户的 `$HOME`、uid、私有目录 |
-| **Session 会话** | 一个人在这个项目里的那条活线 | 一个 worktree、一段对话、一个终端 |
-| **Slot 槽位** | 在这个项目里占用算力的许可 | **同时有几个人**在干活,不是几个任务 |
-| **Credential 凭据** | 一把模型 key,归花它的人所有 | 一次只给一个会话 |
-| **Board 黑板** | 团队要活和交活的地方 | `@项目` 派工、`@某人` 提及 |
-| **Review 批阅** | 已清算、待判断的会话 | 它会不会变成 PR,进而变成一次发布 |
+| **项目**(Cell) | 一个仓库,配好环境并一直开着 | 其他一切都挂在它上面 |
+| **会话**(Session) | 你在这个项目里的工作副本和终端 | 每人一条;你就是在这儿跟 agent 说话 |
+| **团队**(Team) | 一份名单,写清谁能做什么 | 加一次,不用每个项目加一遍 |
+| **黑板**(Board) | 团队的消息流 | 在这儿交代活,也在这儿被告知做完了 |
+| **槽位**(Slot) | 在一个项目里占用机器的许可 | 限的是同时**几个人**在干活,不是几个任务 |
+| **机器池**(PlacementClass) | 管理员**提供**的一类机器 | 这个项目跑在哪台服务器上 |
+| **运行时**(Runtime) | 你在这个项目里的那份私有环境 | 别人看不进来,你也看不进别人的 |
+| **模型 key**(Credential) | 你的 API key | 自己加、自己花,不会被别人稀里糊涂用掉 |
+| **批阅**(Review) | 做完了、等人看的活 | 没经过这一步,不会变成 PR |
 
-## 从属关系
 
+## 一张图
+
+```mermaid
+flowchart TB
+    TEAM["团队<br/>谁能做什么"]
+    subgraph CELL["一个项目 —— 住在一台机器上"]
+        OBJ[("代码<br/>共享,对会话只读")]
+        ANCHOR["常驻的那部分<br/>守着检出和预览"]
+        subgraph UA["Alice 的私有区"]
+            WA["她的会话<br/>她的工作副本 · 她的终端"]
+        end
+        subgraph UB["Bob 的私有区"]
+            WB["他的会话"]
+        end
+        subgraph UT["团队自己的区"]
+            WT["黑板的会话<br/>回答 @项目 的交代"]
+        end
+    end
+    TEAM -.->|"给每个人角色"| CELL
+    WA & WB & WT -.->|"读"| OBJ
+    WA & WB & WT -->|"交活 —— 唯一的出口"| BR["一条分支 → 有人看过 → PR → 发布"]
 ```
-Team ──治理──▶ Cell ──落在──▶ PlacementClass(一台机器;Cell 不能跨节点)
-                │
-                ├── anchor ........ 共享检出 + 基础预览
-                └── Runtime(每人一个,0700)──▶ Session(一个 tmux 窗口)
-                                                  │
-                                    ┌─────────────┼──────────────┐
-                                 worktree       对话           Slot
-                                    └────── 清算 ────────▶ Review ─▶ PR ─▶ 发布
+
+这张图该这样读:**项目才是长期存在的那个东西。** 它里面每个人有自己的一角——
+自己的文件副本、自己的终端,彼此看不见。团队也有一角,黑板上的交代就由它来答。
+东西离开这里只有一条路:交活;而且必须有人看过才算数。
+
+<details>
+<summary>Same picture, in English</summary>
+
+```mermaid
+flowchart TB
+    TEAM["Team<br/>who is allowed to do what"]
+    subgraph CELL["A project — lives on one machine"]
+        OBJ[("The code<br/>shared, read-only to sessions")]
+        ANCHOR["Always-on part<br/>keeps the checkout and the preview"]
+        subgraph UA["Alice's private area"]
+            WA["her session<br/>her worktree · her terminal"]
+        end
+        subgraph UB["Bob's private area"]
+            WB["his session"]
+        end
+        subgraph UT["The team's own area"]
+            WT["the board's session<br/>answers @project asks"]
+        end
+    end
+    TEAM -.->|"gives people their roles"| CELL
+    WA & WB & WT -.->|"read"| OBJ
+    WA & WB & WT -->|"hand it in — the only way out"| BR["a branch → someone reads it → PR → released"]
 ```
+
+</details>
+
 
 ## 五条推论,值得直说
 
@@ -55,3 +97,35 @@ Team ──治理──▶ Cell ──落在──▶ PlacementClass(一台机�
 
 睡和醒走的是同一个字段:没人用时 reconciler 写 `dormant`,有人开终端时控制台写
 `running`。**用一个可读、可覆盖的字段,而不是把"这个该不该醒着"埋进流逝的毫秒里。**
+
+---
+
+<details>
+<summary><b>English</b> — the same model</summary>
+
+| Thing | In one line | Why you'd care |
+|---|---|---|
+| **Project** (Cell) | one repository, set up and kept running | everything else hangs off it |
+| **Session** | your working copy and terminal in a project | one per person; where you talk to the agent |
+| **Team** | a list of people and what they may do | join once, not once per project |
+| **Board** | the team's message stream | ask for work here; hear back here |
+| **Slot** | permission to use the machine in a project | limits how many **people** work there at once |
+| **Machine pool** (PlacementClass) | a class of machine an admin offers | which server a project runs on |
+| **Runtime** | your private environment inside a project | nobody can see into yours, you cannot see into theirs |
+| **Model key** (Credential) | your API key | yours to add and to spend |
+| **Review** | finished work waiting to be read | nothing becomes a PR before this |
+
+The five things worth knowing:
+
+- **One workspace per person, not per task.** The agent tools already juggle
+  conversations; we do not add a second layer. Asking for another thing
+  continues the same conversation.
+- **A session is a terminal you can open and type into.** Not a log.
+- **Idle means asleep, not finished.** After ~15 minutes unused, a session
+  gives back the machine and keeps your files and conversation. Opening it
+  wakes it where you left off.
+- **Handing work in is the only way out.** Nothing reaches a branch by itself.
+- **A project lives on one machine.** More machines means more projects at
+  once, not a bigger single project.
+
+</details>

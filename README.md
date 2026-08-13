@@ -6,11 +6,35 @@
 
 # AgentCell
 
-**A workshop for AI coding agents.** One resident, Kubernetes-backed instance
-per project (a *Cell*); one live working session per person inside it, each
-in a terminal you can open and type into; a live product preview to steer against; and an
-SDLC loop — dispatch → work → settle → review → release — closed within the
-instance.
+**Somewhere for an AI coding agent to actually work.**
+
+You give AgentCell a git repository. It sets up a small private workspace for
+that project and keeps it running — a checkout of the code, a live preview of
+the app, and a separate place for the released version. Then you tell an agent
+what you want, in ordinary words, and you can open a real terminal and watch
+it work. You can type into that terminal too: interrupt it, correct it, ask
+for one more thing.
+
+Nothing the agent writes reaches your main branch on its own. Every piece of
+work lands on its own branch and waits for a person to read it. Only then does
+it become a pull request.
+
+### What using it looks like
+
+1. **Make a project.** Point it at a repo, pick an agent and a model from a
+   list. The workspace comes up in about a minute.
+2. **Ask for something.** Type it on the team board — `@shop make the product
+   cards two columns` — or from the project page.
+3. **Watch, or don't.** The agent answers on the board when it takes the job
+   and again when it finishes. If you want to see what it is doing, open its
+   terminal.
+4. **Read what it did.** The work arrives as a branch with a diff. Approve it
+   and it becomes a pull request; release it and it goes to the production
+   zone.
+
+Nobody needs to know Kubernetes to do any of that. It runs on Kubernetes so
+that projects cannot tread on each other, and so a machine restarting does
+not lose your work.
 
 > **Status: alpha.** The full path is verified on real single-node k3s —
 > auth → reconcile → preview → dispatch → **terminal** → settle → pushed
@@ -57,19 +81,16 @@ instance.
 Everything AgentCell does is one of eight nouns acting on another. Learning
 those, and which one owns which, is most of learning the system.
 
-| Noun | What it is | Owns / bounds |
+| Thing | In one line | Why you'd care |
 |---|---|---|
-| **Team** | a membership list that outlives any one project | default roles in the Cells that name it |
-| **Cell** | one project, resident | a repo checkout, a preview, a production zone, N slots |
-| **Pool** | a class of machine the Cell may run on | which node the whole Cell lives on |
-| **Runtime** | one user's tmux server inside a Cell | that user's `$HOME`, uid, private tree |
-| **Session** | one person's live line of work in a project — one per user per Cell, plus the team's own for board asks | a git worktree, a CLI conversation, a terminal |
-| **DesiredState** | whether a session is *meant* to be awake (`running`/`dormant`) — written by the reconciler when nobody is using it, by the console when somebody opens its terminal | which of the two clocks applies |
-| **Dormant** | the phase of a session that gave back its slot and its runtime and kept its worktree and conversation | costs storage, costs no compute |
-| **Wake** | reclaiming a slot and a runtime and restoring the terminal where it was — never re-running the agent | queues behind the slot gate like any other work |
-| **Slot** | permission to hold compute in a Cell — one per person working there, not one per task | how many people can work in this project at once |
-| **Credential** | a model key, owned by whoever spends it | one Session at a time |
-| **Review** | a settled Session awaiting judgement | whether it becomes a PR, then a Release |
+| **Project** | one repository, set up and kept running | it is the unit everything else hangs off |
+| **Session** | your working copy and your terminal in a project | one per person; it is where you talk to the agent |
+| **Team** | a list of people and what they may do | join once, not once per project |
+| **Board** | the team's message stream | ask for work here, get told here when it is done |
+| **Slot** | permission to use the machine in a project | limits how many **people** work there at once, not how many tasks |
+| **Machine pool** | a class of machine an admin offers | which server a project runs on |
+| **Model key** | your API key | yours to add, yours to spend, never shared by accident |
+| **Review** | finished work waiting to be read | nothing becomes a PR before this |
 
 The relationships that carry the design:
 
@@ -90,50 +111,80 @@ process layer. Nobody attaches to anybody else's terminal.
 
 ```mermaid
 flowchart TB
-    TEAM["Team — who may do what, by default"]
-    subgraph CELL["Cell — one project, one node"]
-        OBJ[("/workspace/repo · knowledge<br/>shared, project-owned")]
-        ANCHOR["anchor — clone · base preview"]
-        subgraph UA["Alice · uid 100000 · 0700"]
-            TA["one tmux server"]
-            WA1["window: session a1"]
-            WA2["window: session a2"]
+    TEAM["Team<br/>who is allowed to do what"]
+    subgraph CELL["A project — lives on one machine"]
+        OBJ[("The code<br/>shared, read-only to sessions")]
+        ANCHOR["Always-on part<br/>keeps the checkout and the preview"]
+        subgraph UA["Alice's private area"]
+            WA["her session<br/>her worktree · her terminal"]
         end
-        subgraph UB["Bob · uid 100001 · 0700"]
-            TB["one tmux server"]
-            WB1["window: session b1"]
+        subgraph UB["Bob's private area"]
+            WB["his session"]
+        end
+        subgraph UT["The team's own area"]
+            WT["the board's session<br/>answers @project asks"]
         end
     end
-    TEAM -.->|default roles| CELL
-    TA --> WA1 & WA2
-    TB --> WB1
-    WA1 & WA2 & WB1 -.->|read| OBJ
-    WA1 -->|settle · the only way out| BR["session/&lt;id&gt; → review → PR → release"]
-    WB1 -->|settle| BR
+    TEAM -.->|"gives people their roles"| CELL
+    WA & WB & WT -.->|"read"| OBJ
+    WA & WB & WT -->|"hand it in — the only way out"| BR["a branch → someone reads it → PR → released"]
 ```
+
+Read it like this: **the project is the thing that lasts.** Inside it, each
+person gets their own corner — their own copy of the files, their own
+terminal — and those corners cannot see into each other. The team gets one
+too, which is what answers questions asked on the board. The only way
+anything leaves is by being handed in, and a person reads it before it counts.
+
+<details>
+<summary>同一张图,中文</summary>
+
+```mermaid
+flowchart TB
+    TEAM["团队<br/>谁能做什么"]
+    subgraph CELL["一个项目 —— 住在一台机器上"]
+        OBJ[("代码<br/>共享,对会话只读")]
+        ANCHOR["常驻的那部分<br/>守着检出和预览"]
+        subgraph UA["Alice 的私有区"]
+            WA["她的会话<br/>她的工作副本 · 她的终端"]
+        end
+        subgraph UB["Bob 的私有区"]
+            WB["他的会话"]
+        end
+        subgraph UT["团队自己的区"]
+            WT["黑板的会话<br/>回答 @项目 的交代"]
+        end
+    end
+    TEAM -.->|"给每个人角色"| CELL
+    WA & WB & WT -.->|"读"| OBJ
+    WA & WB & WT -->|"交活 —— 唯一的出口"| BR["一条分支 → 有人看过 → PR → 发布"]
+```
+
+</details>
 
 Four rules follow from the picture, and they are worth stating plainly.
 
-**One tmux per user, not per session.** The agent CLIs manage conversations
-themselves (Claude Code by an id we choose, Codex by its own), so the
-platform gives them a private `$HOME` to keep that state in and a terminal
-that outlives any single run — and stays out of the way otherwise.
+**One workspace per person, not one per task.** The agent tools already know
+how to keep several conversations going and switch between them. AgentCell
+does not add a second layer of that. You get one working session in a
+project; asking for another thing continues the same conversation, in the
+same terminal, with everything it already knows.
 
-**A Session is a terminal you can open.** Not a log tail: xterm.js attaches
-over a WebSocket to the same tmux window the agent is typing in, and it is
-read-write, so you can interrupt or redirect mid-run. A headless agent prints
-nothing until it finishes, which makes "working" and "hung" look identical
-from outside.
+**You can watch, and you can interrupt.** The terminal in your browser is
+attached to the same session the agent is typing in — not a copy, not a log.
+That matters because an agent working quietly and an agent stuck look
+identical from outside until you can see the screen.
 
-**Idle means asleep, not finished.** A Session nobody is using — no agent
-working, nobody watching — goes **dormant**: it gives back the slot and the
-runtime process, and keeps the worktree and the conversation on the volume.
-Opening its terminal or sending a follow-up wakes it where it was. Sleeping
-and waking are the same mechanism, `spec.desiredState`, written by the
-reconciler in one direction and the console in the other.
+**Idle means asleep, not finished.** If nobody is using a session — no agent
+running, nobody watching — it goes to sleep after about fifteen minutes. It
+gives back the machine it was holding and keeps your files and your
+conversation. Opening its terminal wakes it up where you left it, in a few
+seconds. Going to lunch does not publish your work, and it does not throw it
+away either.
 
-**Settle is the only door to the project layer.** A worktree may live as
-long as its owner wants; nothing reaches a branch without going through it.
+**Handing work in is the only way out.** Your working copy can sit there as
+long as you like. Nothing reaches a branch until you hand it in, and nothing
+reaches production until a person has read it.
 
 Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 

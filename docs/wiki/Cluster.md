@@ -57,3 +57,33 @@ anchor 走。所以:**按最忙的那个项目选机器规格;要更多容量就
 
 **没有实现**,而且不是加个页面能解决的:要另一套 kubeconfig、另一套镜像仓库、
 另一套入口和证书、跨集群的状态回收。这是数量级更大的工程。
+
+---
+
+<details>
+<summary><b>English</b> — one machine is a real deployment</summary>
+
+If you only have one server, nothing here is wasted. A single-node k3s still
+gives you: a separate namespace per project, quotas, self-healing
+reconciliation, volumes and secrets. That is most of what AgentCell uses
+Kubernetes for. Here it is mainly a manager of processes and isolation, not a
+scheduler across machines.
+
+**What one machine cannot give you**, stated plainly: high availability (if
+this box dies, everything dies), and more than one machine pool — so the
+console hides that control entirely until a second pool exists.
+
+**Adding a second machine** is one command on the new box
+(`curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… sh -`), then a label
+and a PlacementClass. The "which machines" control appears by itself once
+there is a real choice.
+
+**What more machines will not fix:** a single project still runs on a single
+machine, because its working volume is ReadWriteOnce. Size for the busiest
+project; add projects for more capacity, not slots.
+
+**Another cluster, or a cloud account:** not built. It needs a second
+kubeconfig, a second registry, a second ingress and certificates, and
+cross-cluster cleanup. That is a much larger piece of work.
+
+</details>

@@ -6,9 +6,26 @@
 
 # AgentCell
 
-**AI 开发员工的车间。** 每个项目一个常驻的、跑在 Kubernetes 上的实例(*Cell*);
-会话是实例内的一次性工位(Slot);自带常驻产品预览供你边看边校准;SDLC 环——
-派工 → 干活 → 清算 → 批阅 → 发布——在实例内闭合。
+**给 AI 开发员工一个真正能干活的地方。**
+
+你把一个 git 仓库交给它。它为这个项目开一间常驻的小工作间:一份代码检出、
+一个能打开看的应用预览、还有一块单独放"已发布版本"的地方。然后你用大白话
+说要做什么,可以**打开一个真的终端看它干**——也可以直接在里面打字:打断它、
+纠正它、再交代一件事。
+
+**agent 写的东西不会自己进你的主干。** 每一段活都落在它自己的分支上,等人看过
+才算数;看过之后才变成一个 PR。
+
+### 用起来是什么样
+
+1. **建一个项目。** 指一个仓库,从列表里挑 agent 和模型。工作间大约一分钟起来。
+2. **交代一件事。** 在团队黑板上打 `@shop 把商品卡片改成两列`,或者从项目页派。
+3. **想看就看。** agent 接单时回你一句,做完再回一句。想知道它在干嘛,就打开它
+   的终端。
+4. **看它做了什么。** 产出是一条带 diff 的分支。批准就变成 PR,发布就进正式区。
+
+**这些都不需要你懂 Kubernetes。** 它跑在 Kubernetes 上,是为了让各个项目互相
+踩不到,也为了机器重启不会把你的活弄丢。
 
 > **状态:alpha。** 完整链路已在真实单节点 k3s 上验证——登录 → 对账 → 预览 →
 > 派工 → **终端** → 清算 → 推分支 → **批阅 → PR** → 发布 → 正式区
@@ -43,19 +60,16 @@
 AgentCell 做的每一件事,都是八个名词之一在作用于另一个。搞清这些名词、以及谁归谁
 管,就学会了这套系统的大半。
 
-| 名词 | 是什么 | 归它管 / 由它界定 |
+| 东西 | 一句话 | 你为什么要在意 |
 |---|---|---|
-| **Team 团队** | 一份比任何单个项目活得更久的成员名单 | 点了它名字的 Cell 里的默认角色 |
-| **Cell 工作区** | 一个项目,常驻 | 一份仓库检出、一个预览、一个正式区、N 个槽位 |
-| **Pool 机器池** | 这个 Cell 可以落在哪一类机器上 | 整个 Cell 住在哪个节点 |
-| **Runtime 运行时** | 一个用户在这个 Cell 里的 tmux 服务 | 该用户的 `$HOME`、uid、私有目录 |
-| **Session 会话** | 一个人在一个项目里的那条活线——每人每工作区一条,黑板的另算团队一条 | 一个 worktree、一段 CLI 对话、一个终端 |
-| **DesiredState 期望状态** | 这条会话「应该」醒着还是睡着(`running`/`dormant`)——没人用时由 reconciler 写,有人开终端时由控制台写 | 决定哪一个时钟生效 |
-| **Dormant 休眠** | 已交回槽位和运行时、保留 worktree 与对话的那个阶段 | 占存储,不占算力 |
-| **Wake 唤醒** | 重新拿槽位和运行时、把终端恢复到原处——绝不重跑 agent | 和其他工作一样要过槽位闸门 |
-| **Slot 槽位** | 一个会话占用算力的许可 | 这个 Cell 的并发 |
-| **Credential 凭据** | 一把模型 key,归花它的人所有 | 一次只给一个会话 |
-| **Review 批阅** | 已清算、待判断的会话 | 它会不会变成 PR,进而变成一次发布 |
+| **项目** | 一个仓库,给它配好环境并一直开着 | 其他一切都挂在它上面 |
+| **会话** | 你在这个项目里的工作副本和终端 | 每人一条,你就是在这儿跟 agent 说话 |
+| **团队** | 一份名单,写清谁能做什么 | 加一次就行,不用每个项目加一遍 |
+| **黑板** | 团队的消息流 | 在这儿交代活,也在这儿被告知做完了 |
+| **槽位** | 在一个项目里占用机器的许可 | 限的是**同时几个人**在干活,不是几个任务 |
+| **机器池** | 管理员提供的一类机器 | 这个项目跑在哪台服务器上 |
+| **模型 key** | 你的 API key | 自己加、自己花,不会稀里糊涂被别人用掉 |
+| **批阅** | 做完了、等人看的活 | 没经过这一步,不会变成 PR |
 
 真正承载设计的是它们之间的关系:
 
@@ -75,45 +89,71 @@ Team ──治理──▶ Cell ──落在──▶ Pool(一台机器;Cell 不
 
 ```mermaid
 flowchart TB
-    TEAM["Team — 默认谁能做什么"]
-    subgraph CELL["Cell — 一个项目,一台机器"]
-        OBJ[("/workspace/repo · knowledge<br/>共享,归项目")]
-        ANCHOR["anchor — 克隆 · 基础预览"]
-        subgraph UA["Alice · uid 100000 · 0700"]
-            TA["一个 tmux 服务"]
-            WA1["window: session a1"]
-            WA2["window: session a2"]
+    TEAM["团队<br/>谁能做什么"]
+    subgraph CELL["一个项目 —— 住在一台机器上"]
+        OBJ[("代码<br/>共享,对会话只读")]
+        ANCHOR["常驻的那部分<br/>守着检出和预览"]
+        subgraph UA["Alice 的私有区"]
+            WA["她的会话<br/>她的工作副本 · 她的终端"]
         end
-        subgraph UB["Bob · uid 100001 · 0700"]
-            TB["一个 tmux 服务"]
-            WB1["window: session b1"]
+        subgraph UB["Bob 的私有区"]
+            WB["他的会话"]
+        end
+        subgraph UT["团队自己的区"]
+            WT["黑板的会话<br/>回答 @项目 的交代"]
         end
     end
-    TEAM -.->|默认角色| CELL
-    TA --> WA1 & WA2
-    TB --> WB1
-    WA1 & WA2 & WB1 -.->|读| OBJ
-    WA1 -->|清算 · 唯一出口| BR["session/&lt;id&gt; → 批阅 → PR → 发布"]
-    WB1 -->|清算| BR
+    TEAM -.->|"给每个人角色"| CELL
+    WA & WB & WT -.->|"读"| OBJ
+    WA & WB & WT -->|"交活 —— 唯一的出口"| BR["一条分支 → 有人看过 → PR → 发布"]
 ```
+
+这张图该这样读:**项目才是长期存在的那个东西。** 它里面每个人有自己的一角——
+自己的文件副本、自己的终端,彼此看不见。团队也有一角,黑板上的交代就由它来答。
+东西离开这里只有一条路:交活;而且必须有人看过才算数。
+
+<details>
+<summary>Same picture, in English</summary>
+
+```mermaid
+flowchart TB
+    TEAM["Team<br/>who is allowed to do what"]
+    subgraph CELL["A project — lives on one machine"]
+        OBJ[("The code<br/>shared, read-only to sessions")]
+        ANCHOR["Always-on part<br/>keeps the checkout and the preview"]
+        subgraph UA["Alice's private area"]
+            WA["her session<br/>her worktree · her terminal"]
+        end
+        subgraph UB["Bob's private area"]
+            WB["his session"]
+        end
+        subgraph UT["The team's own area"]
+            WT["the board's session<br/>answers @project asks"]
+        end
+    end
+    TEAM -.->|"gives people their roles"| CELL
+    WA & WB & WT -.->|"read"| OBJ
+    WA & WB & WT -->|"hand it in — the only way out"| BR["a branch → someone reads it → PR → released"]
+```
+
+</details>
 
 图里推得出四条规则,值得直说。
 
-**一个用户一个 tmux,而不是一个会话一个。** agent CLI 自己管理对话(Claude Code
-用我们指定的 id,Codex 用它自己的),所以平台只负责给它们一个私有 `$HOME` 存这些
-状态、一个比任何单次运行都活得久的终端,其余不插手。
+**一个人一份工作间,而不是一个任务一份。** agent 工具自己就会开好几段对话、
+来回切换,AgentCell 不再叠一层。你在一个项目里有一条工作会话;再交代一件事,
+是接着同一段对话说,在同一个终端里,它已经知道的东西都还在。
 
-**会话是一个你能打开的终端。** 不是日志尾巴:xterm.js 经 WebSocket 接到 agent 正在
-敲字的那个 tmux 窗口,而且可写——能中途插话、打断、改方向。headless 的 agent 在结束
-前什么都不打印,从外面看,"在干活"和"卡死了"完全一样。
+**你能看,也能插手。** 浏览器里的终端接的就是 agent 正在敲字的那个会话——不是
+副本,也不是日志。这件事要紧,是因为"安静地干活"和"卡住了"在外面看起来一模一样,
+除非你能看见那块屏幕。
 
-**空闲是睡着,不是结束。** 没人用的会话——没有 agent 在跑、也没有人在看——会转入
-**休眠**:交回槽位和运行时进程,保留卷上的 worktree 和对话。打开它的终端或者追问
-一句就在原处醒来。睡和醒走的是同一条路 `spec.desiredState`,一个方向由 reconciler
-写,另一个方向由控制台写。
+**空闲是睡着,不是结束。** 没人用的会话——没有 agent 在跑、也没有人在看——大约
+十五分钟后会睡过去。它把占着的机器交回去,把你的文件和对话留着。打开终端,几秒
+就在你离开的地方醒来。**去吃个饭不会把你的活发布出去,也不会把它扔掉。**
 
-**清算是进入项目层的唯一一道门。** worktree 可以由属主决定留多久,但任何东西不经过
-清算都到不了分支上。
+**交活是唯一的出口。** 你的工作副本想放多久放多久;不交活,任何东西都到不了分支上,
+也没有人看过之前到不了正式区。
 
 完整图(控制面、生命周期、git-broker):**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
 

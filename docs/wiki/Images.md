@@ -42,3 +42,28 @@ pod 是 `IfNotPresent`。**重建一个同名 tag,已经拉过的节点会一直
 
 镜像里必须有项目**预览命令用到的东西**。预览命令是按项目原来的镜像写的,换一个
 更瘦的镜像而不看这一点,预览就会只留一句 `executable file not found`。
+
+---
+
+<details>
+<summary><b>English</b> — images on a private network</summary>
+
+If the cluster cannot reach ghcr.io, run a registry inside it before doing
+anything else — otherwise every image change becomes "somebody downloads 2 GB
+and copies it to the node", which is not a deployment procedure.
+
+`kubectl apply -f deploy/registry/registry.yaml`, then tell containerd it may
+use plain HTTP — once per node, because a registry without TLS is refused by
+default. Use a single-line `printf` rather than a heredoc: pasted indentation
+breaks the terminator and the write silently produces nothing.
+
+Push through the kube-api tunnel from a machine that does have internet; no
+ingress and no firewall change needed. `podman push` resumes, so a dropped
+tunnel costs the remaining layers, not the whole image.
+
+**Give every build a new tag.** Pods are `IfNotPresent`, so rebuilding a tag a
+node already pulled leaves that node running the old image with no error
+anywhere. Overwriting a tag is the most common source of "I changed it and
+nothing happened".
+
+</details>

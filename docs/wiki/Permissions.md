@@ -33,3 +33,36 @@
 看不见的项目返回 404,而不是 403。403 等于确认"这个项目存在,而你在外面"——探几次
 就能把一个团队在做什么摸清楚。**只有在你本来就看得见的项目上做不了的动作**,才返回
 403 并说明需要什么角色,这样你才知道该找谁要权限。
+
+---
+
+<details>
+<summary><b>English</b> — permissions</summary>
+
+Three roles: `viewer` sees, `member` also dispatches and reviews,
+`maintainer` also releases and changes settings. **Release is the line that
+matters** — everything else is recoverable; a release is the one action that
+puts code in front of users.
+
+**Teams give defaults; a project can override them in both directions.** An
+entry naming you on the project wins, whether it raises your role or lowers
+it — otherwise "a viewer on this one project" would be unsayable, and that is
+exactly the exception a team needs to have.
+
+**Some boundaries are not role-shaped.** Only a session's owner can open its
+terminal — not even a project maintainer — because the socket lives in that
+person's private area and seeing a project is not the same as holding
+somebody's keyboard. (The team's own board session is the exception: that
+conversation belongs to the team.)
+
+**Machine pools are defined by cluster administrators**, and a project
+maintainer can only choose from the list. This one matters: a maintainer is
+not an administrator, and a taint is an administrator's refusal — reading one
+and writing the matching toleration would be a bypass, not a feature.
+
+**Why 404 and not 403:** a 403 confirms that a project exists and that you are
+outside it, which over a few probes maps out what a team is working on. You
+get 403 only for actions on projects you can already see, and it names the
+role you would need — so you know who to ask.
+
+</details>

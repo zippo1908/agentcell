@@ -35,3 +35,31 @@ Kubernetes 对象不是数据库,**真正的记录是这些工作产出的 git �
 - **不替你挑 runner 和模型**:用项目建立时定下的默认搭配;没定就沿用上一次;都
   没有就直说去项目里派一单。硬编一个厂商等于悄悄拿你的预算花在你没选的地方。
 - **有多把 key 时不猜**,让你去挑。
+
+---
+
+<details>
+<summary><b>English</b> — the board</summary>
+
+The console had a page per noun and nowhere to stand. The board is the team's
+message stream: type `@shop make the product cards two columns` and the agent
+answers there — once when it takes the job, once when it finishes, both with
+a link to the work. `@someone` mentions a person; reading the stream marks it
+read, because a "mark as read" button people forget becomes a badge that lies.
+
+Three decisions worth knowing:
+
+- **Posts live in one object, not one per post.** A post is not something
+  anybody reconciles, and the durable record of what happened is the git
+  history the work produced — not the chat about it. Bounded at 300.
+- **The team's conversation with a project is its own session**, not the
+  asker's. Otherwise the first person to type lends out their private
+  terminal, and the second is answered inside somebody else's session.
+- **An `@` that matches nothing never silently does nothing.** One project,
+  it routes there; several, it says which to name; none, it says so.
+
+It will not pick a model for you: it uses the project's default pairing, or
+the last one used, or it tells you to choose. And with several keys it asks
+rather than guessing whose budget to spend.
+
+</details>

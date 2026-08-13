@@ -41,3 +41,35 @@ xterm.js 经 WebSocket 接到 **agent 正在敲字的那个窗口**,而且**可�
 
 唤醒要重新拿一个槽位。项目满了就得等——**这时终端会把平台给出的真实原因显示
 出来**(比如「等待槽位(2 个都在用)」),而不是转圈到超时。
+
+---
+
+<details>
+<summary><b>English</b> — terminal and dormancy</summary>
+
+**Why a terminal.** A headless agent prints nothing until it is finished, so
+from outside "working" and "stuck" look identical. Your session already runs
+in a terminal for the agent tool's own sake; the browser just attaches to the
+same one — and you can type into it.
+
+Two boundaries: only the session's owner may attach (the team's board session
+excepted, because that conversation is the team's), and the page must be
+same-origin — a terminal is the most valuable thing here to hijack.
+
+**Dormancy.** No agent running and nobody watching for ~15 minutes, and the
+session sleeps: it gives back its slot and its runtime and keeps the working
+copy and the conversation on disk. Opening the terminal or asking one more
+thing wakes it where you left off — **the agent is not re-run**. A session
+nobody returns to is handed in after 7 days: published, not deleted. A week
+of not looking is not consent to throw work away.
+
+**Two clocks, and they are not the same:** `idleSeconds` (default 15 min) is
+how long until it sleeps and gives back compute; `ttlSeconds` (default 7 days)
+is how long a sleeping session is kept before its work is published. One saves
+money, the other publishes.
+
+**Waking can be blocked** — it needs a slot, and a full project has none
+spare. The terminal shows the real reason rather than spinning until it times
+out.
+
+</details>

@@ -52,3 +52,31 @@ helm upgrade ... --set celld.replicas=2 --set previewKeySecret=celld-preview-key
 ```
 
 **最后一行才是唯一能证明前面都对的那一行。**
+
+---
+
+<details>
+<summary><b>English</b> — setting it up</summary>
+
+**Decide first, then run.** Which machine, and is installing on it agreed
+(k3s takes ports 80/443 and writes iptables rules — deciding this on a box
+that already serves something is how an outage starts). Two DNS names: one
+for the console, and **a different registrable domain** for previews, or a
+previewed app can set cookies the console receives. Who your identity
+provider is — without one, everyone is the same person and nothing is
+private. Whose model keys. And whether production runs here or is handed off
+to a pipeline that already owns it.
+
+Then one helm command. If your cluster cannot reach ghcr.io, read Images
+first.
+
+**More than one console replica** needs a shared preview signing key as well —
+otherwise a ticket minted by one replica is refused by the others and
+previews fail intermittently. The chart refuses to render rather than let
+that happen. Killing the leader takes about four seconds to hand over;
+sessions already running are untouched.
+
+**The last line of the checklist is the only one that proves the rest:** one
+real dispatch that reaches the model, and a hand-in that reaches the forge.
+
+</details>

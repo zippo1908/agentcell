@@ -49,3 +49,31 @@ kubectl -n cell-<name> exec runtime-<uid> -- cat /workspace/users/<uid>/state/<i
 
 - 浏览器访问是 303 跳登录页;**API 才返回 401**。
 - 看不见某个项目通常是**权限**,不是 bug:不属于你的返回 404 而不是 403,这是故意的。
+
+---
+
+<details>
+<summary><b>English</b> — troubleshooting</summary>
+
+**First question: whose state is this?** Most hard-to-find problems here are
+"the platform already knows why, but did not put it in front of you".
+
+- **Project stuck Pending** — read `status.schedulingMessage`. It is the
+  scheduler's own words, usually "no machine matches" or "no room".
+- **Terminal will not open** — is the session asleep (the button then says
+  "wake and open")? Is the wake waiting for a slot? Only the owner can open a
+  personal session; anything else answers 404.
+- **Sessions sleep too fast** — idle means no agent running *and* nobody
+  watching. Check `cell-runtime window-status <id>`.
+- **The agent says it is a different model, or keeps reconnecting** — its
+  provider was not applied. Codex reads its endpoint from a config file, not
+  from `OPENAI_BASE_URL`; the platform writes one into the session's own
+  `CODEX_HOME`. The first log line prints the model and provider it actually
+  used.
+- **An image change did nothing** — see Images: `IfNotPresent` plus an
+  overwritten tag means the node keeps the old one, silently.
+- **401 from the console** — browsers get a redirect to the login page; only
+  the API returns 401. Not seeing a project is usually permissions, not a
+  bug: what is not yours answers 404 on purpose.
+
+</details>
