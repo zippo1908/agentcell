@@ -38,6 +38,29 @@ function ResidentControls({ session }: { session: Session }) {
 
   if (!state?.resident) return null
 
+  // Asleep: the only thing to offer is waking it, and opening the terminal
+  // is what wakes it. Saying "休眠中" and nothing else would be a dead end.
+  if (state.dormant) {
+    return (
+      <div style={{ marginTop: 10, borderLeft: '2px solid var(--border)', paddingLeft: 12 }}>
+        <div className="row tight" style={{ marginTop: 0 }}>
+          <Badge tone="gray">休眠中</Badge>
+          <button className="ghost small" onClick={() => setShowTerm(true)}>
+            唤醒并看终端
+          </button>
+        </div>
+        <p className="hint" style={{ marginTop: 6 }}>
+          没占算力,worktree 和对话都还在。唤醒要先拿到一个槽位——工作区满了就得先结束别的一单。
+        </p>
+        {showTerm && (
+          <div style={{ marginTop: 8 }}>
+            <Terminal session={session.name} />
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div style={{ marginTop: 10, borderLeft: '2px solid var(--border)', paddingLeft: 12 }}>
       <div className="row tight" style={{ marginTop: 0 }}>
@@ -137,7 +160,13 @@ export function SessionList({ sessions, cell }: { sessions: Session[]; cell: str
             )}
           </div>
           {s.message && <div className="hint">{s.message}</div>}
-          {(s.phase === 'Running' || s.phase === 'Queued') && <ResidentControls session={s} />}
+          {/* Dormant belongs here too. Leaving it out meant that any session
+              you came back to later — which, after fifteen idle minutes, is
+              all of them — showed no controls at all, so its terminal was
+              unreachable from the UI. */}
+          {(s.phase === 'Running' || s.phase === 'Queued' || s.phase === 'Dormant') && (
+            <ResidentControls session={s} />
+          )}
         </div>
       ))}
 

@@ -517,6 +517,21 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		if err == nil && !alive {
 			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
 		}
+		// A follow-up written while the session was asleep is delivered now
+		// that its terminal is back. Same path whether it was awake or not,
+		// so the two cannot drift into behaving differently.
+		if sess.Spec.PendingTask != "" && alive {
+			if err := r.deliverPending(ctx, sess, ns, id); err != nil {
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			now := metav1.Now()
+			sess.Status.LastActivity = &now
+			sess.Status.BoardNotified = false
+			if err := r.Status().Update(ctx, sess); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: pollInterval}, nil
+		}
 		// The board asked for this, so the board hears when it is done —
 		// at the moment the AGENT finishes, not when the session settles.
 		//
@@ -961,4 +976,30 @@ func (r *SessionReconciler) appendBoardPost(ctx context.Context, sess *acv1.Sess
 		b.Append(post)
 		return r.Update(ctx, &b)
 	})
+}
+
+// deliverPending types a queued follow-up into the session's terminal and
+// clears it. Clearing FIRST would risk losing the instruction if the exec
+// failed; clearing after means a retry can repeat it, which is the milder of
+// the two failures — a duplicated sentence rather than a lost one.
+func (r *SessionReconciler) deliverPending(ctx context.Context, sess *acv1.Session, ns, id string) error {
+	if r.Exec == nil {
+		return fmt.Errorf("no exec channel")
+	}
+	argv, err := access.ResumeArgvFor(sess.Spec.Runner, sess.Spec.PendingTask, sess.Status.RunnerSessionID)
+	if err != nil {
+		// A runner that cannot resume starts fresh in the same worktree,
+		// which is honest and visible — the alternative is silently dropping
+		// what somebody asked for.
+		argv, err = access.HeadlessArgv(sess.Spec.Runner, sess.Spec.PendingTask)
+		if err != nil {
+			return err
+		}
+	}
+	cmd := append([]string{runtimeapi.RuntimeBin, "tell", id}, argv...)
+	if _, err := r.Exec(ctx, ns, sess.Status.PodName, cmd, nil); err != nil {
+		return err
+	}
+	sess.Spec.PendingTask = ""
+	return r.Update(ctx, sess)
 }

@@ -75,6 +75,9 @@ export interface NodePool {
 export type SessionPhase =
   | 'Queued'
   | 'Running'
+  /** Asleep: gave back its slot and runtime, kept its worktree and its
+      conversation. Opening the terminal or a follow-up wakes it. */
+  | 'Dormant'
   | 'Settling'
   | 'Settled'
   | 'Discarded'
@@ -178,6 +181,11 @@ export interface SessionState {
   working: boolean
   exitCode?: string
   attach: string
+  /** Asleep: no runtime, no window. Opening the terminal wakes it. */
+  dormant?: boolean
+  phase?: string
+  /** The control plane's own words — why waking has not finished. */
+  message?: string
 }
 
 /** The principal this console is acting as. `shared` means a static token:

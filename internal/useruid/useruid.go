@@ -137,11 +137,18 @@ func (a *Allocator) attempt(ctx context.Context, userID string) (int64, error) {
 	return next, nil
 }
 
-// validate keeps the key space to what identity.Principal.ID produces, so a
-// crafted user id cannot collide with the counter key or forge another
-// user's entry.
+// validate keeps the key space to the two prefixes the platform issues, so a
+// crafted id cannot collide with the counter key or forge somebody's entry.
+//
+// "u-" is a person. "t-" is a TEAM: a board's conversation with a project is
+// the team's, not the asker's, so it needs a uid of its own — its worktree
+// and tmux socket must be separate from every individual's, exactly as one
+// person's are separate from another's.
 func validate(userID string) error {
-	if !strings.HasPrefix(userID, "u-") || len(userID) > 63 {
+	if !strings.HasPrefix(userID, "u-") && !strings.HasPrefix(userID, "t-") {
+		return fmt.Errorf("id %q is not in the expected form", userID)
+	}
+	if len(userID) > 63 {
 		return fmt.Errorf("user id %q is not in the expected form", userID)
 	}
 	for _, r := range userID {

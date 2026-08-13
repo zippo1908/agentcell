@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -30,10 +31,41 @@ func (h *Handler) ownedSession(r *http.Request, name string) (*acv1.Session, err
 		types.NamespacedName{Namespace: h.Namespace, Name: name}, &sess); err != nil {
 		return nil, errNotFound
 	}
-	if !identity.FromContext(r.Context()).Owns(sess.Spec.OwnerUserID) {
+	if !h.maySession(r, &sess) {
 		return nil, errNotFound
 	}
 	return &sess, nil
+}
+
+// TeamOwnerPrefix marks a session that belongs to a TEAM rather than to one
+// person: the conversation a board holds with a project.
+//
+// A board ask must not land in the asker's own terminal. The board is the
+// team's place, its answers are the team's to read, and somebody who asks a
+// question there is not thereby handing over their private session — nor
+// borrowing it from whoever asked last. So a board conversation is its own
+// session, owned by the team, with its own worktree and its own uid.
+const TeamOwnerPrefix = "t-"
+
+// maySession decides who may drive a session's terminal and follow-ups.
+//
+// A personal session: its owner, nobody else — the tmux socket lives in that
+// user's private tree and a Cell maintainer does not get somebody's keyboard.
+// A team session: any member of that team, because the conversation is
+// theirs collectively and a team whose shared agent only one person can talk
+// to is not shared.
+func (h *Handler) maySession(r *http.Request, sess *acv1.Session) bool {
+	p := identity.FromContext(r.Context())
+	owner := sess.Spec.OwnerUserID
+	if p.Owns(owner) {
+		return true
+	}
+	if team, ok := strings.CutPrefix(owner, TeamOwnerPrefix); ok {
+		if t := h.teamByName(r.Context(), team); t != nil {
+			return teamRoleOf(p, t) != ""
+		}
+	}
+	return false
 }
 
 // visible reports whether a principal may see a Session at all.

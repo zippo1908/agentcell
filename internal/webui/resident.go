@@ -39,7 +39,16 @@ func (h *Handler) execInPod(ctx context.Context, ns, pod string, argv []string) 
 }
 
 type residentState struct {
-	Resident bool   `json:"resident"`
+	Resident bool `json:"resident"`
+	// Dormant means the session is asleep: no runtime, no window, nothing to
+	// exec. Opening its terminal wakes it.
+	Dormant bool `json:"dormant,omitempty"`
+	// Phase and Message are the control plane's own words. They exist here
+	// because waking can be BLOCKED — most often on a slot — and the reason
+	// is already known and written down. A terminal that spins and then says
+	// "disconnected" turns a knowable answer into a mystery.
+	Phase    string `json:"phase,omitempty"`
+	Message  string `json:"message,omitempty"`
 	Live     bool   `json:"live"`               // the tmux window still exists
 	Working  bool   `json:"working"`            // the agent has not finished
 	ExitCode string `json:"exitCode,omitempty"` // once it has
@@ -62,8 +71,20 @@ func (h *Handler) sessionState(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = ids.SessionName(id)
 	}
+	// A dormant session has no runtime to exec into, so asking one is a
+	// timeout, not an answer — and an answer of "not live" would hide the
+	// very controls that wake it. Dormancy is a state to REPORT, not a
+	// failure to observe.
+	if sess.Status.Phase == acv1.SessionDormant {
+		writeJSON(w, 200, residentState{
+			Resident: true, Dormant: true,
+			Phase: string(sess.Status.Phase), Message: sess.Status.Message,
+		})
+		return
+	}
 	st := residentState{
 		Resident: true,
+		Phase:    string(sess.Status.Phase), Message: sess.Status.Message,
 		// cell-runtime derives the socket and window inside the pod, so the
 		// command works as printed and reveals no private paths.
 		Attach: fmt.Sprintf("kubectl -n %s exec -it %s -- %s attach %s", ns, host, runtimeapi.RuntimeBin, id),

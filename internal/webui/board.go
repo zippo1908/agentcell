@@ -291,6 +291,25 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		return
 	}
 
+	// Same rule as the Cell page: one live session per person per project.
+	// A board ask continues the conversation they already have there.
+	// The board's conversation with a project belongs to the TEAM, not to
+	// whoever happened to ask. Otherwise the first person to type would lend
+	// out their private terminal, and the second would be answered inside
+	// somebody else's session.
+	owner := TeamOwnerPrefix + team
+	if live, err := liveSessionFor(ctx, h.Client, h.Namespace, cell, owner); err == nil && live != nil {
+		if err := h.queueFollowUp(ctx, live, task); err != nil {
+			h.systemPost(ctx, team, "接不上你在 "+cell+" 的会话:"+err.Error(), cell)
+			return
+		}
+		ack := acv1.Post{
+			Kind: acv1.PostAgent, Author: cell, Cell: cell, Session: live.Name,
+			Body: "接着你在 " + cell + " 的会话说:" + task,
+		}
+		_ = h.appendPost(ctx, team, &ack)
+		return
+	}
 	sess := &acv1.Session{ObjectMeta: metav1.ObjectMeta{
 		Namespace: h.Namespace, Name: ids.SessionName(ids.NewSessionID()),
 	}}
@@ -303,7 +322,7 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 	}
 	sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model = runner, provider, model
 	sess.Spec.CredentialSecret = cred
-	sess.Spec.OwnerUserID = p.ID()
+	sess.Spec.OwnerUserID = owner
 	sess.Spec.Board = team
 	if err := h.Client.Create(ctx, sess); err != nil {
 		h.systemPost(ctx, team, "派不出去:"+err.Error(), cell)

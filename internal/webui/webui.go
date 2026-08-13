@@ -357,7 +357,7 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message, HandoffMessage: c.Status.HandoffMessage,
 		Access: string(effectiveAccess(c)), Members: c.Spec.Members,
-		Node:   c.Status.Node, SchedulingMessage: c.Status.SchedulingMessage,
+		Node: c.Status.Node, SchedulingMessage: c.Status.SchedulingMessage,
 	}
 	for k, val := range c.Spec.Placement.NodeSelector {
 		v.Pool = k + "=" + val
@@ -519,6 +519,23 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	// A caller may only spend a model credential it owns.
 	if err := h.checkCredentialOwnership(r, req.CredentialSecret); err != nil {
 		writeErr(w, 404, err)
+		return
+	}
+	// One live session per person per project. A second ask continues the
+	// conversation instead of opening a rival one — the CLI is already good
+	// at holding several conversations, and a platform-level copy of that
+	// only bought a way to lock somebody out of their own work.
+	p := identity.FromContext(r.Context())
+	if live, err := liveSessionFor(r.Context(), h.Client, h.Namespace, cellName, p.ID()); err == nil && live != nil {
+		if err := h.queueFollowUp(r.Context(), live, req.Task); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"session":   live.Name,
+			"continued": true,
+			"message":   "接着你在这个工作区的会话说的——不是新开一条。",
+		})
 		return
 	}
 	id := ids.NewSessionID()

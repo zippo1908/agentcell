@@ -114,7 +114,14 @@ type CellSpec struct {
 	Access AccessMode `json:"access,omitempty"`
 	// Members grants roles on this Cell. Ignored while Access is open.
 	Members []Member `json:"members,omitempty"`
-	// MaxSessions is the slot count (instance concurrency). Defaults to 2.
+	// MaxSessions bounds how many PEOPLE can be working in this Cell at
+	// once — each of them has exactly one live session here, so a slot is a
+	// person, not a task. Defaults to 2.
+	//
+	// It used to bound sessions, which let one person fill a Cell with their
+	// own work and then be unable to reopen the oldest of it. The project is
+	// the atom; a second session for the same person was a copy of something
+	// the agent CLIs already do better.
 	MaxSessions int32 `json:"maxSessions,omitempty"`
 	// SessionResources is the per-slot budget. Defaults to 1 CPU / 2Gi.
 	SessionResources ResourceBudget `json:"sessionResources,omitempty"`

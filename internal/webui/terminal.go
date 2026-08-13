@@ -17,7 +17,6 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
-	"github.com/zippo1908/agentcell/internal/identity"
 	"github.com/zippo1908/agentcell/pkg/ids"
 	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
@@ -65,10 +64,11 @@ func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, errNotFound)
 		return
 	}
-	p := identity.FromContext(r.Context())
 	// Ownership, not Cell membership. See the note above: this hands over a
-	// keyboard in somebody's private runtime.
-	if !p.Owns(sess.Spec.OwnerUserID) {
+	// keyboard in somebody's private runtime. The one exception is a TEAM
+	// session — the board's conversation with a project — which any member
+	// of that team may drive, because it is theirs collectively.
+	if !h.maySession(r, &sess) {
 		writeErr(w, 404, errNotFound)
 		return
 	}

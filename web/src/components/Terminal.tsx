@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal as Xterm } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
+import { api } from '../api/client'
 
 /**
  * The agent's actual terminal, in the browser.
@@ -47,6 +48,7 @@ export function Terminal({ session }: { session: string }) {
     // normal path rather than error handling.
     let closed = false
     let attempt = 0
+    let lastReason = ''
     let ws: WebSocket | undefined
     const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m))
     const sendSize = () => {
@@ -71,22 +73,40 @@ export function Terminal({ session }: { session: string }) {
       }
       ws.onclose = () => {
         if (closed) return
-        // Never opened: the session is almost certainly waking. Keep trying
-        // for a while, then say so — silently retrying forever would be its
-        // own kind of blank screen.
-        if (attempt < 12) {
-          attempt++
-          if (attempt === 1) {
-            setState('connecting')
-            term.write('\r\n\x1b[90m—— 会话在休眠,正在唤醒 ——\x1b[0m\r\n')
-          }
-          setTimeout(connect, 2500)
-          return
+        // Never opened means the session is waking — and waking can be
+        // BLOCKED, most often because every slot in the Cell is taken. The
+        // control plane already knows and has written it down, so ask,
+        // rather than spinning on a generic message and then declaring a
+        // "disconnection" that explains nothing.
+        if (attempt === 0) {
+          setState('connecting')
+          term.write('\r\n\x1b[90m—— 会话在休眠,正在唤醒 ——\x1b[0m\r\n')
         }
-        setState('closed')
-        // Say so in the terminal itself. A window that simply stops updating
-        // reads exactly like an agent that is thinking hard.
-        term.write('\r\n\x1b[90m—— 连接已断开 ——\x1b[0m\r\n')
+        attempt++
+        api
+          .sessionState(session)
+          .then((st) => {
+            if (closed) return
+            // Report a NEW reason as it appears, so "waiting for a slot"
+            // shows up the moment it becomes the answer.
+            if (st.message && st.message !== lastReason) {
+              lastReason = st.message
+              term.write(`\x1b[90m${st.message}\x1b[0m\r\n`)
+            }
+            // Keep waiting as long as the platform says it is coming. A
+            // wake blocked on a slot can take as long as somebody else's
+            // work does, and timing out would just hide that.
+            setTimeout(connect, 3000)
+          })
+          .catch(() => {
+            if (closed) return
+            if (attempt < 12) {
+              setTimeout(connect, 3000)
+              return
+            }
+            setState('closed')
+            term.write('\r\n\x1b[90m—— 连接已断开 ——\x1b[0m\r\n')
+          })
       }
       ws.onerror = () => {
         /* onclose follows, and it owns the retry */

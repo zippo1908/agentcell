@@ -112,6 +112,16 @@ spec:
                 x-kubernetes-validations:
                 - message: ownerUserID is immutable once set
                   rule: oldSelf == '' || self == oldSelf
+              pendingTask:
+                description: |-
+                  PendingTask is a follow-up waiting to be typed into this session's
+                  terminal.
+
+                  It exists because a session may be ASLEEP when the next instruction
+                  arrives, and the honest options then are to lose it, to block the
+                  caller while a pod is scheduled, or to write it down and deliver it on
+                  waking. Only the third is both quick and lossless.
+                type: string
               provider:
                 description: Provider is a name from the provider registry (e.g. aliyun-bailian).
                 type: string
