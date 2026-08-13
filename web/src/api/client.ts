@@ -3,6 +3,7 @@ import type {
   CellDetail,
   Diff,
   DispatchInput,
+  Credential,
   Me,
   Meta,
   SessionState,
@@ -46,6 +47,15 @@ export const api = {
 
   /** Who am I acting as — and is this a shared principal? */
   me: () => req<Me>('/api/me'),
+
+  credentials: () => req<Credential[]>('/api/credentials'),
+  putCredential: (name: string, key: string) =>
+    req<{ name: string; hint: string }>(`/api/credentials/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ key }),
+    }),
+  deleteCredential: (name: string) =>
+    req<{ ok: string }>(`/api/credentials/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   cells: () => req<Cell[]>('/api/cells'),
 
   /** Onboard a project from the console. */

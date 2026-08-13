@@ -5,9 +5,13 @@
 # nothing in AgentCell is Casdoor-specific.
 #
 # This manifest is a STARTING POINT, not a production deployment. Before
-# real use: give Casdoor an external database (the default is a file-backed
-# SQLite that dies with the pod), terminate TLS in front of it, and replace
-# the built-in admin password.
+# real use: give Casdoor a real database, terminate TLS in front of it, and
+# replace the built-in admin password.
+#
+# It runs on SQLite here, on a PVC. Casdoor's own default is MySQL on
+# 172.17.0.1 — a docker-bridge address that does not exist in Kubernetes, so
+# the pod crash-loops with "connection refused" before it ever logs
+# anything useful. The driver and data source below are what make it start.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -59,8 +63,20 @@ spec:
           # Bitnami repackage (see THIRD_PARTY.md).
           image: casbin/casdoor:v1.885.0
           imagePullPolicy: IfNotPresent
-          args: ["--createDatabase=true"]
+          # NOT --createDatabase: on SQLite that issues CREATE DATABASE,
+          # which SQLite does not have, and the pod panics with a syntax
+          # error that never mentions the flag.
+          args: []
           env:
+            # SQLite on the PVC. Casdoor reads these from conf/app.conf by
+            # default; the env forms override them without baking a config
+            # file into the image.
+            - name: driverName
+              value: sqlite
+            - name: dataSourceName
+              value: file:/data/casdoor.db?cache=shared
+            - name: dbName
+              value: casdoor
             - name: RUNNING_IN_DOCKER
               value: "true"
             - name: httpport

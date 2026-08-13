@@ -13,6 +13,7 @@ const icon = (d: string) => (
 const IconHome = icon('M3 11l9-8 9 8|M5 10v10h14V10')
 const IconCells = icon('M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z')
 const IconReview = icon('M9 11l3 3 8-8|M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11')
+const IconKey = icon('M15 7a4 4 0 1 1-3.9 5H7v3H4v-3l3.1-3H11a4 4 0 0 1 4-4z')
 const IconCaps = icon('M12 3l8 4.5v9L12 21l-8-4.5v-9z|M12 12l8-4.5|M12 12v9|M12 12L4 7.5')
 
 /**
@@ -57,6 +58,9 @@ export function Shell() {
           </NavLink>
           <NavLink to="/capabilities" className={link}>
             {IconCaps} 能力
+          </NavLink>
+          <NavLink to="/credentials" className={link}>
+            {IconKey} 我的凭据
           </NavLink>
         </nav>
         <span className="spacer" />
