@@ -143,3 +143,12 @@ export interface Me {
   kind: string
   shared: boolean
 }
+
+/** A model key you own. The key itself is never returned — `hint` is its
+ * last four characters, enough to tell two keys apart. */
+export interface Credential {
+  name: string
+  owner: string
+  hint: string
+  created: string
+}
