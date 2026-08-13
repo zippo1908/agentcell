@@ -44,6 +44,29 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:${{ steps.v.outputs.tag }}
             ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:latest
 
+      # A denied push here is almost always one specific, fixable thing.
+      - name: Explain a permission_denied
+        if: failure()
+        run: |
+          cat <<'MSG'
+          ────────────────────────────────────────────────────────────────
+          If this failed with `denied: permission_denied: write_package`:
+
+          the container packages are USER-scoped and not linked to this
+          repository, so GITHUB_TOKEN cannot write to them even though the
+          owner is the same account. There is no REST API for this.
+
+          Fix once, in the UI, for each of celld / git-broker / devbox-e2e:
+            Package -> Package settings -> Manage Actions access
+              -> Add repository -> agentcell -> Write
+
+          Or delete the package once; the next release run recreates it and
+          GitHub links it automatically.
+
+          Tracking: https://github.com/zippo1908/agentcell/issues/16
+          ────────────────────────────────────────────────────────────────
+          MSG
+
   chart:
     runs-on: ubuntu-latest
     needs: images

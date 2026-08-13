@@ -8,7 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -41,6 +44,7 @@ type ReleaseEvent struct {
 const (
 	signatureHeader = "X-AgentCell-Signature"
 	eventHeader     = "X-AgentCell-Event"
+	deliveryHeader  = "X-AgentCell-Release"
 	handoffTimeout  = 10 * time.Second
 )
 
@@ -80,6 +84,9 @@ func (r *CellReconciler) notifyExternal(ctx context.Context, cell *acv1.Cell) er
 	mac := hmac.New(sha256.New, key)
 	mac.Write(body)
 
+	if err := checkWebhookTarget(w.URL); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -87,6 +94,11 @@ func (r *CellReconciler) notifyExternal(ctx context.Context, cell *acv1.Cell) er
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(eventHeader, "release")
 	req.Header.Set(signatureHeader, "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	// Delivery is at-least-once: a response that never arrives is retried on
+	// the next reconcile, and the receiver cannot tell that from a lost
+	// request. The release id is the idempotency key, and it is also a
+	// header so a receiver can dedupe without parsing the body.
+	req.Header.Set(deliveryHeader, cell.Spec.Production.ReleaseID)
 
 	client := &http.Client{Timeout: handoffTimeout}
 	resp, err := client.Do(req)
@@ -109,4 +121,53 @@ func prodRef(cell *acv1.Cell) string {
 		return cell.Spec.Production.Ref
 	}
 	return cell.Spec.Repo.Branch
+}
+
+// checkWebhookTarget refuses to make the control plane a request forgery
+// tool.
+//
+// celld reaches this URL with the cluster's network position — it can talk
+// to the apiserver, to other namespaces, and on a cloud node to the instance
+// metadata service. A webhook target is configuration, so anyone who can
+// edit a Cell could otherwise aim the control plane at 169.254.169.254 and
+// read the node's credentials out of a "deploy failed" message.
+//
+// So: only http(s), and never a loopback, link-local or otherwise internal
+// address. Operators whose deployer genuinely lives inside the cluster set
+// AGENTCELL_WEBHOOK_ALLOW_INTERNAL, which is a decision they take
+// deliberately rather than one the default makes for them.
+func checkWebhookTarget(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("webhook url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("webhook url must be http or https, got %q", u.Scheme)
+	}
+	if os.Getenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL") == "1" {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("webhook url has no host")
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		// A name that does not resolve cannot be checked, and sending
+		// anyway would be trusting DNS to be honest later.
+		return fmt.Errorf("webhook host %q does not resolve: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isInternal(ip) {
+			return fmt.Errorf("webhook host %q resolves to the internal address %s; "+
+				"set AGENTCELL_WEBHOOK_ALLOW_INTERNAL=1 if that is deliberate", host, ip)
+		}
+	}
+	return nil
+}
+
+// isInternal covers the addresses a request forgery would actually aim at.
+func isInternal(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsInterfaceLocalMulticast()
 }

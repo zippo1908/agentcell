@@ -89,6 +89,17 @@ func budget(b acv1.ResourceBudget, reqCPU, reqMem, limCPU, limMem string) (corev
 // admission — a pod that would exceed it is refused with a reason, which is
 // far easier to act on than a node that quietly starts OOM-killing.
 //
+// What it does NOT do, said here because the arithmetic invites the opposite
+// reading: it does not reserve a slot's budget FOR a resident session. A
+// resident session is a tmux window inside its owner's runtime, so it is
+// bounded by that pod's limits and shares them with every other window the
+// user has open. Kubernetes reserves per POD, and a window is not a pod.
+// Per-session reservation would need a pod per session — which is exactly
+// what sharing a runtime traded away (ADR-0010).
+//
+// So the quota bounds the Cell, and the slot lease bounds concurrency. What
+// nothing bounds is how one user's two windows divide their runtime.
+//
 // It caps REQUESTS, not limits, and that distinction was learned the hard
 // way on a cluster: a limits quota sums every pod's ceiling, so N users each
 // with a runtime allowed to burst to the whole Cell exceeded it before any

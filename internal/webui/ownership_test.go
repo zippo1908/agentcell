@@ -323,3 +323,41 @@ func TestCreateCellValidatesAndRecordsItsCreator(t *testing.T) {
 		}
 	})
 }
+
+// Accepting a field and silently dropping it is the worst of both: the
+// caller believes they set a deadline, and the session outlives it by hours.
+// Every dispatch field must reach the spec.
+func TestDispatchDoesNotDropFields(t *testing.T) {
+	c, h := ownedFixture(t)
+	body := `{"task":"t","runner":"claude","provider":"anthropic","credentialSecret":"",
+	          "resident":true,"followPreview":true,"ttlSeconds":7200,"model":"m"}`
+	req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells/shop/dispatch", strings.NewReader(body)), alice)
+	req.SetPathValue("cell", "shop")
+	rec := httptest.NewRecorder()
+	h.dispatch(rec, req)
+	if rec.Code != 201 {
+		t.Fatalf("dispatch = %d: %s", rec.Code, rec.Body)
+	}
+	var list acv1.SessionList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatal(err)
+	}
+	got := list.Items[0].Spec
+	for _, tc := range []struct {
+		field string
+		ok    bool
+	}{
+		{"task", got.Task == "t"},
+		{"runner", got.Runner == "claude"},
+		{"provider", got.Provider == "anthropic"},
+		{"model", got.Model == "m"},
+		{"resident", got.Resident},
+		{"followPreview", got.FollowPreview},
+		{"ttlSeconds", got.TTLSeconds == 7200},
+		{"ownerUserID", got.OwnerUserID == alice.ID()},
+	} {
+		if !tc.ok {
+			t.Errorf("%s was accepted by the API and never reached the spec", tc.field)
+		}
+	}
+}

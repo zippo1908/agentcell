@@ -104,7 +104,7 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Terminal attach in the browser (tmux over WebSocket) — `kubectl exec … cell-runtime attach <id>` works today | ⬜ designed (M5) |
 | **Git isolation without a git proxy**: per-user repositories over a shared read-only base — an unpublished commit never reaches the shared object store | ✅ tested ([Run 8](docs/E2E_RESULTS.md), [ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
 | **Production elsewhere**: a Cell runs its own isolated production zone, or hands the release to a system that owns running it (signed webhook) | ✅ tested |
-| Capacity is enforced: every workload declares requests/limits, a ResourceQuota caps each Cell | ✅ tested ([Run 8](docs/E2E_RESULTS.md)) |
+| Capacity: every workload declares requests/limits and a ResourceQuota caps each Cell. Note a resident session is a tmux window, so it shares its owner's runtime budget — Kubernetes reserves per pod, and a window is not a pod | ✅ tested ([Run 8](docs/E2E_RESULTS.md)) |
 | Resume a conversation after its runtime pod is replaced (the window is restored; re-attaching it to the CLI conversation is not wired) | ⬜ designed |
 | Per-user NetworkPolicy · agent-sandbox substrate · multi-node RWX | ⬜ designed |
 
