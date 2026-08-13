@@ -1,0 +1,32 @@
+# A smaller default devbox.
+#
+# The full image is ~2 GB, most of it a Debian userland the agents never
+# touch — and on a slow internal link that is an hour of waiting before
+# anyone can try the product. This trades the apt toolchain for alpine and
+# keeps exactly the contract the platform requires:
+#   /agentcell/cell-runtime, git, tmux, and the agent CLIs.
+#
+# Projects needing a real toolchain should build their own from
+# Containerfile instead; this one is for getting a team started.
+FROM docker.io/library/node:22-alpine
+
+RUN apk add --no-cache git tmux ripgrep jq ca-certificates libstdc++ \
+    && npm install -g --omit=dev @anthropic-ai/claude-code @openai/codex \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /tmp/*
+
+# busybox-extras carries the httpd applet. Alpine's base busybox does not,
+# and a Cell's preview command is written against whatever the image has —
+# so without this, swapping a project onto this image silently breaks its
+# preview, which is exactly the kind of failure an image change must not
+# cause. Kept as its own layer so it can be added without re-uploading the
+# npm layer above.
+RUN apk add --no-cache busybox-extras
+
+COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime
+RUN chmod 755 /agentcell/cell-runtime
+
+# The platform renders every pod with runAsNonRoot; the node image ships
+# user "node" (uid 1000). Declared here so the image is safe standalone too.
+USER node
+WORKDIR /workspace

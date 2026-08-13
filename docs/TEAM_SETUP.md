@@ -35,7 +35,44 @@ Cells to add capacity — not slots.
 
 ### 2. Images the node can pull
 
-The packages are private, so create a pull secret and point the chart at it:
+**If the cluster cannot reach ghcr.io — or reaches it slowly — run a registry
+inside it.** This is the normal case on an internal network, and it is worth
+doing before anything else: without it, every image change becomes a manual
+transfer, and "somebody downloads a 2 GB tarball and copies it to the node"
+is not a deployment procedure.
+
+```sh
+kubectl apply -f deploy/registry/registry.yaml     # registry:2, NodePort 30500
+```
+
+Then tell containerd it may talk to it over plain HTTP — **once, on each
+node**, because a registry without TLS is refused by default:
+
+```sh
+printf 'mirrors:\n  "NODE_IP:30500":\n    endpoint:\n      - "http://NODE_IP:30500"\n' \
+  > /etc/rancher/k3s/registries.yaml
+systemctl restart k3s
+```
+
+Push images from a machine that *can* reach the internet, through the
+kube-api tunnel — no extra ingress, no firewall change:
+
+```sh
+kubectl -n agentcell-system port-forward svc/registry 5000:5000 &
+podman push --tls-verify=false 127.0.0.1:5000/devbox-slim:<tag>
+```
+
+`podman push` is resumable, so a dropped tunnel costs the remaining layers,
+not the whole image.
+
+**Give each build a new tag.** Pods are rendered with `IfNotPresent`, so
+rebuilding a tag the node has already pulled leaves that node running the old
+image indefinitely — with no error anywhere to say so. Overwriting a tag is
+the single most common way to spend an afternoon debugging a change that did
+deploy.
+
+If the cluster *can* reach ghcr.io, the packages are private, so create a
+pull secret and point the chart at it instead:
 
 ```sh
 kubectl -n agentcell-system create secret docker-registry regcred \
@@ -61,8 +98,20 @@ discovering the wait during a demo:
 crictl pull ghcr.io/zippo1908/devbox:v0.1.0-alpha.5   # or: nerdctl / docker pull
 ```
 
+On a slow internal link that 2 GB is roughly an hour before anyone can try
+the product, so there is a second image —
+`images/devbox/Containerfile.slim`, **814 MB** — which trades the Debian
+userland the agents never touch for alpine and keeps exactly what the
+platform requires: `/agentcell/cell-runtime`, `git`, `tmux`, `httpd` for
+previews, and the agent CLIs.
+
 Projects with a toolchain of their own (a JVM, Python, a private registry)
 should build from `images/devbox/Containerfile` and add to it.
+
+Whichever you use, **the image must contain whatever a Cell's preview
+command names**. That command is written per project against the image the
+project had; moving a Cell onto a leaner image without it is how a preview
+starts failing with nothing but `executable file not found` to show for it.
 
 ### 4. Identity
 
