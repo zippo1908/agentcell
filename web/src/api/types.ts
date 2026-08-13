@@ -116,6 +116,8 @@ export interface DispatchInput {
   followPreview: boolean
   /** Keep the slot alive after the agent finishes, in the owner's tmux. */
   resident?: boolean
+  /** For a resident session this is IDLE time, not total age. */
+  ttlSeconds?: number
 }
 
 /** Live state of a resident session — answered by asking its tmux window,

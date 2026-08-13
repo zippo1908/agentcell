@@ -475,6 +475,7 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 		Cell: cellName, Task: req.Task, Runner: req.Runner, Provider: req.Provider,
 		Model: req.Model, CredentialSecret: req.CredentialSecret, FollowPreview: req.FollowPreview,
 		Resident:    req.Resident,
+		TTLSeconds:  req.TTLSeconds,
 		OwnerUserID: identity.FromContext(r.Context()).ID(),
 	}
 	if err := h.Client.Create(r.Context(), sess); err != nil {

@@ -34,6 +34,10 @@ export function DispatchForm({ cell, description }: { cell: string; description:
   const [cred, setCred] = useState(localStorage.getItem('ac.cred') ?? '')
   const [follow, setFollow] = useState(true)
   const [resident, setResident] = useState(false)
+  // Hours, because the unit people think in for "leave this open" is not
+  // seconds. Empty means the default: 2h idle for a resident slot, 1h age
+  // for a one-shot.
+  const [ttlHours, setTtlHours] = useState('')
 
   const runners = meta?.runners ?? []
   const providers = meta?.providers ?? []
@@ -74,6 +78,7 @@ export function DispatchForm({ cell, description }: { cell: string; description:
         credentialSecret: cred,
         followPreview: follow,
         resident,
+        ttlSeconds: ttlHours ? Math.round(Number(ttlHours) * 3600) : undefined,
       }),
     onSuccess: () => {
       localStorage.setItem('ac.runner', runner)
@@ -168,6 +173,15 @@ export function DispatchForm({ cell, description }: { cell: string; description:
         <label className="chk">
           <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
           预览跟随这单
+        </label>
+        <label className="chk" title={resident ? '空闲多久后自动清算;默认 2 小时' : '跑多久后强制清算;默认 1 小时'}>
+          <input
+            style={{ width: 56 }}
+            value={ttlHours}
+            placeholder="2"
+            onChange={(e) => setTtlHours(e.target.value.replace(/[^\d.]/g, ''))}
+          />
+          {resident ? '小时空闲后回收' : '小时后强制清算'}
         </label>
         <label className="chk" title="agent 结束后保留槽位,可以接着说">
           <input

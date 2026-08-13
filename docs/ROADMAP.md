@@ -41,7 +41,10 @@ cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
   an unpublished commit is present in its author's object store and absent
   from the shared one.*
 - **Capacity is enforced, not conventional** — every workload declares
-  requests and limits; a ResourceQuota caps each Cell namespace.
+  requests and limits; a ResourceQuota caps each Cell namespace. It bounds
+  the Cell, not each session: a resident session is a window inside its
+  owner's runtime and shares that pod's budget, because Kubernetes reserves
+  per pod and a window is not one.
 - **Runners and providers are data** — add a CLI or fix a renamed flag in
   `runners.d/*.yaml` without a release ([docs/RUNNERS.md](RUNNERS.md)).
 - **Production can live elsewhere** — a Cell either runs production in its own
@@ -60,9 +63,12 @@ cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
   container packages are user-scoped and unlinked from the repository
   ([#16](https://github.com/zippo1908/agentcell/issues/16)). Release artifacts
   are complete; only the automation is not.
-- **Resume across a replaced runtime** — a lost runtime is rebuilt and the
-  window restored today. Re-attaching that window to the CLI conversation it
-  had (tier 2) is not wired up, though the id and the state are both there.
+- **Resume across a replaced runtime, automatically** — a lost runtime is
+  rebuilt and the window restored, but the restored window is a fresh shell:
+  it is the NEXT follow-up that continues the conversation, because
+  `continue` resumes by the recorded id (Claude) or the per-session state
+  directory (Codex). Re-attaching at recovery time, without waiting for the
+  user to type, is not wired up.
 
 ### Medium term
 - **Multi-node** — the workspace PVC is ReadWriteOnce and every pod of a Cell
@@ -88,6 +94,8 @@ cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
 Stated here rather than discovered later; [SECURITY.md](../SECURITY.md) has
 the full list.
 
+- A resident session shares its owner's runtime budget; a slot's CPU and
+  memory are not reserved for one window.
 - A model key is private to a **user**, not to a session: windows in one
   runtime share a uid, and `/proc` lets a sibling read an environment.
 - One runtime is one OOM envelope — it takes that user's sessions with it.

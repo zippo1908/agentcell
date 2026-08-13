@@ -93,7 +93,7 @@ flowchart TB
 | 浏览器内终端(tmux over WebSocket)——现在可用 `kubectl exec … cell-runtime attach <id>` | ⬜ 设计中(M5) |
 | **不靠 git 代理做隔离**:每用户独立仓库 + 共享只读基底,未发布提交进不了共享对象库 | ✅ 实测([Run 8](docs/E2E_RESULTS.md)、[ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
 | **正式区可外置**:Cell 内隔离正式区,或把发布交给真正在跑它的系统(签名 webhook) | ✅ 实测 |
-| 容量可执行:所有负载声明 requests/limits,每个 Cell 有 ResourceQuota | ✅ 实测([Run 8](docs/E2E_RESULTS.md)) |
+| 容量:所有负载声明 requests/limits,每个 Cell 有 ResourceQuota。注意常驻会话是 tmux window,与同一 runtime 内其他窗口共享额度——K8s 按 pod 预留,而 window 不是 pod | ✅ 实测([Run 8](docs/E2E_RESULTS.md)) |
 | runtime pod 被替换后续上原对话(窗口会恢复,但重新接上 CLI 对话未接) | ⬜ 设计中 |
 | agent-sandbox 底座 · 多节点 RWX | ⬜ 设计中 |
 

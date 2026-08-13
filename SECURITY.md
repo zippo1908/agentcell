@@ -122,6 +122,11 @@ design. In short:
     under the default `/proc` model a process can read a sibling's
     environment. Per-session secrecy needs per-session uids or pods, which is
     what sharing a runtime deliberately trades away.
+  - **A webhook target is checked before the control plane calls it.**
+    celld reaches it with the cluster's network position, so loopback,
+    private and link-local addresses are refused unless an operator opts in
+    with `AGENTCELL_WEBHOOK_ALLOW_INTERNAL=1`. Delivery is at-least-once and
+    carries the release id as an idempotency key.
   - **One runtime is one resource envelope.** Kubernetes bounds the user, not
     the session: an OOM in a runtime takes every session that user has open
     in that Cell.

@@ -43,6 +43,8 @@ func hmacSecret(name string) *corev1.Secret {
 // trigger. The body is signed so the receiver can tell a release from a
 // stranger.
 func TestReleaseHandoffIsSigned(t *testing.T) {
+	// httptest listens on loopback, which the SSRF guard refuses by default.
+	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1")
 	var gotBody []byte
 	var gotSig, gotEvent string
 	var calls atomic.Int32
@@ -87,6 +89,8 @@ func TestReleaseHandoffIsSigned(t *testing.T) {
 // Once per release, not once per reconcile: a deploy is not idempotent from
 // the receiver's point of view.
 func TestHandoffFiresOncePerRelease(t *testing.T) {
+	// httptest listens on loopback, which the SSRF guard refuses by default.
+	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1")
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -121,6 +125,8 @@ func TestHandoffFiresOncePerRelease(t *testing.T) {
 // An unsigned deploy trigger is refused rather than sent: sending it would
 // hand out a capability while looking like configuration.
 func TestWebhookWithoutASecretIsRefused(t *testing.T) {
+	// httptest listens on loopback, which the SSRF guard refuses by default.
+	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1")
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -182,5 +188,58 @@ func TestSwitchingToExternalRemovesTheInCellZone(t *testing.T) {
 	var svc corev1.Service
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.ProdService}, &svc); err == nil {
 		t.Error("the production Service survived the switch")
+	}
+}
+
+// celld reaches a webhook with the cluster's network position: it can talk
+// to the apiserver, to other namespaces, and on a cloud node to the instance
+// metadata service. A webhook target is configuration, so without a check
+// anyone who can edit a Cell could aim the control plane at 169.254.169.254
+// and read the node's credentials out of a "deploy failed" message.
+func TestWebhookTargetCannotPointInward(t *testing.T) {
+	for _, bad := range []string{
+		"http://127.0.0.1:8080/hook",
+		"http://localhost/hook",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.5/hook",
+		"http://192.168.1.10/hook",
+		"http://[::1]/hook",
+		"file:///etc/passwd",
+		"gopher://example.com/",
+	} {
+		if err := checkWebhookTarget(bad); err == nil {
+			t.Errorf("%s was accepted; the control plane is a request forgery tool", bad)
+		}
+	}
+	// A public target is fine.
+	if err := checkWebhookTarget("https://example.com/hooks/agentcell"); err != nil {
+		t.Errorf("a public https target was refused: %v", err)
+	}
+	// And an operator can opt in deliberately.
+	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1")
+	if err := checkWebhookTarget("http://deployer.ci.svc.cluster.local/hook"); err != nil {
+		t.Errorf("the opt-in did not take effect: %v", err)
+	}
+}
+
+// Delivery is at-least-once, so the receiver needs an idempotency key it can
+// read without parsing the body.
+func TestReleaseIDTravelsAsAnIdempotencyKey(t *testing.T) {
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get(deliveryHeader)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	cell := externalCell(srv.URL, "deploy-hmac")
+	c := newFake(t, cell, hmacSecret("deploy-hmac"))
+	r := &CellReconciler{Client: c, ControlNamespace: controlNS}
+	t.Setenv("AGENTCELL_WEBHOOK_ALLOW_INTERNAL", "1") // httptest is loopback
+	for range 2 {
+		_, _ = r.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: types.NamespacedName{Namespace: controlNS, Name: "shop"}})
+	}
+	if gotKey != cell.Spec.Production.ReleaseID {
+		t.Errorf("idempotency key = %q, want the release id %q", gotKey, cell.Spec.Production.ReleaseID)
 	}
 }
