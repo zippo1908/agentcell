@@ -1,6 +1,9 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
   name: cells.agentcell.io
 spec:
   group: agentcell.io
@@ -9,94 +12,280 @@ spec:
     listKind: CellList
     plural: cells
     singular: cell
-    shortNames: [cl]
   scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Phase
-          type: string
-          jsonPath: .status.phase
-        - name: Sessions
-          type: integer
-          jsonPath: .status.activeSessions
-        - name: Preview
-          type: string
-          jsonPath: .status.previewPath
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              required: [repo, image]
-              properties:
-                repo:
-                  type: object
-                  required: [url]
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Cell is a project's resident instance: workload namespace + anchor
+          StatefulSet + shared workspace PVC + resident preview.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CellSpec is the desired state of one project's resident instance.
+            properties:
+              access:
+                description: |-
+                  Access decides whether Members are enforced.
+
+                  Empty is treated as "open" so an upgrade does not lock anyone out of
+                  their own project — but an empty array is a bad way to express a
+                  dangerous state, so the controller RECORDS the conclusion in
+                  status.access. A Cell that is open to everyone should say so, not be
+                  inferred from a missing field (ADR-0013).
+                enum:
+                - open
+                - restricted
+                type: string
+              description:
+                description: |-
+                  Description is the living product description the user calibrates
+                  while watching the preview; dispatches default to carrying it.
+                type: string
+              image:
+                description: |-
+                  Image is the devbox image for the anchor and session pods; it must
+                  contain the agent CLIs plus git and tmux. cell-runtime is baked in at
+                  image build time.
+                type: string
+              maxSessions:
+                description: MaxSessions is the slot count (instance concurrency).
+                  Defaults to 2.
+                format: int32
+                type: integer
+              members:
+                description: Members grants roles on this Cell. Ignored while Access
+                  is open.
+                items:
+                  description: |-
+                    Member is one user's role. UserID is the hashed principal id, the same
+                    value a Session records as its owner.
                   properties:
-                    url: {type: string}
-                    branch: {type: string}
-                    secretName: {type: string}
-                image: {type: string}
-                description: {type: string}
-                access: {type: string, enum: [open, restricted]}
-                members:
-                  type: array
-                  items:
-                    type: object
-                    required: [userID, role]
+                    role:
+                      description: Role is what a member may do in a Cell.
+                      enum:
+                      - viewer
+                      - member
+                      - maintainer
+                      type: string
+                    userID:
+                      maxLength: 63
+                      type: string
+                  required:
+                  - role
+                  - userID
+                  type: object
+                type: array
+              preview:
+                description: |-
+                  PreviewSpec keeps a live product preview running for the whole life of
+                  the Cell, so the user can watch the agent's work and recalibrate the
+                  product description against what they see.
+                properties:
+                  command:
+                    description: |-
+                      Command is run (via sh -c when len==1, else exec'd) in the preview
+                      target directory by the anchor, restarted with backoff when it exits.
+                    items:
+                      type: string
+                    type: array
+                  followSession:
+                    description: |-
+                      FollowSession switches the preview working directory to that
+                      session's worktree so the user watches work-in-progress live; empty
+                      means the main checkout.
+                    type: string
+                  port:
+                    description: Port the command serves HTTP on inside the anchor
+                      pod.
+                    format: int32
+                    type: integer
+                type: object
+              previewResources:
+                description: |-
+                  PreviewResources bounds the resident preview (and the production pod,
+                  which runs the same command). A dev server's footprint is a property
+                  of the project — a Vite app and a JVM are not in the same class — so
+                  this is where an operator states what theirs needs. Defaults to
+                  2 CPU / 4Gi limits with modest requests.
+                properties:
+                  cpu:
+                    type: string
+                  memory:
+                    type: string
+                type: object
+              production:
+                properties:
+                  command:
+                    description: Command serves the production app (run in the release
+                      checkout).
+                    items:
+                      type: string
+                    type: array
+                  externalURL:
+                    description: |-
+                      ExternalURL is where the released product actually lives when Target
+                      is external. The console links to it and does NOT proxy it: it is not
+                      our origin, it may have its own auth, and routing it through the
+                      preview proxy would break both.
+                    type: string
+                  port:
+                    description: Port the command serves HTTP on. Defaults to the
+                      preview port.
+                    format: int32
+                    type: integer
+                  ref:
+                    description: |-
+                      Ref is the git ref a release ships — branch, tag or commit SHA.
+                      Defaults to the repo base branch. The resolved SHA is recorded in
+                      /prodspace/RELEASE_SHA inside the prod pod and printed in its log.
+                    type: string
+                  releaseID:
+                    description: |-
+                      ReleaseID changes on every release action; a new value rolls the
+                      production pod, which re-clones Ref. Empty = never released, no
+                      production zone exists.
+                    type: string
+                  target:
+                    description: |-
+                      Target selects in-Cell production or a handoff. Empty means incell,
+                      which is what every existing Cell already does.
+                    enum:
+                    - incell
+                    - external
+                    type: string
+                  webhook:
+                    description: |-
+                      Webhook is called on release when Target is external. The body is
+                      signed so the receiver can tell a real release from anything else that
+                      found the URL.
                     properties:
-                      userID: {type: string, maxLength: 63}
-                      role: {type: string, enum: [viewer, member, maintainer]}
-                maxSessions: {type: integer, format: int32, minimum: 1}
-                sessionResources:
-                  type: object
-                  properties:
-                    cpu: {type: string}
-                    memory: {type: string}
-                workspaceSize: {type: string}
-                storageClassName: {type: string}
-                preview:
-                  type: object
-                  properties:
-                    command:
-                      type: array
-                      items: {type: string}
-                    port: {type: integer, format: int32}
-                    followSession: {type: string}
-                production:
-                  type: object
-                  properties:
-                    target: {type: string, enum: [incell, external]}
-                    externalURL: {type: string}
-                    webhook:
-                      type: object
-                      properties:
-                        url: {type: string}
-                        secretName: {type: string}
-                    command:
-                      type: array
-                      items: {type: string}
-                    port: {type: integer, format: int32}
-                    ref: {type: string}
-                    releaseID: {type: string}
-            status:
-              type: object
-              properties:
-                phase: {type: string}
-                observedGeneration: {type: integer, format: int64}
-                activeSessions: {type: integer, format: int32}
-                previewPath: {type: string}
-                productionPath: {type: string}
-                access: {type: string}
-                handedOffRelease: {type: string}
-                handoffMessage: {type: string}
-                slotLeases:
-                  type: array
-                  items: {type: string}
-                message: {type: string}
+                      secretName:
+                        description: |-
+                          SecretName holds an HMAC key under "key". Without it the receiver
+                          cannot distinguish a release from anyone who learned the URL, so a
+                          webhook configured without a secret is refused rather than sent
+                          unsigned.
+                        type: string
+                      url:
+                        description: URL receives a POST on every release.
+                        type: string
+                    type: object
+                type: object
+              repo:
+                description: RepoSpec points a Cell at its git repository.
+                properties:
+                  branch:
+                    description: |-
+                      Branch is the base branch sessions fork from and settle against.
+                      Defaults to "main".
+                    type: string
+                  secretName:
+                    description: |-
+                      SecretName references a kubernetes.io/basic-auth Secret in the
+                      control namespace (username + password/token). The operator copies it
+                      into the workload namespace; session pods never see it — only the
+                      anchor (clone) and settle jobs (push) do.
+                    type: string
+                  url:
+                    description: URL is the https clone URL.
+                    type: string
+                required:
+                - url
+                type: object
+              sessionResources:
+                description: SessionResources is the per-slot budget. Defaults to
+                  1 CPU / 2Gi.
+                properties:
+                  cpu:
+                    type: string
+                  memory:
+                    type: string
+                type: object
+              storageClassName:
+                description: |-
+                  StorageClassName optionally pins the PVC's storage class (cloud
+                  presets set this: Alibaba disk/NAS, Tencent CBS/CFS).
+                type: string
+              workspaceSize:
+                description: WorkspaceSize is the PVC size, default "10Gi".
+                type: string
+            required:
+            - image
+            - repo
+            type: object
+          status:
+            description: CellStatus is the observed state of a Cell.
+            properties:
+              access:
+                description: |-
+                  Access is the mode actually in force, so "who can touch this project"
+                  is answerable from `kubectl get cell` without reasoning about whether
+                  an empty list means everyone or no one.
+                type: string
+              activeSessions:
+                format: int32
+                type: integer
+              handedOffRelease:
+                description: |-
+                  HandedOffRelease is the last ReleaseID an external deployer was told
+                  about. It exists so the notification fires once per release rather
+                  than on every reconcile — a deploy trigger is not idempotent from the
+                  receiver's point of view.
+                type: string
+              handoffMessage:
+                description: |-
+                  HandoffMessage carries the deployer's refusal, if it refused. Surfaced
+                  rather than retried: a deployer saying no is telling the operator
+                  something.
+                type: string
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: CellPhase summarizes observed state.
+                type: string
+              previewPath:
+                description: PreviewPath is the platform-relative dev-zone URL (celld
+                  proxies it).
+                type: string
+              productionPath:
+                description: |-
+                  ProductionPath is the platform-relative 正式区 URL; empty until the
+                  first release, and empty for external production, which is not ours to
+                  serve.
+                type: string
+              slotLeases:
+                description: |-
+                  SlotLeases are the session ids currently holding a slot. Admission
+                  appends here through the apiserver's optimistic concurrency
+                  (resourceVersion CAS), which makes the slot gate race-free even with
+                  concurrent reconcilers or multiple controller replicas.
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

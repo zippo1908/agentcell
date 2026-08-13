@@ -25,6 +25,12 @@ jobs:
       - name: build
         run: make build build-runtime-static
 
+      # A field added to a Go struct without the schema that stores it is
+      # accepted by the API and then silently dropped — which is how
+      # previewResources and the member list shipped with nowhere to live.
+      - name: CRDs and deepcopy match the types
+        run: make verify-generate
+
   web:
     runs-on: ubuntu-latest
     steps:

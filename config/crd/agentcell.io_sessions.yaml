@@ -1,6 +1,9 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
   name: sessions.agentcell.io
 spec:
   group: agentcell.io
@@ -9,67 +12,181 @@ spec:
     listKind: SessionList
     plural: sessions
     singular: session
-    shortNames: [sess]
   scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Cell
-          type: string
-          jsonPath: .spec.cell
-        - name: Phase
-          type: string
-          jsonPath: .status.phase
-        - name: Branch
-          type: string
-          jsonPath: .status.branch
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              required: [cell, task, runner, provider, credentialSecret]
-              properties:
-                cell: {type: string}
-                # Immutable by CRD validation rather than by the API handler,
-                # so it also holds for kubectl edits (ADR-0008). Transitions
-                # from empty are allowed once, to let a Session created before
-                # ownership existed be adopted deliberately.
-                ownerUserID:
-                  type: string
-                  maxLength: 63
-                  x-kubernetes-validations:
-                    - rule: "oldSelf == '' || self == oldSelf"
-                      message: "ownerUserID is immutable once set"
-                task: {type: string}
-                runner: {type: string}
-                provider: {type: string}
-                model: {type: string}
-                credentialSecret: {type: string}
-                ttlSeconds: {type: integer, format: int64, minimum: 60}
-                followPreview: {type: boolean}
-                resident: {type: boolean}
-            status:
-              type: object
-              properties:
-                phase: {type: string}
-                sessionID: {type: string}
-                runnerSessionID: {type: string}
-                recoveries: {type: integer}
-                runtimeInstance: {type: string}
-                lastActivity: {type: string, format: date-time}
-                podName: {type: string}
-                branch: {type: string}
-                produced: {type: boolean}
-                startTime: {type: string, format: date-time}
-                message: {type: string}
-                reviewState: {type: string, enum: ["", "Pending", "Approved", "Rejected"]}
-                reviewNote: {type: string}
-                prURL: {type: string}
-                prNumber: {type: integer}
-                prState: {type: string}
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Session is one disposable work session inside a Cell.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SessionSpec is one disposable work session: a task dispatched to an
+              agent inside a Cell's slot.
+            properties:
+              cell:
+                description: Cell names the Cell CR (same namespace as this Session
+                  CR).
+                type: string
+              credentialSecret:
+                description: |-
+                  CredentialSecret references a Secret in the control namespace whose
+                  "key" entry is the provider API key. Injected into this session only.
+                type: string
+              followPreview:
+                description: |-
+                  FollowPreview points the Cell's resident preview at this session's
+                  worktree while it runs, so the user watches the work live.
+                type: boolean
+              model:
+                description: Model optionally pins a model at the provider.
+                type: string
+              ownerUserID:
+                description: |-
+                  OwnerUserID is the principal that created this Session (ADR-0008). It
+                  is set once and never changes — the CRD enforces that, so it holds for
+                  kubectl edits too, not just for writes through the API.
+
+                  The rule lives here as a marker rather than in hand-edited YAML: it is
+                  the property ADR-0008 rests on, and a hand-maintained CRD is exactly
+                  where it would be lost the next time the file was regenerated.
+
+                  A Session is a user-private execution and memory boundary: transcript,
+                  checkpoint and worktree belong to this user alone. Sessions created
+                  before ownership existed have an empty value and are visible only to
+                  the static-token principal; guessing an owner that was never recorded
+                  would hand one user another user's work.
+                maxLength: 63
+                type: string
+                x-kubernetes-validations:
+                - message: ownerUserID is immutable once set
+                  rule: oldSelf == '' || self == oldSelf
+              provider:
+                description: Provider is a name from the provider registry (e.g. aliyun-bailian).
+                type: string
+              resident:
+                description: |-
+                  Resident keeps the slot alive after the agent finishes: the work runs
+                  inside a tmux server on the owner's private socket, so they can attach,
+                  look at what happened and keep going in the same context instead of
+                  dispatching a fresh session that has to rediscover everything.
+
+                  Off by default, because the one-shot shape is what the dispatch → settle
+                  → review loop is built on. A resident session still settles — on TTL, on
+                  an explicit request, or if its pod disappears — so nothing escapes the
+                  publication gate; what changes is who decides when.
+                type: boolean
+              runner:
+                description: 'Runner is the agent CLI: claude | codex | pi.'
+                type: string
+              task:
+                description: Task is the work order handed to the agent.
+                type: string
+              ttlSeconds:
+                description: |-
+                  TTLSeconds force-settles a session still running after this long.
+                  Defaults to 3600.
+                format: int64
+                type: integer
+            required:
+            - cell
+            - credentialSecret
+            - provider
+            - runner
+            - task
+            type: object
+          status:
+            description: SessionStatus is the observed state of a Session.
+            properties:
+              branch:
+                description: Branch is the settled output branch (session/<id>) when
+                  Produced.
+                type: string
+              lastActivity:
+                description: |-
+                  LastActivity is when something last happened in this session: a window
+                  opened, a follow-up typed, or the agent observed working. A resident
+                  session's TTL is measured from here rather than from its start, so the
+                  slot reclaimed is an idle one and never one in use.
+                format: date-time
+                type: string
+              message:
+                type: string
+              phase:
+                description: SessionPhase tracks the dispatch → work → settle → reclaim
+                  lifecycle.
+                type: string
+              podName:
+                type: string
+              prNumber:
+                type: integer
+              prState:
+                description: 'PRState is the forge''s view: open | merged | closed.'
+                type: string
+              prURL:
+                description: PR tracking, populated after approval opens one.
+                type: string
+              produced:
+                type: boolean
+              recoveries:
+                description: |-
+                  Recoveries counts how often this session's runtime had to be rebuilt
+                  under it. Bounded: a session that cannot stay up is settled rather than
+                  rebuilt forever, so a failing node does not become an infinite loop.
+                type: integer
+              reviewNote:
+                description: |-
+                  ReviewNote carries the approval remark or the rejection reason (the
+                  latter seeds a follow-up dispatch).
+                type: string
+              reviewState:
+                description: 'Review (ADR-0006): the queue is Sessions with Produced
+                  && Pending.'
+                type: string
+              runnerSessionID:
+                description: |-
+                  RunnerSessionID names the conversation inside the agent CLI, where that
+                  CLI lets the caller choose one. It is what makes "keep going" continue
+                  the same conversation instead of starting one that has to rediscover
+                  everything. The CLIs already do this well; the platform's job is to
+                  name the conversation and give it a private $HOME (ADR-0009), not to
+                  reimplement transcripts.
+                type: string
+              runtimeInstance:
+                description: |-
+                  RuntimeInstance identifies the exact container this session's window
+                  lives in. A tmux server dies with its container, so a restart takes
+                  every window with it — which looks identical to the owner closing one.
+                  Recording the instance is what tells those two apart: same container
+                  and no window means someone closed it; a different container means the
+                  runtime was replaced and the session should be handed back, not
+                  settled out from under its owner.
+                type: string
+              sessionID:
+                type: string
+              startTime:
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
