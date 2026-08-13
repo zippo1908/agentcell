@@ -171,6 +171,9 @@ export interface DispatchInput {
   resident?: boolean
   /** For a resident session this is IDLE time, not total age. */
   ttlSeconds?: number
+  /** Idle MINUTES before a resident session sleeps — a different clock from
+      ttlSeconds, which is how long a sleeping one is kept before publishing. */
+  idleSeconds?: number
 }
 
 /** Live state of a resident session — answered by asking its tmux window,

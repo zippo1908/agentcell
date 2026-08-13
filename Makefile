@@ -64,7 +64,7 @@ fmt-check:
 # on files I had edited, and a web lockfile that no longer matched
 # package.json. Both are instant locally and neither is something to
 # remember — so they stop being something to remember.
-preflight: fmt-check vet test verify-generate web-lock-check
+preflight: fmt-check vet test verify-generate web-lock-check web-check
 	@echo "preflight OK"
 
 # web-lock-check fails the same way CI does, for the same reason: a
@@ -73,6 +73,12 @@ preflight: fmt-check vet test verify-generate web-lock-check
 web-lock-check:
 	@cd web && pnpm install --frozen-lockfile --lockfile-only >/dev/null 2>&1 || { \
 	  echo "web/pnpm-lock.yaml is out of sync with package.json — run: cd web && pnpm install"; exit 1; }
+
+# web-check is what CI's web job runs. `vite build` does NOT typecheck, so
+# building locally and calling it verified is exactly how a type error
+# reaches main — which is how one did.
+web-check:
+	@cd web && pnpm exec tsc --noEmit && pnpm build >/dev/null
 
 lint: fmt-check vet
 
