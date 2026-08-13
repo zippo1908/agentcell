@@ -7,9 +7,10 @@
 # AgentCell
 
 **A workshop for AI coding agents.** One resident, Kubernetes-backed instance
-per project (a *Cell*); disposable work sessions as slots inside it; a live
-product preview to steer against; and an SDLC loop — dispatch → work → settle
-→ review → release — closed within the instance.
+per project (a *Cell*); work sessions as slots inside it, each in a terminal
+you can open and type into; a live product preview to steer against; and an
+SDLC loop — dispatch → work → settle → review → release — closed within the
+instance.
 
 > **Status: alpha.** The full path passes an 8-step end-to-end run on real
 > single-node k3s (auth → reconcile → preview → dispatch → settle → pushed
@@ -39,15 +40,43 @@ product preview to steer against; and an SDLC loop — dispatch → work → set
   Tencent Hunyuan, DeepSeek, Moonshot, Zhipu work through their OpenAI-/
   Anthropic-compatible endpoints with no proxy.
 
-## Core model
+## The model
 
-**A project is shared. A person's runtime is not.** Collaboration happens at
+Everything AgentCell does is one of eight nouns acting on another. Learning
+those, and which one owns which, is most of learning the system.
+
+| Noun | What it is | Owns / bounds |
+|---|---|---|
+| **Team** | a membership list that outlives any one project | default roles in the Cells that name it |
+| **Cell** | one project, resident | a repo checkout, a preview, a production zone, N slots |
+| **Pool** | a class of machine the Cell may run on | which node the whole Cell lives on |
+| **Runtime** | one user's tmux server inside a Cell | that user's `$HOME`, uid, private tree |
+| **Session** | one unit of work, in a terminal | a git worktree and a CLI conversation |
+| **Slot** | permission for a Session to hold compute | the Cell's concurrency |
+| **Credential** | a model key, owned by whoever spends it | one Session at a time |
+| **Review** | a settled Session awaiting judgement | whether it becomes a PR, then a Release |
+
+The relationships that carry the design:
+
+```
+Team ──governs──▶ Cell ──placed on──▶ Pool (one node; the Cell cannot span nodes)
+                   │
+                   ├── anchor ........ the shared checkout + base preview
+                   └── Runtime (per user, 0700) ──▶ Session (a tmux window)
+                                                      │
+                                        ┌─────────────┼──────────────┐
+                                     worktree     conversation     Slot
+                                        └────── settle ────────▶ Review ─▶ PR ─▶ Release
+```
+
+**A project is shared; a person's runtime is not.** Collaboration happens at
 the project layer — branches, reviews, the knowledge base — never at the
 process layer. Nobody attaches to anybody else's terminal.
 
 ```mermaid
 flowchart TB
-    subgraph CELL["Cell — one project"]
+    TEAM["Team — who may do what, by default"]
+    subgraph CELL["Cell — one project, one node"]
         OBJ[("/workspace/repo · knowledge<br/>shared, project-owned")]
         ANCHOR["anchor — clone · base preview"]
         subgraph UA["Alice · uid 100000 · 0700"]
@@ -60,6 +89,7 @@ flowchart TB
             WB1["window: session b1"]
         end
     end
+    TEAM -.->|default roles| CELL
     TA --> WA1 & WA2
     TB --> WB1
     WA1 & WA2 & WB1 -.->|read| OBJ
@@ -67,13 +97,28 @@ flowchart TB
     WB1 -->|settle| BR
 ```
 
-One tmux per **user**, not per session: the agent CLIs manage conversations
+Four rules follow from the picture, and they are worth stating plainly.
+
+**One tmux per user, not per session.** The agent CLIs manage conversations
 themselves (Claude Code by an id we choose, Codex by its own), so the
 platform gives them a private `$HOME` to keep that state in and a terminal
 that outlives any single run — and stays out of the way otherwise.
 
-Settle is the only door to the project layer. A worktree may live as long as
-its owner wants; nothing reaches a branch without going through it.
+**A Session is a terminal you can open.** Not a log tail: xterm.js attaches
+over a WebSocket to the same tmux window the agent is typing in, and it is
+read-write, so you can interrupt or redirect mid-run. A headless agent prints
+nothing until it finishes, which makes "working" and "hung" look identical
+from outside.
+
+**Idle means asleep, not finished.** A Session nobody is using — no agent
+working, nobody watching — goes **dormant**: it gives back the slot and the
+runtime process, and keeps the worktree and the conversation on the volume.
+Opening its terminal or sending a follow-up wakes it where it was. Sleeping
+and waking are the same mechanism, `spec.desiredState`, written by the
+reconciler in one direction and the console in the other.
+
+**Settle is the only door to the project layer.** A worktree may live as
+long as its owner wants; nothing reaches a branch without going through it.
 
 Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
@@ -101,11 +146,17 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Dispatch form driven by the server catalogue: a runner narrows to the providers it can drive, defaults to its own vendor, offers that provider's models and accepts any other | ✅ |
 | Review queue · diff · approve→auto-PR · merge tracking (forge API via broker, celld holds no credential) | ✅ tested ([ADR-0006](docs/adr/0006-review-queue-and-pr.md)) |
 | Helm chart + GHCR images + cloud presets (k3s / ACK / TKE) | ✅ `helm lint`-verified |
-| Terminal attach in the browser (tmux over WebSocket) — `kubectl exec … cell-runtime attach <id>` works today | ⬜ designed (M5) |
+| **Terminal in the browser** (xterm.js ↔ tmux over WebSocket, read-write); only the session's owner may attach — a Cell maintainer may not | ✅ tested |
+| **Dormancy**: an idle session gives back its slot and runtime and keeps its worktree + conversation; opening the terminal or a follow-up wakes it where it was | ✅ tested |
+| **Teams**: one membership list across many Cells; a Cell entry overrides it in both directions; naming a team closes the Cell | ✅ tested ([ADR-0013](docs/adr/0013-authorization.md)) |
+| **Placement**: pick the machine class a Cell runs on from the pools that actually exist; taints derived, not hand-written; an unschedulable Cell reports the scheduler's own reason | ✅ tested |
+| Model credentials managed by their owner in the console (write-only, last-four hint) | ✅ tested |
+| In-cluster image registry for clusters that cannot reach ghcr.io, plus an 814 MB alpine devbox | ✅ tested ([TEAM_SETUP](docs/TEAM_SETUP.md)) |
 | **Git isolation without a git proxy**: per-user repositories over a shared read-only base — an unpublished commit never reaches the shared object store | ✅ tested ([Run 8](docs/E2E_RESULTS.md), [ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
 | **Production elsewhere**: a Cell runs its own isolated production zone, or hands the release to a system that owns running it (signed webhook) | ✅ tested |
 | Capacity: every workload declares requests/limits and a ResourceQuota caps each Cell. Note a resident session is a tmux window, so it shares its owner's runtime budget — Kubernetes reserves per pod, and a window is not a pod | ✅ tested ([Run 8](docs/E2E_RESULTS.md)) |
-| Resume a conversation after its runtime pod is replaced (the window is restored; re-attaching it to the CLI conversation is not wired) | ⬜ designed |
+| Re-attaching a restored window to the CLI's own conversation (the window comes back; the CLI is not told to resume into it) | ⬜ designed |
+| celld leader election (one replica today: sessions already running are unaffected if it restarts, but dispatch/settle/review pause) | ⬜ designed |
 | Per-user NetworkPolicy · agent-sandbox substrate · multi-node RWX | ⬜ designed |
 
 ## Install (one command)
@@ -162,15 +213,16 @@ cellctl dispatch shop --task "把商品卡片改成两列" \
 kubectl -n agentcell-system port-forward svc/celld 8080:80   # http://localhost:8080, log in with the token
 ```
 
-**Working alongside the agent** — a resident session keeps its slot after the
-agent finishes, so you can look at the result and say one more thing in the
-same conversation instead of dispatching a fresh one that has to rediscover
-everything:
+**Working alongside the agent** — every session is resident by default: it
+runs in a terminal you can open, keeps its slot while you are using it, and
+lets you say one more thing in the same conversation instead of dispatching a
+fresh one that has to rediscover everything.
 
 ```sh
-cellctl dispatch shop --task "把商品卡片改成两列" --resident ...   # or "resident": true via the API
+cellctl dispatch shop --task "把商品卡片改成两列" ...              # resident unless you ask otherwise
 curl -H "Authorization: Bearer $TOKEN" .../api/sessions/$S/state    # working? finished? exit code?
 curl -X POST ... -d '{"text":"两列太挤了,间距加大一点"}' .../api/sessions/$S/continue
+# the terminal: the console's session row, or from a shell —
 kubectl -n cell-shop exec -it runtime-100000 -- /agentcell/cell-runtime attach $ID
 curl -X DELETE ... .../api/sessions/$S                              # settle: commit, push, review
 ```

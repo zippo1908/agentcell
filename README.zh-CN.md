@@ -30,26 +30,55 @@
 - **国内云友好。** 服务商是数据不是代码:阿里百炼、腾讯混元、DeepSeek、Kimi、智谱
   经其 OpenAI/Anthropic 兼容端点开箱即用,免代理。
 
-## 核心模型
+## 概念模型
+
+AgentCell 做的每一件事,都是八个名词之一在作用于另一个。搞清这些名词、以及谁归谁
+管,就学会了这套系统的大半。
+
+| 名词 | 是什么 | 归它管 / 由它界定 |
+|---|---|---|
+| **Team 团队** | 一份比任何单个项目活得更久的成员名单 | 点了它名字的 Cell 里的默认角色 |
+| **Cell 工作区** | 一个项目,常驻 | 一份仓库检出、一个预览、一个正式区、N 个槽位 |
+| **Pool 机器池** | 这个 Cell 可以落在哪一类机器上 | 整个 Cell 住在哪个节点 |
+| **Runtime 运行时** | 一个用户在这个 Cell 里的 tmux 服务 | 该用户的 `$HOME`、uid、私有目录 |
+| **Session 会话** | 一单工作,跑在一个终端里 | 一个 git worktree 和一段 CLI 对话 |
+| **Slot 槽位** | 一个会话占用算力的许可 | 这个 Cell 的并发 |
+| **Credential 凭据** | 一把模型 key,归花它的人所有 | 一次只给一个会话 |
+| **Review 批阅** | 已清算、待判断的会话 | 它会不会变成 PR,进而变成一次发布 |
+
+真正承载设计的是它们之间的关系:
+
+```
+Team ──治理──▶ Cell ──落在──▶ Pool(一台机器;Cell 不能跨节点)
+                │
+                ├── anchor ........ 共享检出 + 基础预览
+                └── Runtime(每人一个,0700)──▶ Session(一个 tmux 窗口)
+                                                  │
+                                    ┌─────────────┼──────────────┐
+                                 worktree       对话           Slot
+                                    └────── 清算 ────────▶ Review ─▶ PR ─▶ 发布
+```
 
 **项目是共享的,个人的运行时不是。** 协作发生在项目层——分支、批阅、知识库,
 而不是进程层。任何人都不会 attach 到别人的终端上。
 
 ```mermaid
 flowchart TB
-    subgraph CELL["Cell — 一个项目"]
-        OBJ[("/workspace/repo · knowledge<br/>共享,归项目所有")]
-        ANCHOR["anchor — 克隆 · 基线预览"]
+    TEAM["Team — 默认谁能做什么"]
+    subgraph CELL["Cell — 一个项目,一台机器"]
+        OBJ[("/workspace/repo · knowledge<br/>共享,归项目")]
+        ANCHOR["anchor — 克隆 · 基础预览"]
         subgraph UA["Alice · uid 100000 · 0700"]
-            TA["一个 tmux server"]
-            WA1["window:会话 a1"]
-            WA2["window:会话 a2"]
+            TA["一个 tmux 服务"]
+            WA1["window: session a1"]
+            WA2["window: session a2"]
         end
         subgraph UB["Bob · uid 100001 · 0700"]
-            TB["一个 tmux server"]
-            WB1["window:会话 b1"]
+            TB["一个 tmux 服务"]
+            WB1["window: session b1"]
         end
     end
+    TEAM -.->|默认角色| CELL
     TA --> WA1 & WA2
     TB --> WB1
     WA1 & WA2 & WB1 -.->|读| OBJ
@@ -57,11 +86,22 @@ flowchart TB
     WB1 -->|清算| BR
 ```
 
-**一个用户一个 tmux,而不是一个会话一个**:agent CLI 自己管理对话(Claude Code
+图里推得出四条规则,值得直说。
+
+**一个用户一个 tmux,而不是一个会话一个。** agent CLI 自己管理对话(Claude Code
 用我们指定的 id,Codex 用它自己的),所以平台只负责给它们一个私有 `$HOME` 存这些
 状态、一个比任何单次运行都活得久的终端,其余不插手。
 
-清算是进入项目层的唯一一道门。worktree 可以由属主决定留多久,但任何东西不经过
+**会话是一个你能打开的终端。** 不是日志尾巴:xterm.js 经 WebSocket 接到 agent 正在
+敲字的那个 tmux 窗口,而且可写——能中途插话、打断、改方向。headless 的 agent 在结束
+前什么都不打印,从外面看,"在干活"和"卡死了"完全一样。
+
+**空闲是睡着,不是结束。** 没人用的会话——没有 agent 在跑、也没有人在看——会转入
+**休眠**:交回槽位和运行时进程,保留卷上的 worktree 和对话。打开它的终端或者追问
+一句就在原处醒来。睡和醒走的是同一条路 `spec.desiredState`,一个方向由 reconciler
+写,另一个方向由控制台写。
+
+**清算是进入项目层的唯一一道门。** worktree 可以由属主决定留多久,但任何东西不经过
 清算都到不了分支上。
 
 完整图(控制面、生命周期、git-broker):**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
@@ -90,7 +130,12 @@ flowchart TB
 | 每用户一个 tmux runtime 承载多个会话(window);模型 key 绝不进 argv | ✅ 实测([Run 7](docs/E2E_RESULTS.md)) |
 | **runner 也是数据**:加一个 CLI 或修一个 flag 只改 `runners.d/*.yaml`,不用发版([docs/RUNNERS.md](docs/RUNNERS.md)) | ✅ 实测 |
 | 派工表单由服务端目录驱动:选 runner 只列它能驱动的 provider、默认同厂商、模型来自清单且可自填 | ✅ |
-| 浏览器内终端(tmux over WebSocket)——现在可用 `kubectl exec … cell-runtime attach <id>` | ⬜ 设计中(M5) |
+| **浏览器内终端**(xterm.js ↔ tmux over WebSocket,可读写);只有会话的 owner 能 attach,Cell 的 maintainer 也不行 | ✅ 已验证 |
+| **休眠回收**:空闲会话交回槽位与运行时,保留 worktree 与对话;打开终端或追问即在原处唤醒 | ✅ 已验证 |
+| **团队**:一份名单覆盖多个工作区;Cell 上的点名双向覆盖它;归属团队会让工作区变为按成员授权 | ✅ 已验证([ADR-0013](docs/adr/0013-authorization.md)) |
+| **运行位置**:从真实存在的机器池里挑;污点自动推导而非手写;调度不出去时如实报出调度器原话 | ✅ 已验证 |
+| 模型凭据由属主在控制台自助管理(只写,只回显后四位) | ✅ 已验证 |
+| 集群内镜像仓库(拉不到 ghcr.io 的内网适用)+ 814MB 的 alpine devbox | ✅ 已验证([TEAM_SETUP](docs/TEAM_SETUP.md)) |
 | **不靠 git 代理做隔离**:每用户独立仓库 + 共享只读基底,未发布提交进不了共享对象库 | ✅ 实测([Run 8](docs/E2E_RESULTS.md)、[ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
 | **正式区可外置**:Cell 内隔离正式区,或把发布交给真正在跑它的系统(签名 webhook) | ✅ 实测 |
 | 容量:所有负载声明 requests/limits,每个 Cell 有 ResourceQuota。注意常驻会话是 tmux window,与同一 runtime 内其他窗口共享额度——K8s 按 pod 预留,而 window 不是 pod | ✅ 实测([Run 8](docs/E2E_RESULTS.md)) |
