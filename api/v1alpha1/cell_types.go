@@ -37,7 +37,37 @@ type PreviewSpec struct {
 // dev zone (own shallow clone on an emptyDir, never the shared PVC), which
 // changes only on an explicit release action. Dev/test debugging — preview
 // restarts, session churn, dirty worktrees — cannot touch it.
+// ProductionTarget says where a released build actually runs.
+type ProductionTarget string
+
+const (
+	// ProductionInCell runs production inside the Cell, in its own zone:
+	// isolated from the dev zone, reachable through the platform. Good for
+	// products whose production IS this environment.
+	ProductionInCell ProductionTarget = "incell"
+	// ProductionExternal hands off instead: AgentCell publishes the release
+	// and notifies something else, which owns running it.
+	//
+	// This is the honest shape once production is somebody else's system —
+	// a cluster with its own pipeline, a CDN, an app store. Pretending to
+	// manage it from here would mean a second, weaker deployer competing
+	// with the real one.
+	ProductionExternal ProductionTarget = "external"
+)
+
 type ProductionSpec struct {
+	// Target selects in-Cell production or a handoff. Empty means incell,
+	// which is what every existing Cell already does.
+	Target ProductionTarget `json:"target,omitempty"`
+	// ExternalURL is where the released product actually lives when Target
+	// is external. The console links to it and does NOT proxy it: it is not
+	// our origin, it may have its own auth, and routing it through the
+	// preview proxy would break both.
+	ExternalURL string `json:"externalURL,omitempty"`
+	// Webhook is called on release when Target is external. The body is
+	// signed so the receiver can tell a real release from anything else that
+	// found the URL.
+	Webhook WebhookSpec `json:"webhook,omitempty"`
 	// Command serves the production app (run in the release checkout).
 	Command []string `json:"command,omitempty"`
 	// Port the command serves HTTP on. Defaults to the preview port.
@@ -105,8 +135,18 @@ type CellStatus struct {
 	// PreviewPath is the platform-relative dev-zone URL (celld proxies it).
 	PreviewPath string `json:"previewPath,omitempty"`
 	// ProductionPath is the platform-relative 正式区 URL; empty until the
-	// first release.
+	// first release, and empty for external production, which is not ours to
+	// serve.
 	ProductionPath string `json:"productionPath,omitempty"`
+	// HandedOffRelease is the last ReleaseID an external deployer was told
+	// about. It exists so the notification fires once per release rather
+	// than on every reconcile — a deploy trigger is not idempotent from the
+	// receiver's point of view.
+	HandedOffRelease string `json:"handedOffRelease,omitempty"`
+	// HandoffMessage carries the deployer's refusal, if it refused. Surfaced
+	// rather than retried: a deployer saying no is telling the operator
+	// something.
+	HandoffMessage string `json:"handoffMessage,omitempty"`
 	// SlotLeases are the session ids currently holding a slot. Admission
 	// appends here through the apiserver's optimistic concurrency
 	// (resourceVersion CAS), which makes the slot gate race-free even with
@@ -135,4 +175,15 @@ type CellList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Cell `json:"items"`
+}
+
+// WebhookSpec is the handoff to an external deployer.
+type WebhookSpec struct {
+	// URL receives a POST on every release.
+	URL string `json:"url,omitempty"`
+	// SecretName holds an HMAC key under "key". Without it the receiver
+	// cannot distinguish a release from anyone who learned the URL, so a
+	// webhook configured without a secret is refused rather than sent
+	// unsigned.
+	SecretName string `json:"secretName,omitempty"`
 }

@@ -303,6 +303,35 @@ func tmux(sock string, args ...string) (string, error) {
 	return string(b), err
 }
 
+// ensureUserRepo gives this user their own repository over the shared,
+// read-only base (ADR-0012).
+//
+// --shared points the new repository's alternates at the project mirror, so
+// reads resolve through to published history while WRITES land here. That is
+// the whole isolation: an agent's unpublished commits sit in a 0700
+// directory owned by one uid, and a peer's agent is refused by the kernel —
+// no mediating daemon, and the agent keeps native git.
+func ensureUserRepo(uid int64) (string, error) {
+	repo := ids.UserRepoPath(uid)
+	if _, err := os.Stat(filepath.Join(repo, ".git")); err == nil {
+		// Keep it current with the base the anchor tracks.
+		_ = git(repo, "fetch", "origin")
+		return repo, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
+		return "", err
+	}
+	if err := gitNet("/", "clone", "--shared", "--no-checkout", ids.RepoPath, repo); err != nil {
+		return "", fmt.Errorf("user repository: %w", err)
+	}
+	if err := os.Chmod(repo, 0o700); err != nil {
+		return "", err
+	}
+	// The shared mirror is the origin, so a fetch refreshes the base without
+	// touching the network or the forge credential.
+	return repo, nil
+}
+
 // prepareWorktree carves the session's worktree and lays down its briefing.
 // Shared by the one-shot session applet and the runtime, so both produce the
 // same thing.
@@ -312,7 +341,11 @@ func prepareWorktree(wt, id, base string) error {
 		if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
 			return err
 		}
-		if err := git(ids.RepoPath, "worktree", "add", "-b", branch, wt, base); err != nil {
+		repo, err := ensureUserRepo(int64(os.Getuid()))
+		if err != nil {
+			return err
+		}
+		if err := git(repo, "worktree", "add", "-b", branch, wt, "origin/"+base); err != nil {
 			return fmt.Errorf("worktree add: %w", err)
 		}
 	}

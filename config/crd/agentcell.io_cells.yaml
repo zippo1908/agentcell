@@ -63,6 +63,13 @@ spec:
                 production:
                   type: object
                   properties:
+                    target: {type: string, enum: [incell, external]}
+                    externalURL: {type: string}
+                    webhook:
+                      type: object
+                      properties:
+                        url: {type: string}
+                        secretName: {type: string}
                     command:
                       type: array
                       items: {type: string}
@@ -77,6 +84,8 @@ spec:
                 activeSessions: {type: integer, format: int32}
                 previewPath: {type: string}
                 productionPath: {type: string}
+                handedOffRelease: {type: string}
+                handoffMessage: {type: string}
                 slotLeases:
                   type: array
                   items: {type: string}

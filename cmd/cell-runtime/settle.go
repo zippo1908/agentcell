@@ -32,10 +32,16 @@ func runSettle() error {
 	if err := ensurePrivateHome(int64(os.Getuid())); err != nil {
 		return err
 	}
+	// Both: the user's own repository is where the work is, and it reads
+	// through alternates into the shared mirror, which git also checks.
+	uid := int64(os.Getuid())
 	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
 		return err
 	}
-	v, err := settleWorktree(ids.RepoPath, ids.WorktreePath(int64(os.Getuid()), id), ids.SessionBranch(id), base, id,
+	if err := ensureRepoTrusted(ids.UserRepoPath(uid)); err != nil {
+		return err
+	}
+	v, err := settleWorktree(ids.UserRepoPath(uid), ids.WorktreePath(uid, id), ids.SessionBranch(id), base, id,
 		effectiveGitURL(os.Getenv(runtimeapi.EnvRepoURL)))
 	raw, _ := json.Marshal(v)
 	// Termination message is the transport back to the controller; write it

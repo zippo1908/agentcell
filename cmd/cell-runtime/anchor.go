@@ -84,10 +84,11 @@ func ensureClone() error {
 				fmt.Fprintln(os.Stderr, "anchor: reset to origin/"+branch+" failed (continuing)")
 			}
 		}
-		// Repair on every start, not just at clone time: a Cell created
-		// before per-user uids existed has an object store no user can write
-		// to, and would fail intermittently rather than loudly.
-		if err := shareRepoWithProjectGroup(); err != nil {
+		// Readable by the project, writable only by the anchor (ADR-0012):
+		// users commit into their OWN repositories now, which read through
+		// to this one via alternates. A group-writable object store was the
+		// price of many uids writing here, and that price is no longer due.
+		if err := shareRepoReadOnly(); err != nil {
 			fmt.Fprintf(os.Stderr, "anchor: sharing the object store failed: %v\n", err)
 		}
 		return nil
@@ -103,11 +104,11 @@ func ensureClone() error {
 	if err := gitNet("/", args...); err != nil {
 		return err
 	}
-	return shareRepoWithProjectGroup()
+	return shareRepoReadOnly()
 }
 
-// shareRepoWithProjectGroup makes the object store writable by every member
-// of the project group.
+// shareRepoReadOnly makes the object store readable — and only readable — by
+// the project group.
 //
 // Since ADR-0009 each user's session runs as its own uid while the checkout
 // belongs to the project identity, and a session's commits land in the
@@ -124,18 +125,22 @@ func ensureClone() error {
 // The config only governs objects created from now on, so the existing tree
 // is relaxed too. Only the owner may chmod, which the anchor is — it did the
 // clone.
-func shareRepoWithProjectGroup() error {
-	if err := git(ids.RepoPath, "config", "core.sharedRepository", "group"); err != nil {
-		return fmt.Errorf("core.sharedRepository: %w", err)
+func shareRepoReadOnly() error {
+	// core.sharedRepository is deliberately NOT set: nothing but the anchor
+	// writes here any more, and leaving it would keep creating
+	// group-writable object directories that nothing needs.
+	if err := git(ids.RepoPath, "config", "--unset-all", "core.sharedRepository"); err != nil {
+		// Absent is the desired state, and --unset-all says so with exit 5.
+		_ = err
 	}
 	return filepath.Walk(filepath.Join(ids.RepoPath, ".git"), func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // best effort: a file we cannot stat is one we cannot fix
 		}
 		mode := info.Mode()
-		want := mode | 0o060 // group read+write
+		want := mode&^0o022 | 0o040 // group read; nobody but the owner writes
 		if mode.IsDir() {
-			want |= 0o010 | os.ModeSetgid // traversable, and new entries inherit the group
+			want |= 0o010 // traversable
 		}
 		if want != mode {
 			_ = os.Chmod(path, want)

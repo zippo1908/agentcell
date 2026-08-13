@@ -111,6 +111,15 @@ func SessionStateDir(uid int64, id string) string {
 	return UserHome(uid) + "/state/" + id
 }
 
+// UserRepoPath is a user's own repository: its own refs and its own object
+// store, with the project's published history shared read-only underneath
+// through git alternates (ADR-0012).
+//
+// Sessions carve worktrees out of THIS, not out of the shared mirror, so a
+// commit an agent makes lands in a 0700 directory its owner owns — and a
+// peer's agent is refused by the kernel rather than by a proxy.
+func UserRepoPath(uid int64) string { return UserHome(uid) + "/repo" }
+
 // TmuxSocket is the owner's private tmux socket.
 //
 // Never tmux's default /tmp/tmux-<uid>/default: that path is derived from the

@@ -102,6 +102,11 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.ensurePreviewService(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
+	if err := r.handOff(ctx, &cell); err != nil {
+		// A refusing deployer is a condition to report, not a reason to stop
+		// reconciling the rest of the Cell.
+		cell.Status.HandoffMessage = err.Error()
+	}
 	if err := r.ensureProduction(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
@@ -538,6 +543,16 @@ func released(cell *acv1.Cell) bool {
 	return cell.Spec.Production.ReleaseID != "" && len(prodCommand(cell)) > 0
 }
 
+// runsProductionHere reports whether this Cell hosts production itself.
+//
+// External is a handoff: AgentCell publishes the release and notifies the
+// system that owns running it. Keeping a production pod alive as well would
+// leave a second, weaker deployment of the same product answering on a URL
+// somebody will eventually trust.
+func runsProductionHere(cell *acv1.Cell) bool {
+	return cell.Spec.Production.Target != acv1.ProductionExternal
+}
+
 // prodCommand falls back to the preview command: the same dev server run
 // against a release checkout is a sane default production shape for the
 // products this targets.
@@ -561,6 +576,12 @@ func prodPort(cell *acv1.Cell) int32 {
 // amount of dev/test debugging can reach it. A new ReleaseID changes the
 // pod env, which rolls the pod, which re-clones: that is the release.
 func (r *CellReconciler) ensureProduction(ctx context.Context, cell *acv1.Cell, ns string) error {
+	if !runsProductionHere(cell) {
+		// Switching a Cell to external must REMOVE what was here. Leaving it
+		// running would be a zombie serving a stale build on a URL the
+		// console used to advertise.
+		return r.removeInCellProduction(ctx, ns)
+	}
 	if !released(cell) {
 		return nil
 	}
@@ -717,4 +738,35 @@ func (r *CellReconciler) ensureQuota(ctx context.Context, cell *acv1.Cell, ns st
 		return nil
 	})
 	return err
+}
+
+// removeInCellProduction tears down the in-Cell production zone.
+func (r *CellReconciler) removeInCellProduction(ctx context.Context, ns string) error {
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.ProdDeployment}}
+	if err := r.Delete(ctx, dep); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.ProdService}}
+	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// handOff notifies an external deployer, once per release.
+func (r *CellReconciler) handOff(ctx context.Context, cell *acv1.Cell) error {
+	if runsProductionHere(cell) || cell.Spec.Production.ReleaseID == "" {
+		return nil
+	}
+	if cell.Status.HandedOffRelease == cell.Spec.Production.ReleaseID {
+		return nil
+	}
+	if err := r.notifyExternal(ctx, cell); err != nil {
+		return err
+	}
+	// Recorded only on success, so a failed handoff is retried on the next
+	// reconcile rather than silently dropped.
+	cell.Status.HandedOffRelease = cell.Spec.Production.ReleaseID
+	cell.Status.HandoffMessage = ""
+	return nil
 }
