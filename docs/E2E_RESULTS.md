@@ -339,3 +339,37 @@ also gains one runtime per slot, which the first version had omitted entirely.
 A third finding was in the harness: step 9 still asserted the old
 limits-shaped quota. Fixed rather than worked around, and it now also asserts
 that a limits quota has NOT come back.
+
+## Run 8, rerun after roles (2186cad)
+
+The same 17 checks, re-run against the build that added authorization, plus
+an authorization section — because re-running the old suite proves only that
+nothing broke for the operator, and says nothing about whether an outsider is
+kept out, which is what that change was about.
+
+| Section | Result |
+| --- | --- |
+| Shared-runtime topology (checks 1–9, as in the first Run 8) | PASS, 17/17 |
+| An open Cell reports `status.access: open` | PASS |
+| A visible Cell still yields a preview ticket | PASS |
+| Switching to `restricted` is reflected in status | PASS |
+| The static-token operator is not locked out of their own deployment | PASS |
+| Reads that should still work, do | PASS |
+
+`passed=25 failed=0` across both sections.
+
+**What this section does NOT prove.** The console's only credential here is a
+static token, and that principal is a maintainer everywhere by design — the
+single-user story would otherwise be locked out of its own console. So there
+is no way, on this deployment, to make a request AS an outsider: the cluster
+can show that restricting a Cell keeps the operator working and that the mode
+is recorded, but the refusals themselves are covered by the role-matrix unit
+tests, which drive an OIDC principal directly.
+
+Verifying refusals end to end needs an OIDC provider in the loop — the
+Casdoor path in `deploy/identity/` — and that is the next thing worth
+standing up, rather than a claim to make from here.
+
+Clearing the per-user repositories before the rerun was deliberate: leaving
+them would have taken the `ensureUserRepo` fast path and skipped the clone
+that the `safe.directory` fix exists for.
