@@ -89,42 +89,49 @@ func budget(b acv1.ResourceBudget, reqCPU, reqMem, limCPU, limMem string) (corev
 // admission — a pod that would exceed it is refused with a reason, which is
 // far easier to act on than a node that quietly starts OOM-killing.
 //
-// The ceiling is the whole Cell: every slot at full budget, plus the
-// resident anchor and production pods, plus headroom for a settle Job that
-// must be able to run even when every slot is busy — otherwise finished work
-// cannot be published, which is the worst moment to run out of room.
-func cellQuota(cell *acv1.Cell) (corev1.ResourceList, corev1.ResourceList) {
+// It caps REQUESTS, not limits, and that distinction was learned the hard
+// way on a cluster: a limits quota sums every pod's ceiling, so N users each
+// with a runtime allowed to burst to the whole Cell exceeded it before any
+// of them ran anything. Requests are what the scheduler actually reserves
+// and what capacity planning is made of; limits stay per-pod, bounding a
+// runaway build rather than the namespace.
+//
+// The ceiling is every slot at full budget, the resident anchor and
+// production pods, headroom for a settle Job — which must be able to run
+// even when every slot is busy, because publishing finished work is the
+// worst moment to run out of room — and one runtime per slot, since that is
+// the most users who can have work in flight at once.
+func cellQuota(cell *acv1.Cell) corev1.ResourceList {
 	slots := cell.Spec.MaxSessions
 	if slots <= 0 {
 		slots = 2
 	}
 	cpu := mustQuantity(cell.Spec.SessionResources.CPU, "1")
 	mem := mustQuantity(cell.Spec.SessionResources.Memory, "2Gi")
-	_, residentLim := budget(cell.Spec.PreviewResources, "200m", "512Mi", "2", "4Gi")
+	residentReq, _ := budget(cell.Spec.PreviewResources, "200m", "512Mi", "2", "4Gi")
+	runtimeReq := runtimeResources(cell).Requests
+	settleReq := settleResources().Requests
 
 	totalCPU := resource.NewMilliQuantity(0, resource.DecimalSI)
 	totalMem := resource.NewQuantity(0, resource.BinarySI)
+	add := func(c, m resource.Quantity) {
+		totalCPU.Add(c)
+		totalMem.Add(m)
+	}
 	for range slots {
-		totalCPU.Add(cpu)
-		totalMem.Add(mem)
+		add(cpu, mem)
+		// One runtime per slot: a resident session runs inside its owner's,
+		// and that is the most owners who can be working at once.
+		add(runtimeReq[corev1.ResourceCPU], runtimeReq[corev1.ResourceMemory])
 	}
-	// anchor + prod
-	for range 2 {
-		totalCPU.Add(residentLim[corev1.ResourceCPU])
-		totalMem.Add(residentLim[corev1.ResourceMemory])
-	}
-	// settle headroom
-	s := settleResources()
-	totalCPU.Add(s.Limits[corev1.ResourceCPU])
-	totalMem.Add(s.Limits[corev1.ResourceMemory])
+	add(residentReq[corev1.ResourceCPU], residentReq[corev1.ResourceMemory]) // anchor
+	add(residentReq[corev1.ResourceCPU], residentReq[corev1.ResourceMemory]) // production
+	add(settleReq[corev1.ResourceCPU], settleReq[corev1.ResourceMemory])
 
 	return corev1.ResourceList{
-			corev1.ResourceRequestsCPU:    *totalCPU,
-			corev1.ResourceRequestsMemory: *totalMem,
-		}, corev1.ResourceList{
-			corev1.ResourceLimitsCPU:    *totalCPU,
-			corev1.ResourceLimitsMemory: *totalMem,
-		}
+		corev1.ResourceRequestsCPU:    *totalCPU,
+		corev1.ResourceRequestsMemory: *totalMem,
+	}
 }
 
 func mustQuantity(s, fallback string) resource.Quantity {
