@@ -25,6 +25,10 @@ export function CellNewPage() {
     preview: '',
     previewPort: 3000,
     maxSessions: 2,
+    productionTarget: 'incell',
+    externalURL: '',
+    webhookURL: '',
+    webhookSecret: '',
   })
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF({ ...f, [k]: e.target.value })
@@ -90,6 +94,56 @@ export function CellNewPage() {
           <input value={f.preview} onChange={set('preview')} placeholder="npm run dev -- --host" />
           <div className="hint">留空则不起预览。它跑的是仓库里的代码,所以只在预览专用的 origin 上提供服务。</div>
         </label>
+
+        <div className="form-section-title">正式区</div>
+        <div className="seg-row">
+          <label className={`seg ${f.productionTarget === 'incell' ? 'on' : ''}`}>
+            <input
+              type="radio"
+              style={{ display: 'none' }}
+              checked={f.productionTarget === 'incell'}
+              onChange={() => setF({ ...f, productionTarget: 'incell' })}
+            />
+            <div className="seg-title">在 Cell 内部署</div>
+            <div className="seg-desc">
+              平台起一个隔离的正式区跑同一条命令。开发区怎么调都不影响它,发布是唯一入口。
+            </div>
+          </label>
+          <label className={`seg ${f.productionTarget === 'external' ? 'on' : ''}`}>
+            <input
+              type="radio"
+              style={{ display: 'none' }}
+              checked={f.productionTarget === 'external'}
+              onChange={() => setF({ ...f, productionTarget: 'external' })}
+            />
+            <div className="seg-title">交给外部部署</div>
+            <div className="seg-desc">
+              平台只负责宣布「发布了什么」,由你现有的流水线去跑。生产系统是别人的,就不该由这里代管。
+            </div>
+          </label>
+        </div>
+        {f.productionTarget === 'external' && (
+          <div style={{ marginTop: 14 }}>
+            <label className="field">
+              <span className="lbl">正式环境地址</span>
+              <input value={f.externalURL} onChange={set('externalURL')} placeholder="https://shop.example.com" />
+              <div className="hint">控制台只做跳转,不代理 —— 它不是我们的 origin,也有自己的鉴权。</div>
+            </label>
+            <div className="row">
+              <label className="field" style={{ flex: 1 }}>
+                <span className="lbl">发布 Webhook</span>
+                <input value={f.webhookURL} onChange={set('webhookURL')} placeholder="https://ci.example.com/hooks/agentcell" />
+              </label>
+              <label className="field" style={{ flex: 1 }}>
+                <span className="lbl">签名密钥 Secret</span>
+                <input value={f.webhookSecret} onChange={set('webhookSecret')} placeholder="deploy-hmac" />
+              </label>
+            </div>
+            <div className="hint" style={{ marginTop: -6 }}>
+              请求体用 HMAC-SHA256 签名。<b>没有密钥就不会发</b> —— 一个谁拿到 URL 都能触发的部署,不算部署触发器。
+            </div>
+          </div>
+        )}
 
         <div className="form-section-title">说明</div>
         <label className="field">

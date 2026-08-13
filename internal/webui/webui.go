@@ -311,9 +311,13 @@ type cellView struct {
 	// use these rather than composing paths against its own origin.
 	PreviewURL    string `json:"previewURL"`
 	ProductionURL string `json:"productionURL"`
-	ReleaseRef    string `json:"releaseRef"`
-	FollowSession string `json:"followSession"`
-	Message       string `json:"message"`
+	// ProductionExternal means ProductionURL points at a system we do not
+	// run: open it, do not embed it.
+	ProductionExternal bool   `json:"productionExternal,omitempty"`
+	HandoffMessage     string `json:"handoffMessage,omitempty"`
+	ReleaseRef         string `json:"releaseRef"`
+	FollowSession      string `json:"followSession"`
+	Message            string `json:"message"`
 }
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
@@ -322,10 +326,18 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		ActiveSessions: c.Status.ActiveSessions, MaxSessions: c.Spec.MaxSessions,
 		PreviewPath: c.Status.PreviewPath, ProductionPath: c.Status.ProductionPath,
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
-		Message: c.Status.Message,
+		Message: c.Status.Message, HandoffMessage: c.Status.HandoffMessage,
 	}
 	v.PreviewURL = h.previewURL(r, c.Name, ZoneDev, c.Status.PreviewPath)
 	v.ProductionURL = h.previewURL(r, c.Name, ZoneProd, c.Status.ProductionPath)
+	if c.Spec.Production.Target == acv1.ProductionExternal {
+		// Someone else's production is linked to, never proxied: it is not
+		// our origin, it has its own auth, and routing it through the
+		// untrusted-content proxy would break both — and would put a
+		// production system behind a ticket we mint.
+		v.ProductionURL = c.Spec.Production.ExternalURL
+		v.ProductionExternal = true
+	}
 	return v
 }
 
@@ -551,6 +563,13 @@ func (h *Handler) productionApp(w http.ResponseWriter, r *http.Request) {
 	}
 	if port == 0 {
 		port = 3000
+	}
+	if cell.Spec.Production.Target == acv1.ProductionExternal {
+		// There is nothing here to proxy, and pretending otherwise would
+		// answer a production URL with a platform error page.
+		writeErr(w, http.StatusNotFound,
+			fmt.Errorf("this Cell hands production off; it lives at %s", cell.Spec.Production.ExternalURL))
+		return
 	}
 	h.proxyTo(w, r, cellName, ids.ProdService, port, "/app/"+cellName)
 }

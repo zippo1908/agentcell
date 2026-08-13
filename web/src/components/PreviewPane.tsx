@@ -44,9 +44,13 @@ export function PreviewPane({
         <button
           className="ghost"
           onClick={() => setZone(zone === 'prod' ? 'preview' : 'prod')}
-          disabled={zone === 'preview' && !cell.productionPath}
+          disabled={zone === 'preview' && !cell.productionPath && !cell.productionExternal}
           title={
-            !cell.productionPath ? '还没有发布过,正式区不存在' : '在开发区/正式区之间切换'
+            cell.productionExternal
+              ? '正式区在外部,这里只给跳转'
+              : !cell.productionPath
+                ? '还没有发布过,正式区不存在'
+                : '在开发区/正式区之间切换'
           }
         >
           {zone === 'prod' ? '看开发区' : '看正式区'}
@@ -63,7 +67,28 @@ export function PreviewPane({
           {releasing ? '发布中…' : '发布到正式区'}
         </button>
       </div>
-      {src ? (
+      {zone === 'prod' && cell.productionExternal ? (
+        // Somebody else's production is linked to, never embedded: it is not
+        // our origin, it has its own auth, and framing it would break both
+        // while implying we run it.
+        <div className="empty" style={{ textAlign: 'left' }}>
+          <p style={{ marginTop: 0 }}>
+            这个工作区把正式区交给了外部部署。平台在发布时通知它,但不代管、也不代理。
+          </p>
+          {cell.productionURL ? (
+            <a href={cell.productionURL} target="_blank" rel="noreferrer">
+              打开 {cell.productionURL} ↗
+            </a>
+          ) : (
+            <span className="faint">还没有填正式环境地址。</span>
+          )}
+          {cell.handoffMessage && (
+            <div className="form-error" style={{ marginTop: 12 }}>
+              上次发布通知失败:{cell.handoffMessage}
+            </div>
+          )}
+        </div>
+      ) : src ? (
         <iframe
           ref={frame}
           src={src}

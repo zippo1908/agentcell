@@ -23,6 +23,12 @@ type createCellRequest struct {
 	Preview     string `json:"preview"`
 	PreviewPort int32  `json:"previewPort"`
 	MaxSessions int32  `json:"maxSessions"`
+	// ProductionTarget: "incell" (default) runs production in this Cell;
+	// "external" hands the release off to a system that owns running it.
+	ProductionTarget string `json:"productionTarget"`
+	ExternalURL      string `json:"externalURL"`
+	WebhookURL       string `json:"webhookURL"`
+	WebhookSecret    string `json:"webhookSecret"`
 }
 
 // createCell onboards a project from the console.
@@ -73,6 +79,25 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		Image:       req.Image,
 		Description: req.Description,
 		MaxSessions: maxSessions,
+	}
+	if req.ProductionTarget == string(acv1.ProductionExternal) {
+		cell.Spec.Production = acv1.ProductionSpec{
+			Target:      acv1.ProductionExternal,
+			ExternalURL: req.ExternalURL,
+			Webhook:     acv1.WebhookSpec{URL: req.WebhookURL, SecretName: req.WebhookSecret},
+		}
+		// Same rule as the controller enforces, but said at creation time
+		// where it is cheap to fix rather than at the first release.
+		if req.WebhookURL != "" && req.WebhookSecret == "" {
+			writeErr(w, 400, fmt.Errorf("a webhook needs a signing secret; an unsigned deploy trigger is one anybody who learns the URL can fire"))
+			return
+		}
+		if req.WebhookSecret != "" {
+			if err := h.checkCredentialOwnership(r, req.WebhookSecret); err != nil {
+				writeErr(w, 404, err)
+				return
+			}
+		}
 	}
 	if p := strings.Fields(req.Preview); len(p) > 0 {
 		port := req.PreviewPort

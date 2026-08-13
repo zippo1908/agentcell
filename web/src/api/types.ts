@@ -14,6 +14,10 @@ export interface Cell {
   previewURL: string
   productionURL: string
   releaseRef: string
+  /** True when productionURL points at a system we do not run: open it,
+   * never embed it. */
+  productionExternal?: boolean
+  handoffMessage?: string
   followSession: string
   message: string
 }
