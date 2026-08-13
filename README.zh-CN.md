@@ -136,6 +136,8 @@ flowchart TB
 | **运行位置**:从真实存在的机器池里挑;污点自动推导而非手写;调度不出去时如实报出调度器原话 | ✅ 已验证 |
 | 模型凭据由属主在控制台自助管理(只写,只回显后四位) | ✅ 已验证 |
 | 集群内镜像仓库(拉不到 ghcr.io 的内网适用)+ 814MB 的 alpine devbox | ✅ 已验证([TEAM_SETUP](docs/TEAM_SETUP.md)) |
+| **celld 选主**:只有一个副本 reconcile,每个副本都服务控制台;杀掉 leader 实测 4 秒接管 | ✅ 已验证 |
+| 一次性预览票据跨副本生效(兑换是对 API server 的原子 create,而不是单进程里的一个 map) | ✅ 已验证 |
 | **不靠 git 代理做隔离**:每用户独立仓库 + 共享只读基底,未发布提交进不了共享对象库 | ✅ 实测([Run 8](docs/E2E_RESULTS.md)、[ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
 | **正式区可外置**:Cell 内隔离正式区,或把发布交给真正在跑它的系统(签名 webhook) | ✅ 实测 |
 | 容量:所有负载声明 requests/limits,每个 Cell 有 ResourceQuota。注意常驻会话是 tmux window,与同一 runtime 内其他窗口共享额度——K8s 按 pod 预留,而 window 不是 pod | ✅ 实测([Run 8](docs/E2E_RESULTS.md)) |

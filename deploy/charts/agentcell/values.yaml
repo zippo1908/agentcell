@@ -16,7 +16,11 @@ image:
   pullSecret: ""
 
 celld:
-  replicas: 1        # celld has no leader election — keep at 1
+  # Leader election means only one replica reconciles, so >1 is safe for the
+  # controllers. It is not automatically safe for previews: set
+  # previewKeySecret as well, or the chart refuses to render.
+  replicas: 1
+  leaderElect: true
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: "1", memory: 512Mi}

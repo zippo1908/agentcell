@@ -19,7 +19,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	logzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
@@ -65,6 +64,8 @@ func main() {
 		allowNoAuth = flag.Bool("allow-no-auth", false,
 			"start with the HTTP surface unauthenticated (dev only)")
 		showVersion = flag.Bool("version", false, "print version and exit")
+		leaderElect = flag.Bool("leader-elect", true,
+			"run controllers only while holding the lease, so two celld replicas cannot both reconcile")
 	)
 	flag.Parse()
 	if *showVersion {
@@ -94,6 +95,22 @@ func main() {
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: *metricsAddr},
 		HealthProbeBindAddress: "0", // /healthz served on the main mux below
+		// Exactly one celld reconciles at a time.
+		//
+		// Two would not merely duplicate work: both would claim the same
+		// slot, both would create the same session pod, and both would race
+		// on the same status. The gate that stops a Cell being oversubscribed
+		// is an optimistic update on one object, which is sound against
+		// concurrent SESSIONS and says nothing about concurrent CONTROLLERS.
+		//
+		// On by default, because the dangerous configuration is the one you
+		// get by scaling a Deployment — an action nothing warns you about.
+		LeaderElection:          *leaderElect,
+		LeaderElectionID:        "agentcell-celld",
+		LeaderElectionNamespace: *controlNS,
+		// Hand the lease back on a clean shutdown so a rolling update is a
+		// pause of seconds rather than a full lease duration.
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		log.Error(err, "new manager")
@@ -157,6 +174,20 @@ func main() {
 	// Preview tickets must not be signed with a key derived from an empty
 	// token list, which is a publicly computable constant.
 	auth.SetKeyMaterial([]byte(os.Getenv("AGENTCELL_PREVIEW_KEY")))
+	// Single-use must mean single-use across replicas, not per process.
+	auth.UseSharedTicketStore(mgr.GetClient(), *controlNS)
+	if err := mgr.Add(alwaysRun(auth.SweepTickets)); err != nil {
+		log.Error(err, "add ticket sweeper")
+		os.Exit(1)
+	}
+	// A preview ticket signed with per-process key material is rejected by
+	// every OTHER replica, so previews would fail intermittently and only
+	// under load — the worst way to find out. Say it plainly at startup.
+	if *leaderElect && os.Getenv("AGENTCELL_PREVIEW_KEY") == "" {
+		log.Info("WARNING: AGENTCELL_PREVIEW_KEY is unset, so preview tickets are signed with " +
+			"per-process key material. That is fine for one replica and breaks previews across " +
+			"several — set it from a Secret before scaling celld.")
+	}
 	if !auth.Enabled() {
 		if !*allowNoAuth {
 			log.Error(nil, "no API tokens found and --allow-no-auth not set; refusing to expose an unauthenticated control plane",
@@ -190,7 +221,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 	// The HTTP surface starts with the manager so it uses the warmed cache.
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+	if err := mgr.Add(alwaysRun(func(ctx context.Context) error {
 		srv := &http.Server{Addr: *httpAddr, Handler: mux}
 		go func() {
 			<-ctx.Done()
@@ -209,7 +240,7 @@ func main() {
 	// Untrusted Cell content is served on its own origin (ADR-0007) so a
 	// previewed app keeps full same-origin powers over itself while being
 	// unable to reach the console.
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+	if err := mgr.Add(alwaysRun(func(ctx context.Context) error {
 		pmux := http.NewServeMux()
 		// Untrusted content is authorized by a short-lived per-Cell ticket,
 		// never by the console credential (ADR-0007).
@@ -296,3 +327,16 @@ func readOverlays(dir string) ([][]byte, error) {
 	}
 	return out, nil
 }
+
+// alwaysRun marks a runnable that serves whether or not this replica holds
+// the lease.
+//
+// The console and the preview proxy are read-mostly HTTP surfaces; gating
+// them on leadership would mean a standby replica accepting connections and
+// answering nothing, which is worse than not being there — the Service would
+// still route to it. Only the controllers are exclusive, because only they
+// write.
+type alwaysRun func(context.Context) error
+
+func (f alwaysRun) Start(ctx context.Context) error { return f(ctx) }
+func (alwaysRun) NeedLeaderElection() bool          { return false }

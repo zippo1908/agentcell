@@ -156,7 +156,8 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | **Production elsewhere**: a Cell runs its own isolated production zone, or hands the release to a system that owns running it (signed webhook) | ✅ tested |
 | Capacity: every workload declares requests/limits and a ResourceQuota caps each Cell. Note a resident session is a tmux window, so it shares its owner's runtime budget — Kubernetes reserves per pod, and a window is not a pod | ✅ tested ([Run 8](docs/E2E_RESULTS.md)) |
 | Re-attaching a restored window to the CLI's own conversation (the window comes back; the CLI is not told to resume into it) | ⬜ designed |
-| celld leader election (one replica today: sessions already running are unaffected if it restarts, but dispatch/settle/review pause) | ⬜ designed |
+| **celld leader election**: one replica reconciles, every replica serves the console, ~4s takeover measured on a killed leader | ✅ tested |
+| Single-use preview tickets enforced across replicas (redemption is an atomic create against the API server, not a map in one process) | ✅ tested |
 | Per-user NetworkPolicy · agent-sandbox substrate · multi-node RWX | ⬜ designed |
 
 ## Install (one command)

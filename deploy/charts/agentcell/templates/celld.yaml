@@ -15,6 +15,9 @@ metadata:
   name: celld
   namespace: {{ .Values.controlNamespace }}
   labels: {{- include "agentcell.labels" . | nindent 4 }}
+{{- if and (gt (int .Values.celld.replicas) 1) (not .Values.previewKeySecret) }}
+{{- fail "celld.replicas > 1 needs previewKeySecret: preview tickets are signed with per-process key material otherwise, so a ticket minted by one replica is refused by the others and previews fail intermittently under load. Create a Secret with a `previewKey` entry and set previewKeySecret." }}
+{{- end }}
 spec:
   replicas: {{ .Values.celld.replicas }}
   selector:
@@ -48,6 +51,7 @@ spec:
             {{- end }}
             - "--preview-addr=:{{ .Values.preview.port }}"
             - "--metrics-addr=:8082"
+            - "--leader-elect={{ .Values.celld.leaderElect }}"
             {{- with .Values.preview.domain }}
             - "--preview-domain={{ . }}"
             {{- end }}

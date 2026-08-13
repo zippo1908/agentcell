@@ -174,6 +174,30 @@ Two things to know:
 - a fully domestic pairing avoids the question entirely — Kimi CLI with
   Moonshot, or Qwen Code with DashScope. See [RUNNERS.md](RUNNERS.md).
 
+## Running celld with more than one replica
+
+celld holds a lease, so exactly one replica reconciles while **every** replica
+serves the console — the controllers are the only exclusive part, because
+they are the only part that writes. Two reconciling at once would both claim
+the same slot and both create the same session pod: the slot gate is
+optimistic locking on one object, which is sound against concurrent sessions
+and says nothing about concurrent controllers.
+
+Scaling needs one more thing, and the chart refuses to render without it:
+
+```sh
+kubectl -n agentcell-system create secret generic celld-preview-key \
+  --from-literal=previewKey="$(openssl rand -hex 32)"
+helm upgrade ... --set celld.replicas=2 --set previewKeySecret=celld-preview-key
+```
+
+Without a shared key each replica signs preview tickets with its own, so a
+ticket minted by one is refused by the others and previews fail
+intermittently — only under load, which is the worst way to find out.
+
+Measured takeover on a killed leader: about 4 seconds. Sessions already
+running are untouched either way; they are self-contained pods.
+
 ## First-run checklist
 
 ```
@@ -187,6 +211,7 @@ Two things to know:
 [ ] one model key per person, labelled with their owner id
 [ ] first Cell created, first member added (which closes it)
 [ ] a dispatch that reaches the model, and a settle that reaches the forge
+[ ] if celld.replicas > 1: previewKeySecret set
 ```
 
 The last line is the only one that proves the rest.

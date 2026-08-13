@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"net/url"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
 	"strings"
 
@@ -36,6 +37,15 @@ type Authenticator struct {
 	// gateway that OVERWRITES these headers (e.g. APISIX must set, not
 	// append, X-Forwarded-*).
 	TrustForwardedHeaders bool
+	// tickets is the single-use guard. Shared through the API server when a
+	// client is wired, because "used once" has to hold across replicas.
+	tickets sharedTickets
+}
+
+// UseSharedTicketStore makes single-use tickets single-use across every
+// celld replica rather than once per process.
+func (a *Authenticator) UseSharedTicketStore(c client.Client, namespace string) {
+	a.tickets.client, a.tickets.namespace = c, namespace
 }
 
 // NewAuthenticator builds an authenticator from raw token material. An

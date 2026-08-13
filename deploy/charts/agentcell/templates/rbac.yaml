@@ -47,6 +47,14 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
+  # Leader election: exactly one celld reconciles at a time. Without this
+  # two replicas both claim slots, both create session pods, and both race on
+  # the same status — the slot gate is optimistic locking on one object,
+  # which is sound against concurrent sessions and says nothing about
+  # concurrent controllers.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Read-only, cluster-scoped: the console offers the node pools that exist
   # so nobody places a Cell on a machine class that does not. AgentCell never
   # labels, cordons or taints a node.

@@ -165,7 +165,6 @@ func ZoneOfPreviewRequest(r *http.Request) Zone {
 
 // PreviewMiddleware authorizes the untrusted-content origin.
 func (a *Authenticator) PreviewMiddleware(next http.Handler) http.Handler {
-	used := &usedTickets{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.Enabled() || r.URL.Path == "/healthz" {
 			next.ServeHTTP(w, r)
@@ -189,7 +188,7 @@ func (a *Authenticator) PreviewMiddleware(next http.Handler) http.Handler {
 				http.Error(w, "invalid preview ticket", http.StatusForbidden)
 				return
 			}
-			if !used.consume(t.nonce, time.Unix(t.exp, 0)) {
+			if !a.tickets.consume(r.Context(), t.nonce, time.Unix(t.exp, 0)) {
 				http.Error(w, "preview ticket already used", http.StatusForbidden)
 				return
 			}
