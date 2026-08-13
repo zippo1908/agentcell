@@ -91,7 +91,10 @@ flowchart TB
 | **runner 也是数据**:加一个 CLI 或修一个 flag 只改 `runners.d/*.yaml`,不用发版([docs/RUNNERS.md](docs/RUNNERS.md)) | ✅ 实测 |
 | 派工表单由服务端目录驱动:选 runner 只列它能驱动的 provider、默认同厂商、模型来自清单且可自填 | ✅ |
 | 浏览器内终端(tmux over WebSocket)——现在可用 `kubectl exec … cell-runtime attach <id>` | ⬜ 设计中(M5) |
-| runtime pod 被替换后续上原对话(id 与 `$HOME` 状态都在,重开 window 未接) | ⬜ 设计中 |
+| **不靠 git 代理做隔离**:每用户独立仓库 + 共享只读基底,未发布提交进不了共享对象库 | ✅ 实测([Run 8](docs/E2E_RESULTS.md)、[ADR-0012](docs/adr/0012-git-isolation-decision.md)) |
+| **正式区可外置**:Cell 内隔离正式区,或把发布交给真正在跑它的系统(签名 webhook) | ✅ 实测 |
+| 容量可执行:所有负载声明 requests/limits,每个 Cell 有 ResourceQuota | ✅ 实测([Run 8](docs/E2E_RESULTS.md)) |
+| runtime pod 被替换后续上原对话(窗口会恢复,但重新接上 CLI 对话未接) | ⬜ 设计中 |
 | agent-sandbox 底座 · 多节点 RWX | ⬜ 设计中 |
 
 ## 一条命令安装
