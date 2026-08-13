@@ -117,6 +117,11 @@ func runWindowOpen(args []string) error {
 			return err
 		}
 	}
+	// This runs as a fresh exec, so it does not inherit whatever PID 1 set
+	// up; the trust entry is idempotent and cheap.
+	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+		return err
+	}
 	wt := ids.WorktreePath(uid, id)
 	if err := prepareWorktree(wt, id, os.Getenv(runtimeapi.EnvBaseBranch)); err != nil {
 		return err
@@ -321,8 +326,14 @@ func ensureUserRepo(uid int64) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		return "", err
 	}
+	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+		return "", err
+	}
 	if err := gitNet("/", "clone", "--shared", "--no-checkout", ids.RepoPath, repo); err != nil {
 		return "", fmt.Errorf("user repository: %w", err)
+	}
+	if err := ensureRepoTrusted(repo); err != nil {
+		return "", err
 	}
 	if err := os.Chmod(repo, 0o700); err != nil {
 		return "", err

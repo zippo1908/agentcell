@@ -724,14 +724,7 @@ func (r *CellReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // ensureQuota caps the whole Cell namespace.
 func (r *CellReconciler) ensureQuota(ctx context.Context, cell *acv1.Cell, ns string) error {
-	req, lim := cellQuota(cell)
-	hard := corev1.ResourceList{}
-	for k, v := range req {
-		hard[k] = v
-	}
-	for k, v := range lim {
-		hard[k] = v
-	}
+	hard := cellQuota(cell)
 	q := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cell"}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, q, func() error {
 		q.Spec.Hard = hard

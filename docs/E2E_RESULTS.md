@@ -285,3 +285,57 @@ was being passed as `tmux new-window -e KEY=VALUE`, which puts it in the tmux
 client's argv and therefore in `/proc` for every other window the user has
 open — the exact exposure the stdin channel exists to avoid. The environment
 now goes through a `0600` file the window sources and unlinks.
+
+## Run 8 - the shared-runtime topology
+
+Runs 6 and 7 predate what is being tested here. Run 6 was one pod per
+resident session; Run 7 only proved two sessions *share* a runtime.
+Everything the sharing changed — one session's TTL, a container restarting,
+two Codex conversations in one `$HOME` — was unverified until now, and so
+were per-user repositories (ADR-0012) and the quota.
+
+Environment: the same internal k3s and self-hosted GitLab; celld and runtime
+at `run8b`, built from `3a44fe1`.
+
+| Check | Result |
+| --- | --- |
+| Two concurrent sessions for one user share ONE runtime | PASS, `runtime-100002` |
+| No per-session pods exist | PASS |
+| Exactly one runtime pod | PASS |
+| Each session gets its own Codex state dir | PASS, 2 dirs |
+| An unpublished commit is absent from the SHARED object store | PASS |
+| ...and present in the user's own | PASS |
+| The shared mirror is no longer group-writable | PASS, `2755` |
+| An idle session is reclaimed | PASS, `Settled` |
+| Its sibling is untouched | PASS, still `Running` |
+| The shared runtime survives one session's TTL | PASS |
+| A runtime restart recovers instead of settling | PASS, `Running`, new container id |
+| ...and is recorded as a recovery | PASS, `recoveries=1` |
+| A multi-line task is accepted | PASS |
+| ...and both lines reach TASK.md | PASS |
+| The quota caps requests, not limits | PASS |
+| ResourceQuota in force | PASS, `requests.memory=3584Mi` |
+| The anchor asks the scheduler for something | PASS, `512Mi` |
+
+`passed=18 failed=0`.
+
+Two defects, both of which only a cluster could produce:
+
+**`git clone --shared` was refused by `safe.directory`.** The trust entry
+named `/workspace/repo`; git reported the path it actually opened,
+`/workspace/repo/.git`, and refused. Every resident session failed to start.
+Trust now covers both, and is established in the exec that clones rather than
+only in the runtime's PID 1 — an exec does not inherit what PID 1 set up.
+
+**The quota was written against limits, and starved the runtimes it was
+meant to protect.** A limits quota sums every pod's ceiling, and a runtime is
+allowed to burst to the whole Cell's session budget — so the first runtime
+consumed the namespace's entire allowance and the second was refused
+admission before running anything. It now caps `requests`, which is what the
+scheduler reserves and what capacity planning is actually made of; limits
+stay per-pod, bounding a runaway build rather than the namespace. The budget
+also gains one runtime per slot, which the first version had omitted entirely.
+
+A third finding was in the harness: step 9 still asserted the old
+limits-shaped quota. Fixed rather than worked around, and it now also asserts
+that a limits quota has NOT come back.

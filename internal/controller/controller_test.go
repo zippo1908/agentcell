@@ -747,19 +747,20 @@ func TestCellNamespaceIsCapped(t *testing.T) {
 		types.NamespacedName{Namespace: ids.WorkloadNamespace("shop"), Name: "cell"}, &q); err != nil {
 		t.Fatalf("no quota on the cell namespace: %v", err)
 	}
-	// 3 slots x 1 CPU + anchor 2 + prod 2 + settle 1 = 8
-	if got := q.Spec.Hard[corev1.ResourceLimitsCPU]; got.String() != "8" {
-		t.Errorf("cpu ceiling = %s, want 8 (3 slots + anchor + prod + settle headroom)", got.String())
+	// 3 slots x (1 CPU + a runtime's 100m) + anchor 200m + prod 200m
+	// + settle 100m = 3.8
+	if got := q.Spec.Hard[corev1.ResourceRequestsCPU]; got.String() != "3800m" {
+		t.Errorf("cpu reservation = %s, want 3800m", got.String())
 	}
-	// 3 x 2Gi + 4Gi + 4Gi + 1Gi = 15Gi
-	if got := q.Spec.Hard[corev1.ResourceLimitsMemory]; got.String() != "15Gi" {
-		t.Errorf("memory ceiling = %s, want 15Gi", got.String())
+	// A LIMITS quota would sum every pod's ceiling, and N users each with a
+	// runtime allowed to burst to the whole Cell exceed it before running
+	// anything. Requests are what the scheduler reserves.
+	if _, capped := q.Spec.Hard[corev1.ResourceLimitsMemory]; capped {
+		t.Error("quota caps limits; that refuses runtimes that would never use the memory")
 	}
-	// Requests are capped too: a namespace that can request more than it can
-	// limit would let the scheduler over-commit the node this Cell was sized
-	// for.
-	if _, ok := q.Spec.Hard[corev1.ResourceRequestsCPU]; !ok {
-		t.Error("quota caps limits but not requests")
+	// Every slot must be able to hold a session AND its owner's runtime.
+	if _, ok := q.Spec.Hard[corev1.ResourceRequestsMemory]; !ok {
+		t.Error("quota does not reserve memory")
 	}
 }
 
