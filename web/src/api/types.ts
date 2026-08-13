@@ -23,6 +23,25 @@ export interface Cell {
   handoffMessage?: string
   followSession: string
   message: string
+  /** The machine this Cell landed on. A Cell cannot span nodes. */
+  node?: string
+  /** Placement in force, e.g. "agentcell.io/pool=gpu"; absent = scheduler chooses. */
+  pool?: string
+  /** Why it has landed nowhere, in the scheduler's own words. */
+  schedulingMessage?: string
+}
+
+/** A class of machine a Cell can be placed on, as it exists in the cluster. */
+export interface NodePool {
+  key: string
+  value: string
+  label: string
+  nodes: number
+  taints: string[]
+  /** Largest SINGLE node's free capacity — a Cell fits on one machine or none. */
+  freeCPU: string
+  freeMemory: string
+  schedulable: boolean
 }
 
 export type SessionPhase =

@@ -6,6 +6,7 @@ import type {
   Credential,
   Me,
   Meta,
+  NodePool,
   SessionState,
   Review,
 } from './types'
@@ -62,6 +63,15 @@ export const api = {
   createCell: (body: Record<string, unknown>) =>
     req<{ cell: string }>('/api/cells', { method: 'POST', body: JSON.stringify(body) }),
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
+
+  nodePools: () => req<NodePool[]>('/api/nodepools'),
+
+  /** Empty key clears the placement and lets the scheduler choose again. */
+  savePlacement: (name: string, key: string, value: string) =>
+    req<{ nodeSelector: Record<string, string>; tolerations: number }>(
+      `/api/cells/${name}/placement`,
+      { method: 'PUT', body: JSON.stringify({ key, value }) },
+    ),
 
   saveDescription: (name: string, description: string) =>
     req<{ ok: string }>(`/api/cells/${name}/description`, {

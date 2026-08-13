@@ -44,6 +44,28 @@ export function CellPage() {
   const cell = data?.cell
   const sessions = data?.sessions ?? []
 
+  // Node pools are only needed on the settings tab, and reading them needs a
+  // cluster-scoped permission an operator may not have granted — so a
+  // failure here must degrade to "cannot offer a choice", never break the page.
+  const pools = useQuery({
+    queryKey: ['nodepools'],
+    queryFn: () => api.nodePools(),
+    enabled: tab === 'settings',
+    retry: false,
+  })
+
+  const savePlacement = useMutation({
+    mutationFn: (label: string) => {
+      const [key, ...rest] = label ? label.split('=') : ['']
+      return api.savePlacement(name, key, rest.join('='))
+    },
+    onSuccess: () => {
+      toast.success('运行位置已更新,锚点会按新位置重建')
+      qc.invalidateQueries({ queryKey: ['cell', name] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   const saveDesc = useMutation({
     mutationFn: (d: string) => api.saveDescription(name, d),
     onSuccess: () => {
@@ -185,6 +207,97 @@ export function CellPage() {
 
       {tab === 'settings' && (
         <>
+        <div className="card">
+          <h3>运行位置</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            一个工作区<b>跑在一台机器上</b>——工作区卷是 ReadWriteOnce,所有 pod 跟着锚点走。
+            所以这里选的是「哪一类机器」,也就是这个项目的全部算力上限。
+          </p>
+
+          {cell.node ? (
+            <div className="note" style={{ marginTop: 10 }}>
+              当前在 <code className="mono">{cell.node}</code>
+              {cell.pool ? <> ,限定在 <code className="mono">{cell.pool}</code></> : <> ,未限定(调度器自选)</>}
+            </div>
+          ) : cell.schedulingMessage ? (
+            /* The failure this whole feature exists to make visible: a Cell
+               that has landed nowhere. Previously this read as "Pending"
+               forever with the reason in an event nobody could reach. */
+            <div className="note red" style={{ marginTop: 10 }}>
+              <b>还没有机器能放下它。</b>调度器说:
+              <div className="mono" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+                {cell.schedulingMessage}
+              </div>
+            </div>
+          ) : (
+            <div className="note" style={{ marginTop: 10 }}>正在调度……</div>
+          )}
+
+          {pools.isError ? (
+            <p className="hint">
+              读不到节点列表,所以没法在这里选机器。celld 需要 <code className="mono">nodes</code> 的只读权限
+              ——用新版 chart 升级即可。
+            </p>
+          ) : (
+            <div className="table-wrap" style={{ marginTop: 10 }}>
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>机器池</th>
+                    <th>节点</th>
+                    <th>单机可用(最大)</th>
+                    <th>污点</th>
+                    <th style={{ width: 90 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(pools.data ?? []).map((p) => {
+                    const current = cell.pool === p.label
+                    return (
+                      <tr key={p.label}>
+                        <td className="mono">{p.label}</td>
+                        <td>{p.nodes}</td>
+                        <td className="mono">
+                          {p.schedulable ? `${p.freeCPU} / ${p.freeMemory}` : <span className="faint">不可调度</span>}
+                        </td>
+                        <td className="faint mono" style={{ fontSize: 11 }}>
+                          {p.taints.length ? p.taints.join(' ') : NONE}
+                        </td>
+                        <td>
+                          <button
+                            className="ghost small"
+                            disabled={current || savePlacement.isPending}
+                            onClick={() => savePlacement.mutate(p.label)}
+                          >
+                            {current ? '当前' : '放这里'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {(pools.data ?? []).length === 0 && !pools.isLoading && (
+                    <tr>
+                      <td className="faint">没有可选的机器池</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {/* 污点由平台按所选池自己算出来加上:选定一个专用池之后,再被它自己的污点挡在门外
+              不是安全性,是谜题。 */}
+          {cell.pool && (
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="ghost small" onClick={() => savePlacement.mutate('')}>
+                取消限定,交回调度器
+              </button>
+            </div>
+          )}
+          <p className="hint">
+            改动会让锚点重建,这个工作区会短暂中断;正在跑的会话会被清算。
+          </p>
+        </div>
+
         <div className="card">
           <h3>访问</h3>
           {cell.access === 'open' ? (

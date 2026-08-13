@@ -47,6 +47,17 @@ func NewSessionID() string {
 // control namespace, not here.
 func WorkloadNamespace(cell string) string { return "cell-" + cell }
 
+// CellFromNamespace is the inverse, for watches that see a workload object
+// and must name the Cell it belongs to. Returns "" for namespaces that are
+// not a Cell's.
+func CellFromNamespace(ns string) string {
+	name, ok := strings.CutPrefix(ns, "cell-")
+	if !ok {
+		return ""
+	}
+	return name
+}
+
 // Fixed names inside a workload namespace: one anchor, one workspace, one
 // preview service per Cell, so constants beat derivations.
 const (

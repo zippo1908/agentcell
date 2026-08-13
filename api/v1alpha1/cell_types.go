@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -130,6 +131,31 @@ type CellSpec struct {
 	StorageClassName string         `json:"storageClassName,omitempty"`
 	Preview          PreviewSpec    `json:"preview,omitempty"`
 	Production       ProductionSpec `json:"production,omitempty"`
+	// Placement says which machines this Cell may run on. A Cell cannot span
+	// nodes — its workspace volume is ReadWriteOnce and every pod follows the
+	// anchor — so this is the whole of "where does this project live".
+	//
+	// It exists because a real deployment is not uniform: hyperconverged
+	// hosts next to cloud instances, a big-memory box, a GPU box, a cheap
+	// box. Without a way to say so, a project either takes whatever the
+	// scheduler picks or the whole cluster has to be identical.
+	Placement PlacementSpec `json:"placement,omitempty"`
+}
+
+// PlacementSpec pins a Cell to a class of machine.
+type PlacementSpec struct {
+	// NodeSelector is matched against node labels. It must match at least
+	// one node at the time it is set: a selector matching nothing schedules
+	// nothing, and the symptom — pods Pending forever, with the reason
+	// buried in an event — is the kind of failure this field exists to
+	// prevent, not cause.
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	// Tolerations let this Cell onto tainted nodes. Dedicated pools are
+	// usually tainted precisely so that nothing lands on them by accident,
+	// so a placement that names one and stops there would never schedule.
+	// The console fills these in from the chosen pool's taints rather than
+	// asking anybody to write them.
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 // CellPhase summarizes observed state.
@@ -152,6 +178,16 @@ type CellStatus struct {
 	// first release, and empty for external production, which is not ours to
 	// serve.
 	ProductionPath string `json:"productionPath,omitempty"`
+	// Node is the machine this Cell actually landed on. A Cell is one node's
+	// worth of project, so "which one" is a fact its owner needs and cannot
+	// otherwise get without cluster access.
+	Node string `json:"node,omitempty"`
+	// SchedulingMessage is why it has not landed anywhere, in the
+	// scheduler's own words. A Cell that stays Pending is the most opaque
+	// failure this system has — the reason lives in an event on a pod in
+	// another namespace — so it is carried up to where the question is
+	// asked.
+	SchedulingMessage string `json:"schedulingMessage,omitempty"`
 	// Access is the mode actually in force, so "who can touch this project"
 	// is answerable from `kubectl get cell` without reasoning about whether
 	// an empty list means everyone or no one.

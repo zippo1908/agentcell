@@ -119,6 +119,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/cells", h.createCell)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
+	mux.HandleFunc("GET /api/nodepools", h.listNodePools)
+	mux.HandleFunc("PUT /api/cells/{cell}/placement", h.putPlacement)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
 	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
 	mux.HandleFunc("PUT /api/cells/{cell}/members", h.putMember)
@@ -327,6 +329,15 @@ type cellView struct {
 	// and say so when the answer is "anyone who can log in".
 	Access  string        `json:"access"`
 	Members []acv1.Member `json:"members,omitempty"`
+	// Where this project runs. A Cell is one machine's worth of project, so
+	// this is not trivia: it is the whole of its capacity, and on a mixed
+	// fleet it is a decision somebody made or declined to make.
+	Node string `json:"node,omitempty"`
+	// Pool is the placement in force, "" when the scheduler chooses freely.
+	Pool string `json:"pool,omitempty"`
+	// SchedulingMessage is the scheduler's own explanation for a Cell that
+	// has landed nowhere — otherwise the most opaque state this system has.
+	SchedulingMessage string `json:"schedulingMessage,omitempty"`
 }
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
@@ -337,6 +348,10 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message, HandoffMessage: c.Status.HandoffMessage,
 		Access: string(effectiveAccess(c)), Members: c.Spec.Members,
+		Node:   c.Status.Node, SchedulingMessage: c.Status.SchedulingMessage,
+	}
+	for k, val := range c.Spec.Placement.NodeSelector {
+		v.Pool = k + "=" + val
 	}
 	v.PreviewURL = h.previewURL(r, c.Name, ZoneDev, c.Status.PreviewPath)
 	v.ProductionURL = h.previewURL(r, c.Name, ZoneProd, c.Status.ProductionPath)

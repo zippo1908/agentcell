@@ -156,12 +156,16 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	} else {
 		cell.Status.Phase = acv1.CellPending
 	}
+	cell.Status.Node, cell.Status.SchedulingMessage = r.observePlacement(ctx, ns)
 	if err := r.Status().Update(ctx, &cell); err != nil {
 		return ctrl.Result{}, err
 	}
 	log.V(1).Info("reconciled cell", "cell", cell.Name, "ready", ready, "activeSessions", active)
-	// Poll anchor readiness until Ready; afterwards session events drive us.
-	if !ready {
+	// Poll anchor readiness until Ready; afterwards session events and the
+	// anchor watch drive us. An unscheduled anchor is polled too: the
+	// scheduler records its refusal on the pod a moment after creating it,
+	// so the first look often finds a reason that is not there yet.
+	if !ready || cell.Status.Node == "" {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
@@ -183,6 +187,35 @@ func applyCellDefaults(cell *acv1.Cell) {
 	if cell.Spec.SessionResources.Memory == "" {
 		cell.Spec.SessionResources.Memory = "2Gi"
 	}
+}
+
+// observePlacement answers the two questions an owner asks about a Cell that
+// is not up: which machine is it on, and if none, why.
+//
+// The second is the one that matters. An unschedulable anchor is this
+// system's most opaque failure — a selector that matches nothing, a pool
+// whose taint was not tolerated, a node with no room left — and every one of
+// those reads identically from outside: a Cell that says Pending forever.
+// The scheduler already explains itself, in a pod condition nobody without
+// cluster access can reach. This carries that sentence up to where the
+// question gets asked.
+func (r *CellReconciler) observePlacement(ctx context.Context, ns string) (node, why string) {
+	var pod corev1.Pod
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.AnchorStatefulSet + "-0"}, &pod); err != nil {
+		return "", ""
+	}
+	if pod.Spec.NodeName != "" {
+		return pod.Spec.NodeName, ""
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			if c.Message != "" {
+				return "", c.Message
+			}
+			return "", c.Reason
+		}
+	}
+	return "", ""
 }
 
 func (r *CellReconciler) fail(ctx context.Context, cell *acv1.Cell, err error) (ctrl.Result, error) {
@@ -476,6 +509,12 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 			Spec: corev1.PodSpec{
 				ServiceAccountName: sa,
 				SecurityContext:    podSecurity(),
+				// Only the anchor carries the placement: every other pod in
+				// the Cell already follows it by pod affinity, so stating it
+				// once is both sufficient and the only way it cannot
+				// disagree with itself.
+				NodeSelector: cell.Spec.Placement.NodeSelector,
+				Tolerations:  cell.Spec.Placement.Tolerations,
 				Containers: []corev1.Container{{
 					Name:            "anchor",
 					Image:           cell.Spec.Image,
@@ -724,6 +763,26 @@ func (r *CellReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 				return []ctrl.Request{{NamespacedName: types.NamespacedName{
 					Namespace: s.Namespace, Name: s.Spec.Cell,
+				}}}
+			})).
+		// The anchor lives in another namespace, so it cannot be Owned — a
+		// cross-namespace owner reference is not a thing Kubernetes has.
+		// Without this watch a Cell that stops being schedulable keeps
+		// reporting Ready and the machine it used to be on, indefinitely,
+		// until some unrelated Session event happens to wake the reconciler.
+		// That is precisely the opaque failure the placement fields exist to
+		// remove, so observing it cannot itself depend on luck.
+		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestsFromMapFunc(
+			func(_ context.Context, obj client.Object) []ctrl.Request {
+				if obj.GetName() != ids.AnchorStatefulSet {
+					return nil
+				}
+				cell := ids.CellFromNamespace(obj.GetNamespace())
+				if cell == "" {
+					return nil
+				}
+				return []ctrl.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.ControlNamespace, Name: cell,
 				}}}
 			})).
 		Named("cell").

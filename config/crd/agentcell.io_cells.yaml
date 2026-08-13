@@ -93,6 +93,72 @@ spec:
                   - userID
                   type: object
                 type: array
+              placement:
+                description: |-
+                  Placement says which machines this Cell may run on. A Cell cannot span
+                  nodes — its workspace volume is ReadWriteOnce and every pod follows the
+                  anchor — so this is the whole of "where does this project live".
+
+                  It exists because a real deployment is not uniform: hyperconverged
+                  hosts next to cloud instances, a big-memory box, a GPU box, a cheap
+                  box. Without a way to say so, a project either takes whatever the
+                  scheduler picks or the whole cluster has to be identical.
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector is matched against node labels. It must match at least
+                      one node at the time it is set: a selector matching nothing schedules
+                      nothing, and the symptom — pods Pending forever, with the reason
+                      buried in an event — is the kind of failure this field exists to
+                      prevent, not cause.
+                    type: object
+                  tolerations:
+                    description: |-
+                      Tolerations let this Cell onto tainted nodes. Dedicated pools are
+                      usually tainted precisely so that nothing lands on them by accident,
+                      so a placement that names one and stops there would never schedule.
+                      The console fills these in from the chosen pool's taints rather than
+                      asking anybody to write them.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                type: object
               preview:
                 description: |-
                   PreviewSpec keeps a live product preview running for the whole life of
@@ -258,6 +324,12 @@ spec:
                 type: string
               message:
                 type: string
+              node:
+                description: |-
+                  Node is the machine this Cell actually landed on. A Cell is one node's
+                  worth of project, so "which one" is a fact its owner needs and cannot
+                  otherwise get without cluster access.
+                type: string
               observedGeneration:
                 format: int64
                 type: integer
@@ -273,6 +345,14 @@ spec:
                   ProductionPath is the platform-relative 正式区 URL; empty until the
                   first release, and empty for external production, which is not ours to
                   serve.
+                type: string
+              schedulingMessage:
+                description: |-
+                  SchedulingMessage is why it has not landed anywhere, in the
+                  scheduler's own words. A Cell that stays Pending is the most opaque
+                  failure this system has — the reason lives in an event on a pod in
+                  another namespace — so it is carried up to where the question is
+                  asked.
                 type: string
               slotLeases:
                 description: |-
