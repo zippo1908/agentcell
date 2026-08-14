@@ -51,6 +51,8 @@ func main() {
 		err = runWindowClose(os.Args[2:])
 	case "attach":
 		err = runAttach(os.Args[2:])
+	case "branches":
+		err = runBranches(os.Args[2:])
 	case "detach":
 		err = runDetach(os.Args[2:])
 	case "tell":

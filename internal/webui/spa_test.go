@@ -115,6 +115,7 @@ func TestEveryClientRouteSurvivesAReload(t *testing.T) {
 		"/credentials",
 		"/teams",
 		"/board",
+		"/workspace",
 	} {
 		if !isClientRoute(p) {
 			t.Errorf("%s would 404 on a hard reload", p)

@@ -121,6 +121,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
 	mux.HandleFunc("GET /api/new-project-options", h.newProjectOptions)
+	mux.HandleFunc("GET /api/cells/{cell}/branches", h.listBranches)
 	mux.HandleFunc("GET /api/teams", h.listTeams)
 	mux.HandleFunc("GET /api/teams/{team}/board", h.listBoard)
 	mux.HandleFunc("POST /api/teams/{team}/board", h.postToBoard)
@@ -196,7 +197,7 @@ func CellFromPreviewRequest(r *http.Request) string {
 // here — a real trap, and the reason the test below enumerates them.
 func isClientRoute(p string) bool {
 	switch p {
-	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities", "/credentials", "/teams", "/board":
+	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities", "/credentials", "/teams", "/board", "/workspace":
 		return true
 	}
 	if rest, ok := strings.CutPrefix(p, "/cells/"); ok {
@@ -507,6 +508,34 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Task) == "" {
 		writeErr(w, 400, fmt.Errorf("task is empty"))
 		return
+	}
+	// Fill in what the project already decided.
+	//
+	// A dispatch needs a runner, a provider and a key; none of those are new
+	// information at the moment somebody says what they want. The pairing was
+	// chosen when the project was created, and the key is the caller's own.
+	// Asking again on every task is how a "say what you want" box turns back
+	// into a form.
+	var cellForDefaults acv1.Cell
+	if err := h.Client.Get(r.Context(),
+		types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &cellForDefaults); err == nil {
+		if req.Runner == "" {
+			req.Runner = cellForDefaults.Spec.Defaults.Runner
+		}
+		if req.Provider == "" {
+			req.Provider = cellForDefaults.Spec.Defaults.Provider
+		}
+		if req.Model == "" {
+			req.Model = cellForDefaults.Spec.Defaults.Model
+		}
+	}
+	if req.CredentialSecret == "" {
+		cred, err := h.soleCredential(r.Context(), identity.FromContext(r.Context()))
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		req.CredentialSecret = cred
 	}
 	// Fail fast on an invalid binding before creating anything.
 	binding, err := h.Registry.Resolve(req.Runner, req.Provider, req.Model)

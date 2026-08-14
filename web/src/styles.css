@@ -573,3 +573,103 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 /* Cards hold prose, and prose without this spills out of the grid cell —
    which is what it did: a description ran out past the panel's left edge. */
 .pick > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* ── The workspace: projects | terminal | branches ────────────────────────
+   One screen to work on, instead of crossing three pages to do one thing.
+   Fixed side columns and a fluid middle, because the middle is the terminal
+   and it is the only part that benefits from every spare pixel. */
+.ws {
+  display: grid;
+  /* Side columns are dragged; the middle takes what is left, because the
+     middle is the terminal and it is the only part that wants every pixel. */
+  grid-template-columns: var(--ws-list, 210px) 5px minmax(0, 1fr) 5px var(--ws-tree, 260px);
+  gap: 0 6px;
+  height: calc(100vh - 48px);
+}
+.ws-notree { grid-template-columns: var(--ws-list, 210px) 5px minmax(0, 1fr) 26px; }
+
+.splitter {
+  cursor: col-resize;
+  border-radius: 3px;
+  /* Invisible until wanted: a divider that draws attention is a divider
+     competing with the work on either side of it. */
+  background: transparent;
+  transition: background 120ms var(--ease-out);
+}
+.splitter:hover, body.resizing .splitter { background: var(--border-strong); }
+/* While dragging, the pointer owns the page: no text selection, no I-beam. */
+body.resizing { cursor: col-resize; user-select: none; }
+
+.ws-list, .ws-tree {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  overflow-y: auto;
+  min-width: 0;
+}
+.ws-main { display: flex; flex-direction: column; min-width: 0; }
+
+.ws-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; font-size: 11px; color: var(--text-faint);
+  border-bottom: 1px solid var(--border-soft);
+  text-transform: uppercase; letter-spacing: 0.4px;
+  position: sticky; top: 0; background: var(--panel); z-index: 1;
+}
+.ws-main-head { border: 1px solid var(--border); border-radius: var(--r-sm); text-transform: none; }
+.ws-title { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: 0; }
+.ws-new, .ws-fold { margin-left: auto; color: var(--text-faint); background: none; border: 0; cursor: pointer; font-size: 14px; }
+.ws-unfold {
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--panel); color: var(--text-faint); cursor: pointer;
+}
+
+.ws-item {
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  gap: 4px 6px; width: 100%; text-align: left;
+  padding: 8px 12px; border: 0; border-bottom: 1px solid var(--border-soft);
+  background: none; cursor: pointer; font: inherit; color: var(--text);
+}
+.ws-item:hover { background: var(--panel-2); }
+/* The selected project is solid, so "where am I" survives a glance. */
+.ws-item.on { background: var(--accent); color: var(--accent-contrast); }
+.ws-item.on .ws-item-sub { color: rgba(255,255,255,0.72); }
+.ws-item-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.ws-item-sub { grid-column: 1 / -1; font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+
+.ws-term { flex: 1; min-height: 0; margin-top: 10px; display: flex; flex-direction: column; }
+.ws-term > div { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ws-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-dim);
+}
+.ws-empty p { margin: 0 0 6px; }
+.ws-say { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+.ws-say textarea { flex: 1; resize: vertical; min-height: 44px; }
+
+/* The branch tree: one block per branch, indented under the base. */
+.tree { padding: 4px 0; }
+.tree-row { padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
+.tree-row.base { background: var(--panel-2); }
+.tree-line { display: flex; align-items: baseline; gap: 5px; }
+.tree-elbow { color: var(--text-faint); font-family: var(--mono); }
+.tree-name { font-size: 12px; font-weight: 600; font-family: var(--mono); overflow-wrap: anywhere; }
+.tree-tag {
+  font-size: 10px; padding: 0 5px; border-radius: var(--r-pill);
+  border: 1px solid var(--border); color: var(--text-faint);
+}
+.tree-tag.merged { border-color: var(--green); color: var(--green); }
+.tree-meta { display: flex; gap: 8px; font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.tree-subject {
+  font-size: 11px; color: var(--text-dim); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tree-link { font-size: 11px; }
+
+/* Below a laptop the branch tree is the first thing to go: it is context,
+   not the work. */
+@media (max-width: 1100px) {
+  .ws, .ws-notree { grid-template-columns: 180px 5px minmax(0, 1fr); }
+  .ws-tree, .ws-unfold { display: none; }
+  .ws .splitter[data-side='right'] { display: none; }
+}

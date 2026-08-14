@@ -10,6 +10,7 @@ import type {
   Team,
   NewProjectOptions,
   Post,
+  Branch,
   SessionState,
   Review,
 } from './types'
@@ -66,6 +67,13 @@ export const api = {
   createCell: (body: Record<string, unknown>) =>
     req<{ cell: string }>('/api/cells', { method: 'POST', body: JSON.stringify(body) }),
   cell: (name: string) => req<CellDetail>(`/api/cells/${name}`),
+
+  /** Just the task: the server uses the project's defaults and your key. */
+  dispatchSimple: (cell: string, task: string) =>
+    req<{ session: string; continued?: boolean; message?: string }>(
+      `/api/cells/${cell}/dispatch`, { method: 'POST', body: JSON.stringify({ task }) }),
+
+  branches: (cell: string) => req<Branch[]>(`/api/cells/${cell}/branches`),
 
   newProjectOptions: () => req<NewProjectOptions>('/api/new-project-options'),
 

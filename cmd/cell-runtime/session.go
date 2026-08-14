@@ -383,3 +383,62 @@ func viewName(id, viewer string) string {
 	}
 	return "v-" + id + "-" + viewer
 }
+
+// runBranches reports the project's branches, read from the checkout itself.
+//
+// From the repository rather than from a forge API, because the forge is
+// whatever this deployment happens to use — GitHub, GitLab, something
+// self-hosted — and a branch list should not depend on which. The anchor
+// already holds a real clone; asking it is both accurate and free.
+//
+// One line per branch: name<TAB>ahead<TAB>behind<TAB>when<TAB>subject.
+// Ahead/behind are measured against the base branch, which is the only
+// comparison that answers the question people actually have — is this
+// merged, and how far has it drifted.
+func runBranches(args []string) error {
+	base := "main"
+	if len(args) == 1 && args[0] != "" {
+		base = args[0]
+	}
+	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+		return err
+	}
+	// Refresh first: the anchor's clone is long-lived, and a branch pushed by
+	// a settle job minutes ago is exactly the one somebody is looking for.
+	_, _ = gitOut(ids.RepoPath, "fetch", "--prune", "--quiet")
+
+	out, err := gitOut(ids.RepoPath, "for-each-ref", "--sort=-committerdate",
+		"--format=%(refname:short)%09%(committerdate:relative)%09%(contents:subject)",
+		"refs/remotes/origin")
+	if err != nil {
+		return fmt.Errorf("branches: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		name := strings.TrimPrefix(parts[0], "origin/")
+		if name == "HEAD" {
+			continue
+		}
+		ahead, behind := "0", "0"
+		if name != base {
+			if c, err := gitOut(ids.RepoPath, "rev-list", "--left-right", "--count",
+				"origin/"+base+"..."+parts[0]); err == nil {
+				if f := strings.Fields(strings.TrimSpace(c)); len(f) == 2 {
+					behind, ahead = f[0], f[1]
+				}
+			}
+		}
+		when, subject := "", ""
+		if len(parts) > 1 {
+			when = parts[1]
+		}
+		if len(parts) > 2 {
+			subject = parts[2]
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", name, ahead, behind, when, subject)
+	}
+	return nil
+}

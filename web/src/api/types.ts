@@ -33,6 +33,20 @@ export interface Cell {
   team?: string
 }
 
+/** One branch in a project's repository, as the checkout itself reports it. */
+export interface Branch {
+  name: string
+  /** Commits this branch has that the base does not, and vice versa. */
+  ahead: number
+  behind: number
+  when: string
+  subject: string
+  base?: boolean
+  session?: string
+  /** Nothing of its own the base lacks — safe to delete. */
+  merged?: boolean
+}
+
 /** One post on a team board. */
 export interface Post {
   id: number

@@ -328,8 +328,11 @@ func TestCreateCellValidatesAndRecordsItsCreator(t *testing.T) {
 // caller believes they set a deadline, and the session outlives it by hours.
 // Every dispatch field must reach the spec.
 func TestDispatchDoesNotDropFields(t *testing.T) {
-	c, h := ownedFixture(t)
-	body := `{"task":"t","runner":"claude","provider":"anthropic","credentialSecret":"",
+	c, h := ownedFixture(t, ownedCredential("alice-key", alice.ID()))
+	// A named credential, because an empty one now means "use mine" — and
+	// this test is about fields reaching the spec, not about that rule.
+	// TestDispatchWithoutACredentialSaysSo covers the empty case.
+	body := `{"task":"t","runner":"claude","provider":"anthropic","credentialSecret":"alice-key",
 	          "resident":true,"followPreview":true,"ttlSeconds":7200,"model":"m"}`
 	req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells/shop/dispatch", strings.NewReader(body)), alice)
 	req.SetPathValue("cell", "shop")
@@ -360,4 +363,33 @@ func TestDispatchDoesNotDropFields(t *testing.T) {
 			t.Errorf("%s was accepted by the API and never reached the spec", tc.field)
 		}
 	}
+}
+
+// An empty credential means "the one I own", and a person who owns none must
+// be told so — not handed a session that cannot reach a model and fails
+// somewhere deeper, where the cause is no longer visible.
+func TestDispatchWithoutACredentialSaysSo(t *testing.T) {
+	_, h := ownedFixture(t)
+	body := `{"task":"t","runner":"claude","provider":"anthropic"}`
+	req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells/shop/dispatch", strings.NewReader(body)), bob)
+	req.SetPathValue("cell", "shop")
+	rec := httptest.NewRecorder()
+	h.dispatch(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("dispatch = %d, want 400 with an explanation: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "凭据") {
+		t.Errorf("the refusal does not say what is missing: %s", rec.Body)
+	}
+}
+
+// ownedCredential is a model key belonging to somebody, in the shape the
+// credentials API stores them.
+func ownedCredential(name, owner string) client.Object {
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: name,
+		Labels: map[string]string{credLabel: "model", OwnerLabel: owner},
+	}}
+	sec.Data = map[string][]byte{"key": []byte("sk-test")}
+	return sec
 }
