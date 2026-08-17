@@ -28,6 +28,11 @@ const (
 	// projects made of several. Absent or single-entry means the historical
 	// layout, and the single-repo variables above still describe it.
 	EnvRepos = "AGENTCELL_REPOS"
+	// EnvAccount carries a CLI's own account login — the credential a device
+	// flow produced — as a base64 tar the runtime unpacks into the CLI's
+	// state directory. It arrives by Secret reference, so the value is never
+	// in the pod spec.
+	EnvAccount = "AGENTCELL_ACCOUNT"
 )
 
 // AgentConfig is a file a runner must find before it will use the endpoint

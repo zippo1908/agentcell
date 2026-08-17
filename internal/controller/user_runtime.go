@@ -185,6 +185,9 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	// one-shot pod does: without them it falls back to the single-repo
 	// layout and goes looking for a checkout that a project group does not
 	// have.
+	if cred := r.accountCredential(ctx, sess); cred != "" {
+		vars[runtimeapi.EnvAccount] = cred
+	}
 	vars[runtimeapi.EnvRepos] = reposJSON(cell)
 	vars[runtimeapi.EnvSessionID] = id
 	vars[runtimeapi.EnvBaseBranch] = cell.Spec.Repo.Branch

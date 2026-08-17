@@ -28,3 +28,5 @@ func brokerMode(brokerURL string, cell *acv1.Cell) bool {
 }
 
 func ptrFalse() *bool { b := false; return &b }
+
+func ptrTrue() *bool { b := true; return &b }

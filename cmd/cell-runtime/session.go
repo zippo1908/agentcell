@@ -75,6 +75,9 @@ func runSession() error {
 	if err := writeAgentConfig(); err != nil {
 		return err
 	}
+	if err := writeAccountCredential(); err != nil {
+		return err
+	}
 
 	if os.Getenv(runtimeapi.EnvResident) == "1" {
 		return runResident(uid, id, wt, argv)
@@ -129,6 +132,37 @@ func writeAgentConfig() error {
 		return fmt.Errorf("agent config: %w", err)
 	}
 	fmt.Printf("session: wrote agent config %s\n", cfg.Path)
+	return nil
+}
+
+// writeAccountCredential unpacks a connected account login into the CLI's
+// state directory.
+//
+// This is what makes "connect your Kimi account once" mean every session,
+// rather than every session asking for a key. The tar arrives by Secret
+// reference, so it was never in the pod spec; it lands under the session's
+// own state directory, 0700, which is where the CLI looks and where nothing
+// belonging to another user can reach.
+func writeAccountCredential() error {
+	blob := os.Getenv(runtimeapi.EnvAccount)
+	if blob == "" {
+		return nil
+	}
+	home := os.Getenv("KIMI_CODE_HOME")
+	if home == "" {
+		// Nowhere to put it is not an error worth failing a session over:
+		// the runner may simply not be the one this credential is for.
+		return nil
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(home))
+	cmd.Stdin = strings.NewReader(blob)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("account credential: %v: %s", err, out)
+	}
+	fmt.Println("session: connected account credential installed")
 	return nil
 }
 

@@ -341,6 +341,12 @@ func (r *SessionReconciler) copyCredential(ctx context.Context, sess *acv1.Sessi
 	dst := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.SessionSecretName(id)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dst, func() error {
 		dst.Data = map[string][]byte{"key": src.Data["key"]}
+		// A stored account login travels the same way the model key does —
+		// by Secret reference, never in the pod spec — so a person who
+		// connected their Kimi account does not also have to paste a key.
+		if cred := r.accountCredential(ctx, sess); cred != "" {
+			dst.Data["account"] = []byte(cred)
+		}
 		return nil
 	})
 	return err
@@ -359,6 +365,15 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 			SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: ids.SessionSecretName(id)},
 				Key:                  "key",
+			},
+		}},
+		{Name: runtimeapi.EnvAccount, ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: ids.SessionSecretName(id)},
+				Key:                  "account",
+				// Optional: most people use a key rather than an account, and
+				// a missing entry must not stop a session from starting.
+				Optional: ptrTrue(),
 			},
 		}},
 		{Name: runtimeapi.EnvSessionID, Value: id},
@@ -1044,4 +1059,22 @@ func (r *SessionReconciler) deliverPending(ctx context.Context, sess *acv1.Sessi
 	}
 	sess.Spec.PendingTask = ""
 	return r.Update(ctx, sess)
+}
+
+// accountCredential is the session owner's stored CLI login, if they have
+// connected an account for this runner.
+//
+// Looked up by owner rather than named on the Session: an account is a
+// property of the person, and asking them to name it on every dispatch would
+// be asking them to remember something the platform already knows.
+func (r *SessionReconciler) accountCredential(ctx context.Context, sess *acv1.Session) string {
+	if sess.Spec.Runner != "kimi" || sess.Spec.OwnerUserID == "" {
+		return ""
+	}
+	var sec corev1.Secret
+	name := strings.TrimPrefix(sess.Spec.OwnerUserID, "u-") + "-kimi"
+	if err := r.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: name}, &sec); err != nil {
+		return ""
+	}
+	return string(sec.Data["kimi-credentials"])
 }

@@ -117,6 +117,8 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/meta", h.meta)
 	mux.HandleFunc("GET /api/me", h.me)
+	mux.HandleFunc("POST /api/kimi/login", h.startKimiLogin)
+	mux.HandleFunc("GET /api/kimi/login", h.pollKimiLogin)
 	mux.HandleFunc("GET /api/credentials", h.listCredentials)
 	mux.HandleFunc("PUT /api/credentials/{name}", h.putCredential)
 	mux.HandleFunc("DELETE /api/credentials/{name}", h.deleteCredential)

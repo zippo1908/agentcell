@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { EmptyState, Tag, useToast } from '../ui/primitives'
@@ -46,6 +46,7 @@ export function CredentialsPage() {
         我的凭据
         <span className="sub">模型 API key,只有你能用</span>
       </h1>
+      <KimiAccount />
 
       <div className="card">
         <h3>已有凭据</h3>
@@ -114,5 +115,78 @@ export function CredentialsPage() {
         </div>
       </div>
     </>
+  )
+}
+
+
+/**
+ * Connecting a Kimi account instead of pasting a key.
+ *
+ * Kimi authenticates with a device-code flow — the OAuth shape built for a
+ * machine with no browser, which is exactly what a pod is. The platform runs
+ * the login somewhere it controls and shows you the code; you approve it in
+ * your own browser; the credential is stored as yours and handed to every
+ * session you start after that.
+ */
+function KimiAccount() {
+  const toast = useToast()
+  const [state, setState] = useState<{ url?: string; code?: string; status: string; message?: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  // Poll only while a login is actually in flight: an idle page has nothing
+  // to ask about.
+  useEffect(() => {
+    if (state?.status !== 'pending') return
+    const t = setInterval(async () => {
+      try {
+        const s = await api.kimiLoginPoll()
+        setState(s)
+        if (s.status === 'connected') toast.success(s.message ?? 'Kimi 账号已连接')
+      } catch {
+        /* the helper pod may already be gone; the next poll settles it */
+      }
+    }, 3000)
+    return () => clearInterval(t)
+  }, [state?.status, toast])
+
+  return (
+    <div className="card">
+      <h3>Kimi 账号</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        连一次账号,之后所有会话都用它——不用再管 API key。授权在你自己的浏览器里完成。
+      </p>
+      {state?.status === 'pending' && state.url ? (
+        <div className="note" style={{ marginTop: 10 }}>
+          <p style={{ margin: '0 0 6px' }}>
+            打开这个链接并确认设备码 <b className="mono">{state.code}</b>:
+          </p>
+          <a href={state.url} target="_blank" rel="noreferrer" className="mono">
+            {state.url}
+          </a>
+          <p className="hint" style={{ marginBottom: 0 }}>批准之后这里会自动变成「已连接」。</p>
+        </div>
+      ) : state?.status === 'connected' ? (
+        <div className="note" style={{ marginTop: 10 }}>已连接。</div>
+      ) : (
+        <div className="row" style={{ marginTop: 10 }}>
+          <button
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              try {
+                setState(await api.kimiLoginStart())
+              } catch (e) {
+                toast.error((e as Error).message)
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            连接 Kimi 账号
+          </button>
+          {state?.message && <span className="faint">{state.message}</span>}
+        </div>
+      )}
+    </div>
   )
 }

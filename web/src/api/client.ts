@@ -77,6 +77,13 @@ export const api = {
 
   newProjectOptions: () => req<NewProjectOptions>('/api/new-project-options'),
 
+  /** Start the Kimi device-code flow; returns the URL and code to approve. */
+  kimiLoginStart: () =>
+    req<{ url?: string; code?: string; status: string; message?: string }>(
+      '/api/kimi/login', { method: 'POST' }),
+  kimiLoginPoll: () =>
+    req<{ url?: string; code?: string; status: string; message?: string }>('/api/kimi/login'),
+
   teams: () => req<Team[]>('/api/teams'),
 
   board: (team: string) =>

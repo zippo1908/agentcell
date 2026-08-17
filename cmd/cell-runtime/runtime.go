@@ -137,8 +137,12 @@ func runWindowOpen(args []string) error {
 	if err := os.MkdirAll(ids.SessionStateDir(uid, id), 0o700); err != nil {
 		return fmt.Errorf("session state dir: %w", err)
 	}
-	// The endpoint some CLIs use lives in a file next to that conversation.
+	// The endpoint some CLIs use lives in a file next to that conversation,
+	// and a connected account login lives in the same directory.
 	if err := writeAgentConfig(); err != nil {
+		return err
+	}
+	if err := writeAccountCredential(); err != nil {
 		return err
 	}
 	sock := ids.TmuxSocket(uid)
