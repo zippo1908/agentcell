@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -162,8 +163,36 @@ func writeAccountCredential() error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("account credential: %v: %s", err, out)
 	}
+	// Set the modes here rather than trusting the ones the tar carries. A tar
+	// preserves whatever it captured, so the permissions of a live login
+	// would be decided by the modes that happened to exist in a helper pod
+	// three steps away — a place nobody thinks about when reasoning about
+	// who can read a credential. Deciding them at the point of use makes the
+	// answer readable in one file.
+	if err := tighten(filepath.Join(home, "credentials")); err != nil {
+		return err
+	}
 	fmt.Println("session: connected account credential installed")
 	return nil
+}
+
+// tighten makes a credential directory readable only by its owner.
+func tighten(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// The CLI may name its directory something else; nothing to
+			// tighten is not a failure.
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		mode := fs.FileMode(0o600)
+		if d.IsDir() {
+			mode = 0o700
+		}
+		return os.Chmod(p, mode)
+	})
 }
 
 // runResident hosts the agent in a tmux server the owner can attach to, and

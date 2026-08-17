@@ -47,7 +47,11 @@ const (
 	kimiCredKey = "kimi-credentials"
 	// KimiCredentialSuffix names a user's Kimi credential Secret.
 	KimiCredentialSuffix = "-kimi"
-	loginPodTTL          = 30 * time.Minute
+	// credKindKimi is the label VALUE marking a connected account, as opposed
+	// to a model key. See credKindModel in credentials.go for why the value,
+	// not merely the label, is what queries have to match on.
+	credKindKimi = "kimi-oauth"
+	loginPodTTL  = 30 * time.Minute
 )
 
 // deviceLine matches what the CLI prints first: a URL carrying the code.
@@ -118,6 +122,15 @@ func (h *Handler) startKimiLogin(w http.ResponseWriter, r *http.Request) {
 // credential the moment they have.
 func (h *Handler) pollKimiLogin(w http.ResponseWriter, r *http.Request) {
 	p := identity.FromContext(r.Context())
+	// An already-connected account is the answer to this question, and it is
+	// answerable without a login pod. Asking the pod first meant that once the
+	// pod was cleaned up — which happens the instant a login succeeds — the
+	// console told a connected person their login had "expired", and offered
+	// to start one they did not need.
+	if h.hasKimiCredential(r.Context(), p.ID()) {
+		writeJSON(w, 200, kimiLoginState{Status: "connected"})
+		return
+	}
 	name := h.kimiLoginPod(p.ID())
 	out, err := h.execInPod(r.Context(), h.Namespace, name,
 		[]string{"sh", "-c", "cat /tmp/kh/login.out 2>/dev/null"})
@@ -153,6 +166,46 @@ func (h *Handler) pollKimiLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, st)
 }
 
+// hasKimiCredential reports whether this person has a connected account.
+func (h *Handler) hasKimiCredential(ctx context.Context, user string) bool {
+	var sec corev1.Secret
+	name := strings.TrimPrefix(user, "u-") + KimiCredentialSuffix
+	if err := h.Client.Get(ctx, types.NamespacedName{Namespace: h.Namespace, Name: name}, &sec); err != nil {
+		return false
+	}
+	return sec.Labels[OwnerLabel] == user && len(sec.Data[kimiCredKey]) > 0
+}
+
+// disconnectKimi drops the stored credential.
+//
+// A connected account is the one credential a person cannot rotate by pasting
+// a new value, so without this the only exit from a revoked or wrong account
+// is a cluster administrator — the same gap that made bring-your-own-key
+// need an API in the first place.
+func (h *Handler) disconnectKimi(w http.ResponseWriter, r *http.Request) {
+	p := identity.FromContext(r.Context())
+	name := strings.TrimPrefix(p.ID(), "u-") + KimiCredentialSuffix
+	var sec corev1.Secret
+	if err := h.Client.Get(r.Context(),
+		types.NamespacedName{Namespace: h.Namespace, Name: name}, &sec); err != nil {
+		writeJSON(w, 200, kimiLoginState{Status: "disconnected"})
+		return
+	}
+	if sec.Labels[OwnerLabel] != p.ID() || sec.Labels[credLabel] != credKindKimi {
+		writeErr(w, 404, errNotFound)
+		return
+	}
+	if err := h.Client.Delete(r.Context(), &sec); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	// Sessions already running keep the copy kubelet handed them; this stops
+	// the NEXT one. Said plainly, because "disconnected" that silently left a
+	// live session authenticated would be a lie by omission.
+	writeJSON(w, 200, kimiLoginState{Status: "disconnected",
+		Message: "已断开;正在跑的会话仍用着已发下去的凭据,新会话不再带它"})
+}
+
 // storeKimiCredential puts the captured credential in a Secret the person
 // owns, in the same shape as their model keys — so the same ownership rules
 // apply and nothing new has to be taught about who may spend what.
@@ -160,7 +213,7 @@ func (h *Handler) storeKimiCredential(ctx context.Context, user, tarB64 string) 
 	name := strings.TrimPrefix(user, "u-") + KimiCredentialSuffix
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Namespace: h.Namespace, Name: name,
-		Labels: map[string]string{credLabel: "kimi-oauth", OwnerLabel: user},
+		Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: user},
 	}}
 	sec.Data = map[string][]byte{kimiCredKey: []byte(tarB64)}
 	err := h.Client.Create(ctx, sec)

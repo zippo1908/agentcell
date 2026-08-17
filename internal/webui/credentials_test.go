@@ -122,3 +122,45 @@ func TestCredentialNamesAreValidated(t *testing.T) {
 }
 
 var _ = identity.StaticToken
+
+// Connecting an account must not look like acquiring a second key.
+//
+// Found on a live cluster, not here: with one key and one connected account,
+// the board refused to dispatch — "你有好几把 key" — because both queries
+// matched the credential label without looking at its value. The cost of
+// connecting an account was losing the ability to dispatch from the board.
+func TestConnectedAccountIsNotAModelKey(t *testing.T) {
+	key := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "deepseek",
+			Labels: map[string]string{credLabel: credKindModel, OwnerLabel: alice.ID()}},
+		Data: map[string][]byte{"key": []byte("sk-abcd")},
+	}
+	account := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "alice-kimi",
+			Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: alice.ID()}},
+		Data: map[string][]byte{kimiCredKey: []byte("dGFyYmFsbA==")},
+	}
+	h, _ := credFixture(t, key, account)
+
+	// The board still sees exactly one key, so it can still dispatch.
+	sole, err := h.soleCredential(t.Context(), alice)
+	if err != nil {
+		t.Fatalf("dispatch broke after connecting an account: %v", err)
+	}
+	if sole != "deepseek" {
+		t.Errorf("sole credential = %q, want the model key", sole)
+	}
+
+	// And the account is not offered as a key to manage.
+	rec := httptest.NewRecorder()
+	h.listCredentials(rec, asUser(httptest.NewRequest(http.MethodGet, "/api/credentials", nil), alice))
+	var got []credView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range got {
+		if c.Name == "alice-kimi" {
+			t.Errorf("the connected account was listed as a key: %+v", got)
+		}
+	}
+}

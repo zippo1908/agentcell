@@ -133,8 +133,14 @@ function KimiAccount() {
   const [state, setState] = useState<{ url?: string; code?: string; status: string; message?: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Poll only while a login is actually in flight: an idle page has nothing
-  // to ask about.
+  // Ask once on load: whether this account is already connected is a fact
+  // about the person, not about a login in progress.
+  useEffect(() => {
+    api.kimiLoginPoll().then(setState).catch(() => {})
+  }, [])
+
+  // After that, poll only while a login is actually in flight: an idle page
+  // has nothing to ask about.
   useEffect(() => {
     if (state?.status !== 'pending') return
     const t = setInterval(async () => {
@@ -166,7 +172,27 @@ function KimiAccount() {
           <p className="hint" style={{ marginBottom: 0 }}>批准之后这里会自动变成「已连接」。</p>
         </div>
       ) : state?.status === 'connected' ? (
-        <div className="note" style={{ marginTop: 10 }}>已连接。</div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <Tag>已连接</Tag>
+          <button
+            className="ghost"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              try {
+                const s = await api.kimiDisconnect()
+                setState(s)
+                toast.success(s.message ?? '已断开')
+              } catch (e) {
+                toast.error((e as Error).message)
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            断开
+          </button>
+        </div>
       ) : (
         <div className="row" style={{ marginTop: 10 }}>
           <button

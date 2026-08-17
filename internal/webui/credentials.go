@@ -31,6 +31,16 @@ import (
 // away from replacing the platform's.
 const credLabel = "agentcell.io/credential"
 
+// credKindModel is the label VALUE for a model key — the only kind this API
+// manages. The label's value has always carried a kind, but every query used
+// to match on the label merely EXISTING, so the first non-key credential to
+// arrive (a connected Kimi account) showed up here as a nameless key with no
+// hint, and made its owner look like somebody holding two keys: the board
+// then refused to dispatch, because picking between keys is a question it
+// will not answer for you. Connecting an account must not cost you the
+// ability to dispatch.
+const credKindModel = "model"
+
 var credName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type credView struct {
@@ -46,7 +56,8 @@ type credView struct {
 func (h *Handler) listCredentials(w http.ResponseWriter, r *http.Request) {
 	var list corev1.SecretList
 	if err := h.Client.List(r.Context(), &list,
-		client.InNamespace(h.Namespace), client.HasLabels{credLabel}); err != nil {
+		client.InNamespace(h.Namespace),
+		client.MatchingLabels{credLabel: credKindModel}); err != nil {
 		writeErr(w, 500, err)
 		return
 	}
@@ -102,7 +113,7 @@ func (h *Handler) putCredential(w http.ResponseWriter, r *http.Request) {
 		// The name is taken. If it is not a credential this API manages, or
 		// not this caller's, refuse — and refuse the SAME way in both cases,
 		// so the response does not reveal which platform Secrets exist.
-		if existing.Labels[credLabel] == "" || !p.Owns(existing.Labels[OwnerLabel]) {
+		if existing.Labels[credLabel] != credKindModel || !p.Owns(existing.Labels[OwnerLabel]) {
 			writeErr(w, 409, fmt.Errorf("that name is taken"))
 			return
 		}
@@ -114,7 +125,7 @@ func (h *Handler) putCredential(w http.ResponseWriter, r *http.Request) {
 	case apierrors.IsNotFound(err):
 		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Namespace: h.Namespace, Name: name,
-			Labels: map[string]string{credLabel: "model", OwnerLabel: p.ID()},
+			Labels: map[string]string{credLabel: credKindModel, OwnerLabel: p.ID()},
 		}}
 		sec.Data = map[string][]byte{"key": []byte(body.Key)}
 		if err := h.Client.Create(r.Context(), sec); err != nil {
@@ -139,7 +150,7 @@ func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := identity.FromContext(r.Context())
-	if sec.Labels[credLabel] == "" || !p.Owns(sec.Labels[OwnerLabel]) {
+	if sec.Labels[credLabel] != credKindModel || !p.Owns(sec.Labels[OwnerLabel]) {
 		// Not yours, or not ours to manage — indistinguishable from absent.
 		writeErr(w, 404, errNotFound)
 		return

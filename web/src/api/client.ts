@@ -83,6 +83,8 @@ export const api = {
       '/api/kimi/login', { method: 'POST' }),
   kimiLoginPoll: () =>
     req<{ url?: string; code?: string; status: string; message?: string }>('/api/kimi/login'),
+  kimiDisconnect: () =>
+    req<{ status: string; message?: string }>('/api/kimi/login', { method: 'DELETE' }),
 
   teams: () => req<Team[]>('/api/teams'),
 

@@ -361,7 +361,10 @@ func (h *Handler) teamByName(ctx context.Context, name string) *acv1.Team {
 func (h *Handler) soleCredential(ctx context.Context, p identity.Principal) (string, error) {
 	var list corev1.SecretList
 	if err := h.Client.List(ctx, &list,
-		client.InNamespace(h.Namespace), client.HasLabels{credLabel}); err != nil {
+		client.InNamespace(h.Namespace),
+		// Model keys only: a connected account is a credential, but it is not
+		// a key you can be asked to choose between.
+		client.MatchingLabels{credLabel: credKindModel}); err != nil {
 		return "", fmt.Errorf("读不到凭据:%w", err)
 	}
 	mine := []string{}
