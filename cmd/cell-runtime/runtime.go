@@ -123,8 +123,18 @@ func runWindowOpen(args []string) error {
 		return err
 	}
 	wt := ids.WorktreePath(uid, id)
-	if err := prepareWorktree(wt, id, os.Getenv(runtimeapi.EnvBaseBranch)); err != nil {
-		return err
+	// Every repository, not just the first: a project group exists so the
+	// agent can see both halves of a change, and a terminal opened on half
+	// the project would be exactly the failure it was meant to prevent.
+	base := os.Getenv(runtimeapi.EnvBaseBranch)
+	for _, rp := range reposFromEnv() {
+		b := rp.Branch
+		if b == "" {
+			b = base
+		}
+		if err := prepareWorktreeFor(ids.WorktreeDirFor(uid, id, rp.Path), id, b, rp.Path); err != nil {
+			return fmt.Errorf("repo %q: %w", rp.Name, err)
+		}
 	}
 	// 0700 like everything else under the private tree: this holds the
 	// conversation itself.
@@ -342,8 +352,14 @@ func tmux(sock string, args ...string) (string, error) {
 // the whole isolation: an agent's unpublished commits sit in a 0700
 // directory owned by one uid, and a peer's agent is refused by the kernel —
 // no mediating daemon, and the agent keeps native git.
-func ensureUserRepo(uid int64) (string, error) {
-	repo := ids.UserRepoPath(uid)
+func ensureUserRepo(uid int64) (string, error) { return ensureUserRepoFor(uid, "") }
+
+// ensureUserRepoFor is the user's own clone of ONE repository of the
+// project, reading through alternates into the shared mirror the anchor
+// keeps. One per repository, because a project group has several and a
+// worktree can only come from the repository it belongs to.
+func ensureUserRepoFor(uid int64, path string) (string, error) {
+	repo := ids.UserRepoDirFor(uid, path)
 	if _, err := os.Stat(filepath.Join(repo, ".git")); err == nil {
 		// Keep it current with the base the anchor tracks.
 		_ = git(repo, "fetch", "origin")
@@ -352,10 +368,10 @@ func ensureUserRepo(uid int64) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		return "", err
 	}
-	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+	if err := ensureRepoTrusted(ids.RepoDir(path)); err != nil {
 		return "", err
 	}
-	if err := gitNet("/", "clone", "--shared", "--no-checkout", ids.RepoPath, repo); err != nil {
+	if err := gitNet("/", "clone", "--shared", "--no-checkout", ids.RepoDir(path), repo); err != nil {
 		return "", fmt.Errorf("user repository: %w", err)
 	}
 	if err := ensureRepoTrusted(repo); err != nil {
@@ -373,12 +389,20 @@ func ensureUserRepo(uid int64) (string, error) {
 // Shared by the one-shot session applet and the runtime, so both produce the
 // same thing.
 func prepareWorktree(wt, id, base string) error {
+	return prepareWorktreeFor(wt, id, base, "")
+}
+
+// prepareWorktreeFor carves one repository's worktree for a session. With a
+// project group this runs once per repository, and they land side by side
+// under the session directory — the agent has to see both halves of a
+// change at once, which is the entire reason a project may hold several.
+func prepareWorktreeFor(wt, id, base, path string) error {
 	branch := ids.SessionBranch(id)
 	if _, err := os.Stat(wt); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
 			return err
 		}
-		repo, err := ensureUserRepo(int64(os.Getuid()))
+		repo, err := ensureUserRepoFor(int64(os.Getuid()), path)
 		if err != nil {
 			return err
 		}

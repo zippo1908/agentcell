@@ -63,24 +63,55 @@ func runAnchor() error {
 	return nil
 }
 
+// ensureClone prepares EVERY repository this project is made of.
+//
+// One failure fails the lot: half a project group is worse than a clean
+// error, because an agent would then be looking at a codebase with a piece
+// missing and no indication which piece.
 func ensureClone() error {
-	url := os.Getenv(runtimeapi.EnvRepoURL)
-	branch := os.Getenv(runtimeapi.EnvRepoBranch)
+	repos := reposFromEnv()
+	for _, r := range repos {
+		if err := ensureOneClone(r); err != nil {
+			return fmt.Errorf("repo %q: %w", r.Name, err)
+		}
+	}
+	return nil
+}
+
+// reposFromEnv reads the project's repositories, falling back to the
+// single-repo variables so an existing Cell needs no change at all.
+func reposFromEnv() []runtimeapi.Repo {
+	if raw := os.Getenv(runtimeapi.EnvRepos); raw != "" {
+		var out []runtimeapi.Repo
+		if err := json.Unmarshal([]byte(raw), &out); err == nil && len(out) > 0 {
+			return out
+		}
+	}
+	return []runtimeapi.Repo{{
+		Name:   "main",
+		URL:    os.Getenv(runtimeapi.EnvRepoURL),
+		Branch: os.Getenv(runtimeapi.EnvRepoBranch),
+	}}
+}
+
+func ensureOneClone(r runtimeapi.Repo) error {
+	url, branch := r.URL, r.Branch
+	repoPath := ids.RepoDir(r.Path)
 	if url == "" {
 		return fmt.Errorf("%s not set", runtimeapi.EnvRepoURL)
 	}
-	if _, err := os.Stat(filepath.Join(ids.RepoPath, ".git")); err == nil {
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
 		// Refresh AND advance the local base branch — sessions fork worktrees
 		// from the local ref, so fetch alone would leave them on a stale
 		// base. The main checkout is a pristine mirror of the remote base by
 		// contract (sessions edit worktrees, never this checkout), so a hard
 		// reset is the correct semantic.
-		if err := git(ids.RepoPath, "fetch", "origin"); err != nil {
+		if err := git(repoPath, "fetch", "origin"); err != nil {
 			fmt.Fprintln(os.Stderr, "anchor: fetch failed (continuing with stale checkout)")
 			return nil
 		}
 		if branch != "" {
-			if err := git(ids.RepoPath, "reset", "--hard", "origin/"+branch); err != nil {
+			if err := git(repoPath, "reset", "--hard", "origin/"+branch); err != nil {
 				fmt.Fprintln(os.Stderr, "anchor: reset to origin/"+branch+" failed (continuing)")
 			}
 		}
@@ -93,14 +124,14 @@ func ensureClone() error {
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(ids.RepoPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
 		return err
 	}
 	args := []string{"clone"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, effectiveGitURL(url), ids.RepoPath)
+	args = append(args, effectiveGitURL(url), repoPath)
 	if err := gitNet("/", args...); err != nil {
 		return err
 	}

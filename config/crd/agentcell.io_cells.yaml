@@ -315,12 +315,31 @@ spec:
                     type: object
                 type: object
               repo:
-                description: RepoSpec points a Cell at its git repository.
+                description: RepoSpec points a Cell at one git repository.
                 properties:
                   branch:
                     description: |-
                       Branch is the base branch sessions fork from and settle against.
                       Defaults to "main".
+                    type: string
+                  name:
+                    description: |-
+                      Name identifies this repository inside the project — the label a
+                      person uses ("frontend") and the key a branch result is reported
+                      against. Empty on the single-repo form, where there is nothing to
+                      disambiguate.
+                    maxLength: 63
+                    type: string
+                  path:
+                    description: |-
+                      Path is where this repository sits under /workspace, relative and
+                      without "..". Empty means the workspace root.
+
+                      Data rather than a rule in code, because the layout is the project's
+                      business: an existing single-repo project keeps its repo at the root
+                      and nothing about it moves, while a project group gives every
+                      repository a directory of its own.
+                    maxLength: 200
                     type: string
                   secretName:
                     description: |-
@@ -335,6 +354,64 @@ spec:
                 required:
                 - url
                 type: object
+              repos:
+                description: |-
+                  Repos are the OTHER repositories this project is made of.
+
+                  One project, one workspace, one agent, several repositories side by
+                  side. The alternative — one project per repository — fails for the
+                  case it most needs to serve: changing an interface means editing the
+                  frontend and the backend together, and an agent that cannot see the
+                  other half cannot do it. It also multiplies the cost, since every
+                  project carries its own runtime and its own agent process.
+
+                  Each repository keeps its own remote, its own base branch and its own
+                  credential, because they are separate repositories on the forge and
+                  pretending otherwise would be a fiction. A session that touches three
+                  of them produces three branches, reviewed and approved separately —
+                  there is no cross-repository atomicity to be had, so the platform does
+                  not imply one.
+                items:
+                  description: RepoSpec points a Cell at one git repository.
+                  properties:
+                    branch:
+                      description: |-
+                        Branch is the base branch sessions fork from and settle against.
+                        Defaults to "main".
+                      type: string
+                    name:
+                      description: |-
+                        Name identifies this repository inside the project — the label a
+                        person uses ("frontend") and the key a branch result is reported
+                        against. Empty on the single-repo form, where there is nothing to
+                        disambiguate.
+                      maxLength: 63
+                      type: string
+                    path:
+                      description: |-
+                        Path is where this repository sits under /workspace, relative and
+                        without "..". Empty means the workspace root.
+
+                        Data rather than a rule in code, because the layout is the project's
+                        business: an existing single-repo project keeps its repo at the root
+                        and nothing about it moves, while a project group gives every
+                        repository a directory of its own.
+                      maxLength: 200
+                      type: string
+                    secretName:
+                      description: |-
+                        SecretName references a kubernetes.io/basic-auth Secret in the
+                        control namespace (username + password/token). The operator copies it
+                        into the workload namespace; session pods never see it — only the
+                        anchor (clone) and settle jobs (push) do.
+                      type: string
+                    url:
+                      description: URL is the https clone URL.
+                      type: string
+                  required:
+                  - url
+                  type: object
+                type: array
               sessionResources:
                 description: SessionResources is the per-slot budget. Defaults to
                   1 CPU / 2Gi.

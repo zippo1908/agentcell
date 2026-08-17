@@ -196,6 +196,56 @@ spec:
                 type: string
               message:
                 type: string
+              outputs:
+                description: |-
+                  Outputs is what this session produced, one entry per repository.
+
+                  Separate entries rather than one verdict, because the repositories are
+                  separate on the forge: they have their own remotes, their own history
+                  and their own reviewers. A session that changes a frontend and a
+                  backend produces two branches, and somebody may reasonably take one
+                  and not the other. Presenting them as a single all-or-nothing decision
+                  would be inventing an atomicity that does not exist anywhere below.
+
+                  Empty on a single-repo project, where Branch/Produced/ReviewState
+                  below say the same thing and every existing Session keeps working.
+                items:
+                  description: |-
+                    RepoOutput is one repository's share of what a session produced, with its
+                    own review verdict.
+                  properties:
+                    branch:
+                      description: Branch is session/<id> in that repository.
+                      type: string
+                    message:
+                      type: string
+                    note:
+                      type: string
+                    prNumber:
+                      type: integer
+                    prState:
+                      type: string
+                    prURL:
+                      description: PR fields track the pull request opened for THIS
+                        repository.
+                      type: string
+                    produced:
+                      description: |-
+                        Produced is false when the agent changed nothing here — common, and
+                        not a failure: a task usually touches some of a project, not all.
+                      type: boolean
+                    repo:
+                      description: Repo is the repository's name within the project.
+                      type: string
+                    review:
+                      description: |-
+                        Review is this repository's own verdict. Approving one says nothing
+                        about the others.
+                      type: string
+                  required:
+                  - repo
+                  type: object
+                type: array
               phase:
                 description: SessionPhase tracks the dispatch → work → settle → reclaim
                   lifecycle.

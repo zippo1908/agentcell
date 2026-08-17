@@ -48,8 +48,16 @@ func runSession() error {
 		return err
 	}
 	wt := ids.WorktreePath(uid, id)
-	if err := prepareWorktree(wt, id, base); err != nil {
-		return err
+	// One worktree per repository. For a single-repo project this is exactly
+	// the old single call: the worktree IS the session directory.
+	for _, rp := range reposFromEnv() {
+		b := rp.Branch
+		if b == "" {
+			b = base
+		}
+		if err := prepareWorktreeFor(ids.WorktreeDirFor(uid, id, rp.Path), id, b, rp.Path); err != nil {
+			return fmt.Errorf("repo %q: %w", rp.Name, err)
+		}
 	}
 
 	// When the user asked to watch this session live, serve the preview from

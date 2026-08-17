@@ -39,6 +39,15 @@ type createCellRequest struct {
 	// PlacementClass is a machine pool an administrator offered. A name
 	// only: nothing sent here can become a node selector or a toleration.
 	PlacementClass string `json:"placementClass"`
+	// Repos are ADDITIONAL repositories, for a project made of several. The
+	// first one stays in RepoURL, so a single-repo request is unchanged.
+	Repos []struct {
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		URL        string `json:"url"`
+		Branch     string `json:"branch"`
+		SecretName string `json:"secretName"`
+	} `json:"repos"`
 }
 
 // createCell onboards a project from the console.
@@ -113,6 +122,18 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		Placement:   acv1.PlacementSpec{Class: req.PlacementClass},
 		MaxSessions: maxSessions,
 	}
+	for _, extra := range req.Repos {
+		cell.Spec.Repos = append(cell.Spec.Repos, acv1.RepoSpec{
+			Name: extra.Name, Path: extra.Path, URL: extra.URL,
+			Branch: extra.Branch, SecretName: extra.SecretName,
+		})
+	}
+	// After the spec is built, not before: validating an empty struct would
+	// pass everything.
+	if err := validateRepoLayout(cell); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 	if req.ProductionTarget == string(acv1.ProductionExternal) {
 		cell.Spec.Production = acv1.ProductionSpec{
 			Target:      acv1.ProductionExternal,
@@ -144,4 +165,31 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, map[string]string{"cell": cell.Name})
+}
+
+// validateRepoLayout refuses a project group that cannot be laid out.
+//
+// Two repositories cannot share a directory, and in a group every repository
+// needs one — the historical "at the workspace root" only makes sense when
+// there is nothing to sit beside. Catching it here beats discovering it as a
+// clone that overwrote another clone.
+func validateRepoLayout(cell *acv1.Cell) error {
+	all := cell.AllRepos()
+	if len(all) < 2 {
+		return nil
+	}
+	seen := map[string]string{}
+	for _, r := range all {
+		if r.Path == "" {
+			return fmt.Errorf("项目里有多个仓库时,每个都要有自己的目录(仓库 %q 没有)", r.Name)
+		}
+		if strings.Contains(r.Path, "..") || strings.HasPrefix(r.Path, "/") {
+			return fmt.Errorf("仓库目录 %q 必须是 /workspace 下的相对路径", r.Path)
+		}
+		if other, dup := seen[r.Path]; dup {
+			return fmt.Errorf("仓库 %q 和 %q 都想占用目录 %q", r.Name, other, r.Path)
+		}
+		seen[r.Path] = r.Name
+	}
+	return nil
 }

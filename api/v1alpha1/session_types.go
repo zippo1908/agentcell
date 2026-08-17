@@ -177,6 +177,18 @@ type SessionStatus struct {
 	// under it. Bounded: a session that cannot stay up is settled rather than
 	// rebuilt forever, so a failing node does not become an infinite loop.
 	Recoveries int `json:"recoveries,omitempty"`
+	// Outputs is what this session produced, one entry per repository.
+	//
+	// Separate entries rather than one verdict, because the repositories are
+	// separate on the forge: they have their own remotes, their own history
+	// and their own reviewers. A session that changes a frontend and a
+	// backend produces two branches, and somebody may reasonably take one
+	// and not the other. Presenting them as a single all-or-nothing decision
+	// would be inventing an atomicity that does not exist anywhere below.
+	//
+	// Empty on a single-repo project, where Branch/Produced/ReviewState
+	// below say the same thing and every existing Session keeps working.
+	Outputs []RepoOutput `json:"outputs,omitempty"`
 	// Branch is the settled output branch (session/<id>) when Produced.
 	Branch    string       `json:"branch,omitempty"`
 	Produced  bool         `json:"produced,omitempty"`
@@ -221,4 +233,25 @@ type SessionList struct {
 // client that omits it gets the default rather than silently getting false.
 func (s *Session) IsResident() bool {
 	return s.Spec.Resident == nil || *s.Spec.Resident
+}
+
+// RepoOutput is one repository's share of what a session produced, with its
+// own review verdict.
+type RepoOutput struct {
+	// Repo is the repository's name within the project.
+	Repo string `json:"repo"`
+	// Branch is session/<id> in that repository.
+	Branch string `json:"branch,omitempty"`
+	// Produced is false when the agent changed nothing here — common, and
+	// not a failure: a task usually touches some of a project, not all.
+	Produced bool   `json:"produced,omitempty"`
+	Message  string `json:"message,omitempty"`
+	// Review is this repository's own verdict. Approving one says nothing
+	// about the others.
+	Review ReviewState `json:"review,omitempty"`
+	Note   string      `json:"note,omitempty"`
+	// PR fields track the pull request opened for THIS repository.
+	PRURL    string `json:"prURL,omitempty"`
+	PRNumber int    `json:"prNumber,omitempty"`
+	PRState  string `json:"prState,omitempty"`
 }

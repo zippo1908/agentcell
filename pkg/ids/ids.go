@@ -155,3 +155,37 @@ const TmuxHolder = "agentcell"
 // One per user, not one per session — the agent CLIs manage conversations
 // themselves, so a process per conversation buys nothing.
 func UserRuntimePod(uid int64) string { return "runtime-" + strconv.FormatInt(uid, 10) }
+
+// RepoDir is where one repository of a project is checked out.
+//
+// The empty path keeps the historical location, so a single-repo project is
+// byte-for-byte where it always was: no migration, no moved paths, and an
+// agent's existing context stays valid. Additional repositories sit beside
+// it, one directory each.
+func RepoDir(path string) string {
+	if path == "" {
+		return RepoPath
+	}
+	return "/workspace/" + path
+}
+
+// WorktreeDirFor is where a session's copy of one repository lives.
+//
+// With a single repository the worktree IS the session directory, exactly as
+// before. With several, the session directory holds one subdirectory per
+// repository — they have to be under one tree, because the whole reason for
+// a project group is that the agent can see both halves of a change at once.
+func WorktreeDirFor(uid int64, id, path string) string {
+	if path == "" {
+		return WorktreePath(uid, id)
+	}
+	return WorktreePath(uid, id) + "/" + path
+}
+
+// UserRepoDirFor is a user's own clone of one repository of the project.
+func UserRepoDirFor(uid int64, path string) string {
+	if path == "" {
+		return UserRepoPath(uid)
+	}
+	return UserRepoPath(uid) + "-" + strings.ReplaceAll(path, "/", "-")
+}

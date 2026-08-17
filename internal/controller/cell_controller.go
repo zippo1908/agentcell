@@ -501,6 +501,7 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 	env := []corev1.EnvVar{
 		{Name: runtimeapi.EnvRepoURL, Value: cell.Spec.Repo.URL},
 		{Name: runtimeapi.EnvRepoBranch, Value: cell.Spec.Repo.Branch},
+		{Name: runtimeapi.EnvRepos, Value: reposJSON(cell)},
 		{Name: runtimeapi.EnvPreviewCmd, Value: string(previewCmd)},
 		{Name: runtimeapi.EnvPreviewPort, Value: fmt.Sprint(cell.Spec.Preview.Port)},
 		{Name: runtimeapi.EnvPreviewTarget, Value: previewTargetDir(cell)},

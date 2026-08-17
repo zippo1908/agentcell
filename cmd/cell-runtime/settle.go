@@ -41,8 +41,13 @@ func runSettle() error {
 	if err := ensureRepoTrusted(ids.UserRepoPath(uid)); err != nil {
 		return err
 	}
-	v, err := settleWorktree(ids.UserRepoPath(uid), ids.WorktreePath(uid, id), ids.SessionBranch(id), base, id,
-		effectiveGitURL(os.Getenv(runtimeapi.EnvRepoURL)))
+	// One repository or several: each settles on its own, and each result is
+	// reported on its own. The repositories are separate on the forge — own
+	// remote, own history, own reviewers — so a session that changed two of
+	// them produces two branches and two verdicts, and somebody may
+	// reasonably take one and not the other.
+	repos := reposFromEnv()
+	v, err := settleAll(uid, id, base, repos)
 	raw, _ := json.Marshal(v)
 	// Termination message is the transport back to the controller; write it
 	// on failure too so a final failed attempt still explains itself.
@@ -57,9 +62,15 @@ func runSettle() error {
 }
 
 type verdict struct {
-	Produced bool   `json:"produced"`
-	Branch   string `json:"branch"`
-	Message  string `json:"message"`
+	// Repo names which repository this verdict is about, empty on the
+	// single-repo form so nothing about it changes.
+	Repo string `json:"repo,omitempty"`
+	// Repos carries the per-repository results of a project group. The
+	// controller turns these into one reviewable output each.
+	Repos    []verdict `json:"repos,omitempty"`
+	Produced bool      `json:"produced"`
+	Branch   string    `json:"branch"`
+	Message  string    `json:"message"`
 }
 
 // settleWorktree settles one session worktree. It returns an error for
@@ -138,4 +149,55 @@ func settleWorktree(repoPath, wt, branch, base, id, pushURL string) (verdict, er
 		_ = git(repoPath, "branch", "-D", branch)
 	}
 	return verdict{Produced: produced, Branch: branch, Message: msg}, nil
+}
+
+// settleAll settles every repository a session touched.
+//
+// A repository the agent did not change settles as "produced nothing", which
+// is the ordinary case rather than a failure: a task usually touches part of
+// a project, not all of it. The overall result is produced if ANY repository
+// produced, because that is what decides whether there is something to
+// review at all.
+func settleAll(uid int64, id, base string, repos []runtimeapi.Repo) (verdict, error) {
+	if len(repos) == 1 && repos[0].Path == "" {
+		// Exactly what it always did, byte for byte.
+		return settleWorktree(ids.UserRepoPath(uid), ids.WorktreePath(uid, id),
+			ids.SessionBranch(id), base, id, effectiveGitURL(repos[0].URL))
+	}
+	out := verdict{}
+	var firstErr error
+	for _, r := range repos {
+		b := r.Branch
+		if b == "" {
+			b = base
+		}
+		one, err := settleWorktree(
+			ids.UserRepoDirFor(uid, r.Path),
+			ids.WorktreeDirFor(uid, id, r.Path),
+			ids.SessionBranch(id), b, id, effectiveGitURL(r.URL))
+		one.Repo = r.Name
+		out.Repos = append(out.Repos, one)
+		if err != nil && firstErr == nil {
+			// Keep going: a repository that cannot be pushed must not stop
+			// the others from being delivered. The error is still returned,
+			// so the job fails and Kubernetes retries with the worktrees
+			// still in place — nothing is reported as settled that is not.
+			firstErr = fmt.Errorf("repo %q: %w", r.Name, err)
+		}
+		if one.Produced {
+			out.Produced = true
+		}
+	}
+	out.Message = summarise(out.Repos)
+	return out, firstErr
+}
+
+func summarise(rs []verdict) string {
+	made := 0
+	for _, r := range rs {
+		if r.Produced {
+			made++
+		}
+	}
+	return fmt.Sprintf("%d/%d 个仓库有产出", made, len(rs))
 }

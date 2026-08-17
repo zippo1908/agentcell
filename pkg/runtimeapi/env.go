@@ -24,6 +24,10 @@ const (
 	// The path is resolved by the controller, which knows where this
 	// session's private state lives; the runtime only writes it.
 	EnvAgentConfig = "AGENTCELL_AGENT_CONFIG"
+	// EnvRepos carries every repository in the project as JSON, for the
+	// projects made of several. Absent or single-entry means the historical
+	// layout, and the single-repo variables above still describe it.
+	EnvRepos = "AGENTCELL_REPOS"
 )
 
 // AgentConfig is a file a runner must find before it will use the endpoint
@@ -124,4 +128,16 @@ const (
 // holds several windows, so the marker cannot be a single fixed path.
 func DoneMarkerFor(sessionID string) string {
 	return "/tmp/agentcell-" + sessionID + ".done"
+}
+
+// Repo is one repository of a project, as the runtime needs to see it.
+//
+// Path is relative to /workspace. Empty means the historical single-repo
+// location — /workspace/repo — which is why an existing project needs no
+// migration and its agent's paths do not move.
+type Repo struct {
+	Name   string `json:"name"`
+	Path   string `json:"path,omitempty"`
+	URL    string `json:"url"`
+	Branch string `json:"branch,omitempty"`
 }

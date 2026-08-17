@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"encoding/json"
+
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -154,4 +157,25 @@ func mustQuantity(s, fallback string) resource.Quantity {
 		return resource.MustParse(fallback)
 	}
 	return q
+}
+
+// reposJSON is the project's repositories, for the runtime.
+//
+// Always emitted, even for one repository, so there is a single shape on the
+// boundary rather than two. The runtime falls back to the older variables
+// when it is absent, which is what keeps a Cell created by an older control
+// plane working.
+func reposJSON(cell *acv1.Cell) string {
+	all := cell.AllRepos()
+	out := make([]runtimeapi.Repo, 0, len(all))
+	for _, r := range all {
+		out = append(out, runtimeapi.Repo{
+			Name: r.Name, Path: r.Path, URL: r.URL, Branch: r.Branch,
+		})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

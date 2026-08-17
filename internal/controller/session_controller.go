@@ -85,6 +85,10 @@ type settleResult struct {
 	Produced bool   `json:"produced"`
 	Branch   string `json:"branch"`
 	Message  string `json:"message"`
+	// Repo and Repos carry a project group's per-repository results. Absent
+	// on a single-repo project, which reports exactly as it always did.
+	Repo  string         `json:"repo,omitempty"`
+	Repos []settleResult `json:"repos,omitempty"`
 }
 
 func (r *SessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -362,6 +366,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 		{Name: runtimeapi.EnvRunner, Value: sess.Spec.Runner},
 		{Name: runtimeapi.EnvBaseBranch, Value: cell.Spec.Repo.Branch},
 		{Name: runtimeapi.EnvDescription, Value: cell.Spec.Description},
+		{Name: runtimeapi.EnvRepos, Value: reposJSON(cell)},
 	}
 	if sess.IsResident() {
 		env = append(env, corev1.EnvVar{Name: runtimeapi.EnvResident, Value: "1"})
@@ -857,6 +862,20 @@ func (r *SessionReconciler) observeSettle(ctx context.Context, sess *acv1.Sessio
 		sess.Status.Branch = result.Branch
 		sess.Status.Produced = true
 		sess.Status.Message = result.Message
+		// A project group reports per repository, and each of those is its own
+		// reviewable thing: separate remotes, separate reviewers, separate
+		// verdicts. Only repositories that actually produced something are
+		// listed — a repository the task never touched is not a decision
+		// anybody has to make.
+		for _, rr := range result.Repos {
+			if !rr.Produced {
+				continue
+			}
+			sess.Status.Outputs = append(sess.Status.Outputs, acv1.RepoOutput{
+				Repo: rr.Repo, Branch: rr.Branch, Produced: true,
+				Message: rr.Message, Review: acv1.ReviewPending,
+			})
+		}
 	default:
 		sess.Status.Phase = acv1.SessionDiscarded
 		sess.Status.Message = result.Message

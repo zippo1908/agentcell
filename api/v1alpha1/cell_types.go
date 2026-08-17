@@ -5,8 +5,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// RepoSpec points a Cell at its git repository.
+// RepoSpec points a Cell at one git repository.
 type RepoSpec struct {
+	// Name identifies this repository inside the project — the label a
+	// person uses ("frontend") and the key a branch result is reported
+	// against. Empty on the single-repo form, where there is nothing to
+	// disambiguate.
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name,omitempty"`
+	// Path is where this repository sits under /workspace, relative and
+	// without "..". Empty means the workspace root.
+	//
+	// Data rather than a rule in code, because the layout is the project's
+	// business: an existing single-repo project keeps its repo at the root
+	// and nothing about it moves, while a project group gives every
+	// repository a directory of its own.
+	// +kubebuilder:validation:MaxLength=200
+	Path string `json:"path,omitempty"`
 	// URL is the https clone URL.
 	URL string `json:"url"`
 	// Branch is the base branch sessions fork from and settle against.
@@ -95,6 +110,22 @@ type ResourceBudget struct {
 // CellSpec is the desired state of one project's resident instance.
 type CellSpec struct {
 	Repo RepoSpec `json:"repo"`
+	// Repos are the OTHER repositories this project is made of.
+	//
+	// One project, one workspace, one agent, several repositories side by
+	// side. The alternative — one project per repository — fails for the
+	// case it most needs to serve: changing an interface means editing the
+	// frontend and the backend together, and an agent that cannot see the
+	// other half cannot do it. It also multiplies the cost, since every
+	// project carries its own runtime and its own agent process.
+	//
+	// Each repository keeps its own remote, its own base branch and its own
+	// credential, because they are separate repositories on the forge and
+	// pretending otherwise would be a fiction. A session that touches three
+	// of them produces three branches, reviewed and approved separately —
+	// there is no cross-repository atomicity to be had, so the platform does
+	// not imply one.
+	Repos []RepoSpec `json:"repos,omitempty"`
 	// Image is the devbox image for the anchor and session pods; it must
 	// contain the agent CLIs plus git and tmux. cell-runtime is baked in at
 	// image build time.
@@ -360,4 +391,46 @@ func (c *Cell) EffectiveAccess() AccessMode {
 		return AccessOpen
 	}
 	return AccessRestricted
+}
+
+// AllRepos is every repository in this project, normalised.
+//
+// The single-repo form is one entry at the workspace root, which is what
+// every existing Cell already is: no migration, no path changes, and an
+// agent's existing context stays valid.
+func (c *Cell) AllRepos() []RepoSpec {
+	out := make([]RepoSpec, 0, 1+len(c.Spec.Repos))
+	if c.Spec.Repo.URL != "" {
+		r := c.Spec.Repo
+		if r.Name == "" {
+			r.Name = "main"
+		}
+		out = append(out, r)
+	}
+	out = append(out, c.Spec.Repos...)
+	for i := range out {
+		if out[i].Branch == "" {
+			out[i].Branch = "main"
+		}
+		if out[i].Name == "" {
+			out[i].Name = out[i].Path
+		}
+	}
+	return out
+}
+
+// PrimaryRepo is the one at the workspace root, or the first declared. It is
+// what a question about "the project's repository" means when nobody said
+// which.
+func (c *Cell) PrimaryRepo() RepoSpec {
+	all := c.AllRepos()
+	for _, r := range all {
+		if r.Path == "" {
+			return r
+		}
+	}
+	if len(all) > 0 {
+		return all[0]
+	}
+	return RepoSpec{}
 }
