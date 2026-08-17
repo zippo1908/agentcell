@@ -113,8 +113,19 @@ func writeAgentConfig() error {
 	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o700); err != nil {
 		return fmt.Errorf("agent config dir: %w", err)
 	}
-	// 0600: it names no secret, but it does decide where the key gets sent.
-	if err := os.WriteFile(cfg.Path, []byte(cfg.Content), 0o600); err != nil {
+	// Expand the key HERE, not in the control plane: the rendered content
+	// travels in the pod spec, and a literal key there is readable by anyone
+	// who can read pods. Only this variable is expanded — a config template
+	// is not a shell, and letting it reach for arbitrary environment would
+	// turn an operator's config file into an exfiltration primitive.
+	content := os.Expand(cfg.Content, func(k string) string {
+		if k == "AGENTCELL_API_KEY" {
+			return os.Getenv(k)
+		}
+		return "${" + k + "}"
+	})
+	// 0600: it now carries the credential itself.
+	if err := os.WriteFile(cfg.Path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("agent config: %w", err)
 	}
 	fmt.Printf("session: wrote agent config %s\n", cfg.Path)

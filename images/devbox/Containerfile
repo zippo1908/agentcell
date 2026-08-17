@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Agent CLIs. Pin versions in real deployments; npm route shown for the two
 # npm-distributed ones. pi and others: add per project image.
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @moonshot-ai/kimi-code
 
 COPY bin/cell-runtime-linux-amd64 /agentcell/cell-runtime
 RUN chmod 755 /agentcell/cell-runtime

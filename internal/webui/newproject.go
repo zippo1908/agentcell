@@ -35,6 +35,9 @@ type newProjectOptions struct {
 	// be driven.
 	Runners   []access.RunnerInfo   `json:"runners"`
 	Providers []access.ProviderInfo `json:"providers"`
+	// DefaultRunner and DefaultProvider are what a new project starts with.
+	DefaultRunner   string `json:"defaultRunner,omitempty"`
+	DefaultProvider string `json:"defaultProvider,omitempty"`
 }
 
 func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +47,12 @@ func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
 		out.Devboxes = d
 	}
 	out.Runners, out.Providers = h.Registry.Catalogue()
+	// The deployment's default pairing, offered preselected. It is a
+	// deployment-wide choice rather than a hardcoded one: a team that has a
+	// Kimi Code account should not have to pick the same two things on every
+	// project, and a team that does not must be able to change it in one
+	// place.
+	out.DefaultRunner, out.DefaultProvider = h.DefaultRunner, h.DefaultProvider
 
 	// Forge credentials are basic-auth Secrets in the control namespace.
 	var secrets corev1.SecretList

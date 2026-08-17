@@ -11,7 +11,7 @@
 FROM docker.io/library/node:22-alpine
 
 RUN apk add --no-cache git tmux ripgrep jq ca-certificates libstdc++ \
-    && npm install -g --omit=dev @anthropic-ai/claude-code @openai/codex \
+    && npm install -g --omit=dev @anthropic-ai/claude-code @openai/codex @moonshot-ai/kimi-code \
     && npm cache clean --force \
     && rm -rf /root/.npm /tmp/*
 

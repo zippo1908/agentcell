@@ -62,12 +62,44 @@ func TestKimiIsUsableAndDoesNotClaimResume(t *testing.T) {
 	if _, err := reg.Resolve("kimi", "moonshot", ""); err != nil {
 		t.Errorf("kimi cannot be paired with moonshot: %v", err)
 	}
-	if Resumable("kimi") {
-		t.Error("kimi claims resume support that has not been verified against a pinned CLI")
+	// Resume IS verified now, against the published command reference:
+	// `-c/--continue` resumes the most recent session for the working
+	// directory. It resumes by recency rather than by an id the caller
+	// chooses, which is only unambiguous because each session gets its own
+	// KIMI_CODE_HOME — without that, two of a user's sessions would resume
+	// into each other.
+	if !Resumable("kimi") {
+		t.Error("kimi should resume: --continue is documented and the state dir is per session")
 	}
-	if _, err := ResumeArgvFor("kimi", "more", ""); err == nil {
-		t.Error("resuming an unverified runner should be refused, not guessed")
+	if SessionHomeVar("kimi") != "KIMI_CODE_HOME" {
+		t.Error("resuming by recency without a per-session state directory would pick a sibling's conversation")
 	}
+	argv, err = ResumeArgvFor("kimi", "再补一句", "")
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if !containsArg(argv, "--continue") || !containsArg(argv, "再补一句") {
+		t.Errorf("resume argv = %v", argv)
+	}
+	// --yolo cannot be combined with --prompt; the CLI refuses to start.
+	// --auto is the autonomous mode that can.
+	for _, a := range [][]string{argv, mustHeadless(t, "kimi")} {
+		if containsArg(a, "--yolo") {
+			t.Errorf("--yolo with --prompt is refused by the CLI: %v", a)
+		}
+		if !containsArg(a, "--auto") {
+			t.Errorf("a headless run must not stop to ask a question nobody can answer: %v", a)
+		}
+	}
+}
+
+func mustHeadless(t *testing.T, runner string) []string {
+	t.Helper()
+	a, err := HeadlessArgv(runner, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 // The point of runners-as-data: an operator whose CLI renamed a flag fixes

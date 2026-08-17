@@ -67,34 +67,46 @@ runners:
     headless: ["pi", "-p", "{{task}}"]
 
   kimi:
-    display_name: Kimi CLI (月之暗面)
+    display_name: Kimi Code CLI(月之暗面)
     vendor: moonshot
-    # Pairing this with the `moonshot` provider keeps both the client and the
-    # models with one vendor, which is the least ambiguous shape for a team
-    # in mainland China: nothing crosses a border, and no third party's client
-    # terms are involved. See docs/DEPLOYMENT.md.
-    # Kimi speaks both of Moonshot's endpoints; pair it with the `moonshot`
-    # provider, or with any gateway exposing the same protocols.
-    protocols: [anthropic, openai]
-    headless: ["kimi", "--yes", "-p", "{{task}}"]
-    # DELIBERATELY no start/resume: AgentCell has not verified how this CLI
-    # names and resumes conversations, and guessing would produce follow-ups
-    # that silently start a new context instead of continuing one — the exact
-    # waste resident sessions exist to remove. Without them a follow-up
-    # honestly starts fresh in the same worktree.
+    protocols: [openai]
+    # Just -p. The published flag reference says only --yolo and --plan
+    # conflict with --prompt, but the shipped binary (0.36.1) refuses --auto
+    # too: "Cannot combine --prompt with --auto." Print mode is already
+    # non-interactive, so there is nothing to approve — and the binary is the
+    # authority here, not the document.
+    headless: ["kimi", "-p", "{{task}}"]
+    # Kimi mints its own session ids, so the platform cannot name the
+    # conversation up front. It resumes the most recent one in the working
+    # directory instead — which is only unambiguous if each session has its
+    # own state directory, exactly as Codex does.
+    session_home_env: KIMI_CODE_HOME
+    resume: ["kimi", "--continue", "-p", "{{task}}"]
+    # Kimi reads credentials ONLY from config.toml. Its own documentation is
+    # explicit that `export KIMI_API_KEY=…` is not picked up, so the file is
+    # not a convenience here — without it the CLI fails at startup with
+    # "provider is missing credentials".
     #
-    # To enable resume once you have checked your pinned version, drop a file
-    # in /etc/agentcell/runners.d/ with the two lines that apply, e.g.
+    # The key is therefore written into the file. It lands 0600 inside the
+    # session's private 0700 tree, and the agent runs as that user, so it is
+    # the same boundary the environment would have given (ADR-0010) — but a
+    # file outlives the process, which is why it is per session rather than
+    # per user.
     #
-    #   runners:
-    #     kimi:
-    #       session_id: uuid          # if it accepts one from the caller
-    #       start:  ["kimi", "--yes", "--session", "{{session}}", "-p", "{{task}}"]
-    #       resume: ["kimi", "--yes", "--resume", "{{session}}", "-p", "{{task}}"]
-    #
-    # or, if it resumes by recency instead:
-    #
-    #   runners:
-    #     kimi:
-    #       session_home_env: KIMI_HOME
-    #       resume: ["kimi", "--yes", "--continue", "-p", "{{task}}"]
+    # The model is declared as an alias equal to its own name, so `-m <model>`
+    # takes whatever the dispatch asked for without a second naming scheme to
+    # keep in sync.
+    config_file:
+      path: config.toml
+      template: |
+        default_model = "{{model}}"
+
+        [providers.agentcell]
+        type = "kimi"
+        base_url = "{{base_url}}"
+        api_key = "{{api_key}}"
+
+        [models."{{model}}"]
+        provider = "agentcell"
+        model = "{{model}}"
+        max_context_size = {{context_tokens}}

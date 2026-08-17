@@ -68,7 +68,7 @@ model_provider = "openai`,
 // Runners that take their endpoint from the environment must not grow a file
 // they never asked for.
 func TestSessionConfigAbsentForEnvironmentRunners(t *testing.T) {
-	for _, r := range []string{"claude", "pi", "kimi"} {
+	for _, r := range []string{"claude", "pi"} {
 		if _, _, ok := SessionConfig(r, Binding{Model: "m", BaseURL: "u"}); ok {
 			t.Errorf("runner %q unexpectedly declares a config file", r)
 		}
@@ -112,6 +112,49 @@ runners:
 `))
 		if err == nil {
 			t.Errorf("path %q was accepted", bad)
+		}
+	}
+}
+
+// Kimi Code reads credentials only from its config file — its documentation
+// says plainly that an exported KIMI_API_KEY is not picked up — so the file
+// is mandatory, not a convenience.
+func TestKimiDeclaresAConfigWithCredentials(t *testing.T) {
+	path, content, ok := SessionConfig("kimi", Binding{
+		Provider: "kimi-code", Model: "k3",
+		BaseURL: "https://api.kimi.com/coding/v1", Protocol: ProtoOpenAI,
+	})
+	if !ok {
+		t.Fatal("kimi declares no config file; it would fail at startup with missing credentials")
+	}
+	if path != "config.toml" {
+		t.Errorf("path = %q", path)
+	}
+	for _, want := range []string{
+		`default_model = "k3"`,
+		`type = "kimi"`,
+		`base_url = "https://api.kimi.com/coding/v1"`,
+		`[models."k3"]`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("config missing %s\n---\n%s", want, content)
+		}
+	}
+}
+
+// The rendered config travels in the pod spec, which anyone who can read
+// pods can read. So the key is a MARKER here and is expanded by the runtime
+// inside the pod — the literal value must never appear at this layer.
+func TestTheKeyIsAMarkerNotTheKey(t *testing.T) {
+	_, content, _ := SessionConfig("kimi", Binding{
+		Provider: "kimi-code", Model: "k3", BaseURL: "https://x", Protocol: ProtoOpenAI,
+	})
+	if !strings.Contains(content, "${"+APIKeyMarker+"}") {
+		t.Errorf("the key placeholder is gone, so either the key is inline or the config is broken:\n%s", content)
+	}
+	for _, leak := range []string{"sk-", "api_key = \"sk"} {
+		if strings.Contains(content, leak) {
+			t.Errorf("a literal key reached the control plane's rendering: %s", content)
 		}
 	}
 }

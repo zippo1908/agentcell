@@ -56,8 +56,11 @@ export function CellNewPage() {
       ...cur,
       image: cur.image || o.devboxes[0]?.image || '',
       secretName: cur.secretName || (o.gitCredentials.length === 1 ? o.gitCredentials[0] : cur.secretName),
-      runner: cur.runner || o.runners[0]?.name || '',
-      provider: cur.provider || o.runners[0]?.vendor || o.providers[0]?.name || '',
+      // The deployment's default first; the first entry only as a fallback,
+      // so a team that has decided does not re-decide on every project.
+      runner: cur.runner || o.defaultRunner || o.runners[0]?.name || '',
+      provider:
+        cur.provider || o.defaultProvider || o.runners[0]?.vendor || o.providers[0]?.name || '',
     }))
   }, [opts.data])
 

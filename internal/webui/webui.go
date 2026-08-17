@@ -50,6 +50,11 @@ type Handler struct {
 	// Auth mints the short-lived per-Cell tickets that authorize the
 	// preview origin (the console credential is never accepted there).
 	Auth *Authenticator
+	// DefaultRunner and DefaultProvider are the pairing a new project starts
+	// with, set by the operator. Empty means the console asks with nothing
+	// preselected, which is right for a deployment that has not decided.
+	DefaultRunner   string
+	DefaultProvider string
 	// RESTConfig and Kube back exec into a resident session's pod. They are
 	// how the console reaches a live tmux without the session pod holding an
 	// API token of its own (ADR-0005).

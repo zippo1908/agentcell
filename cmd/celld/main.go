@@ -63,7 +63,11 @@ func main() {
 			"honour X-Forwarded-Proto/Host; enable ONLY behind a gateway that OVERWRITES them (e.g. APISIX), never where celld is directly reachable")
 		allowNoAuth = flag.Bool("allow-no-auth", false,
 			"start with the HTTP surface unauthenticated (dev only)")
-		showVersion = flag.Bool("version", false, "print version and exit")
+		showVersion   = flag.Bool("version", false, "print version and exit")
+		defaultRunner = flag.String("default-runner", "kimi",
+			"agent CLI a new project starts with")
+		defaultProvider = flag.String("default-provider", "kimi-code",
+			"model provider a new project starts with")
 		leaderElect = flag.Bool("leader-elect", true,
 			"run controllers only while holding the lease, so two celld replicas cannot both reconcile")
 	)
@@ -208,7 +212,9 @@ func main() {
 
 	_, previewPort, _ := net.SplitHostPort(*previewAddr)
 	ui := &webui.Handler{
-		Client: mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
+		DefaultRunner:   *defaultRunner,
+		DefaultProvider: *defaultProvider,
+		Client:          mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
 		RESTConfig: mgr.GetConfig(), Kube: kubeClient,
 		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
 		PreviewDomain: *previewDomain, Auth: auth,

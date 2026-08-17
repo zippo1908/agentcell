@@ -158,6 +158,9 @@ export interface NewProjectOptions {
   }[]
   runners: RunnerInfo[]
   providers: ProviderInfo[]
+  /** What a new project starts with, chosen by the operator. */
+  defaultRunner?: string
+  defaultProvider?: string
 }
 
 export interface RunnerInfo {

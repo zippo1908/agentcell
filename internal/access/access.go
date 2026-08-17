@@ -152,9 +152,20 @@ type Runner struct {
 }
 
 // SessionConfig renders the config file a runner needs, or ok=false if it
-// needs none. The API key is deliberately absent: the file names the
-// variable to read it from, so the key stays in the environment and never
-// reaches a file the agent can cat.
+// needs none.
+//
+// Whether the key must appear in the file is the RUNNER'S choice, not ours.
+// Codex names an environment variable and the key stays out of the file
+// entirely; Kimi Code reads credentials only from its config and says plainly
+// that an exported shell variable is not picked up, so for it the file is the
+// only way in.
+//
+// Even then the key is not rendered here. This content is produced by the
+// control plane and carried in the pod spec, which anybody who can read pods
+// can read — so the template leaves a marker and the RUNTIME expands it from
+// its own environment when it writes the file. The literal key therefore
+// exists only inside the pod, in a 0600 file under the user's 0700 tree,
+// which is the same boundary the environment would have given (ADR-0010).
 func SessionConfig(runner string, b Binding) (path, content string, ok bool) {
 	r, found := runners[runner]
 	if !found || r.ConfigTemplate == "" {
@@ -163,6 +174,18 @@ func SessionConfig(runner string, b Binding) (path, content string, ok bool) {
 	rep := strings.NewReplacer(
 		"{{model}}", tomlString(b.Model),
 		"{{base_url}}", tomlString(b.BaseURL),
+		// The real context window, which the platform already tracks per
+		// provider. Kimi REQUIRES it — it refuses to run a model without a
+		// positive max_context_size — and getting it wrong has the same cost
+		// as everywhere else: a CLI compacting a conversation that never
+		// needed compacting.
+		"{{context_tokens}}", strconv.Itoa(contextOr(b.ContextTokens, 262144)),
+		// NOT the key itself: this content is rendered by the control plane
+		// and travels in the pod spec, which anyone who can read pods can
+		// read. The runtime expands this marker from its own environment at
+		// the moment it writes the file, so the literal key exists only
+		// inside the pod, in a 0600 file under the private tree.
+		"{{api_key}}", "${"+APIKeyMarker+"}",
 	)
 	return r.ConfigPath, rep.Replace(r.ConfigTemplate), true
 }
@@ -473,4 +496,18 @@ func speaks(runnerProtos, providerProtos []string) bool {
 		}
 	}
 	return false
+}
+
+// APIKeyMarker is what a config template writes instead of the key. The
+// runtime expands it; nothing upstream of the pod ever holds the value.
+const APIKeyMarker = "AGENTCELL_API_KEY"
+
+// contextOr falls back to a conservative window when a provider declares
+// none. Conservative rather than generous: assuming more context than a
+// model has produces truncation the CLI cannot see coming.
+func contextOr(n, fallback int) int {
+	if n > 0 {
+		return n
+	}
+	return fallback
 }
