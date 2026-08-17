@@ -81,14 +81,20 @@ func TestKimiIsUsableAndDoesNotClaimResume(t *testing.T) {
 	if !containsArg(argv, "--continue") || !containsArg(argv, "再补一句") {
 		t.Errorf("resume argv = %v", argv)
 	}
-	// --yolo cannot be combined with --prompt; the CLI refuses to start.
-	// --auto is the autonomous mode that can.
+	// Print mode takes NO permission flag. The published reference lists only
+	// --yolo and --plan as conflicting with --prompt, but the shipped binary
+	// (0.36.1) refuses --auto as well: "Cannot combine --prompt with --auto."
+	// Verified against the real CLI in the devbox image, which is the
+	// authority — a document that disagrees with the binary is a document
+	// that is out of date.
 	for _, a := range [][]string{argv, mustHeadless(t, "kimi")} {
-		if containsArg(a, "--yolo") {
-			t.Errorf("--yolo with --prompt is refused by the CLI: %v", a)
+		if !containsArg(a, "-p") {
+			t.Errorf("a headless run must be non-interactive: %v", a)
 		}
-		if !containsArg(a, "--auto") {
-			t.Errorf("a headless run must not stop to ask a question nobody can answer: %v", a)
+		for _, bad := range []string{"--auto", "--yolo", "--plan"} {
+			if containsArg(a, bad) {
+				t.Errorf("%s cannot be combined with -p; the CLI refuses to start: %v", bad, a)
+			}
 		}
 	}
 }
