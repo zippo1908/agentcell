@@ -37,6 +37,9 @@ type branchView struct {
 	Session string `json:"session,omitempty"`
 	// Merged is a branch with nothing the base does not already have.
 	Merged bool `json:"merged,omitempty"`
+	// Repo names which repository this branch is in, empty for a project
+	// with only one — there is nothing to disambiguate then.
+	Repo string `json:"repo,omitempty"`
 }
 
 func (h *Handler) listBranches(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +56,7 @@ func (h *Handler) listBranches(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 501, errNotFound)
 		return
 	}
-	base := cell.Spec.Repo.Branch
+	base := cell.PrimaryRepo().Branch
 	if base == "" {
 		base = "main"
 	}
@@ -73,7 +76,13 @@ func (h *Handler) listBranches(w http.ResponseWriter, r *http.Request) {
 		if len(f) < 5 || f[0] == "" {
 			continue
 		}
-		v := branchView{Name: f[0], When: f[3], Subject: f[4], Base: f[0] == base}
+		v := branchView{Name: f[0], When: f[3], Subject: f[4]}
+		if len(f) > 5 {
+			v.Repo = f[5]
+		}
+		// Each repository has its own base branch, so "is this the base" is a
+		// per-repository question.
+		v.Base = f[0] == baseOf(&cell, v.Repo)
 		v.Ahead, _ = strconv.Atoi(f[1])
 		v.Behind, _ = strconv.Atoi(f[2])
 		// Nothing of its own that the base lacks: safe to delete, and the
@@ -85,4 +94,20 @@ func (h *Handler) listBranches(w http.ResponseWriter, r *http.Request) {
 		views = append(views, v)
 	}
 	writeJSON(w, 200, views)
+}
+
+// baseOf is the base branch of one repository of the project. Repositories
+// on a forge do not have to agree on what the base is called — a project
+// with a `master` and a `main` is ordinary — so this is asked per repository
+// rather than once.
+func baseOf(cell *acv1.Cell, repo string) string {
+	for _, r := range cell.AllRepos() {
+		if repo == "" || r.Name == repo {
+			if r.Branch != "" {
+				return r.Branch
+			}
+			return "main"
+		}
+	}
+	return "main"
 }

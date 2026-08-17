@@ -45,6 +45,8 @@ export interface Branch {
   session?: string
   /** Nothing of its own the base lacks — safe to delete. */
   merged?: boolean
+  /** Which repository, for a project made of several. */
+  repo?: string
 }
 
 /** One post on a team board. */

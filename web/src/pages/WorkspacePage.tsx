@@ -222,14 +222,26 @@ function BranchTree({ cell }: { cell: string }) {
   if (!branches.length) {
     return <p className="hint" style={{ padding: '10px 12px' }}>还读不到分支——项目可能还在起。</p>
   }
-  const base = branches.find((b) => b.base)
-  const rest = branches.filter((b) => !b.base)
+  // A project group's branches are grouped by repository: they live in
+  // different repositories on the forge, so listing them in one flat list
+  // would imply a relationship they do not have.
+  const repos = [...new Set(branches.map((b) => b.repo ?? ''))]
   return (
     <div className="tree">
-      {base && <BranchRow b={base} cell={cell} />}
-      {rest.map((b) => (
-        <BranchRow key={b.name} b={b} cell={cell} indent />
-      ))}
+      {repos.map((r) => {
+        const mine = branches.filter((b) => (b.repo ?? '') === r)
+        const base = mine.find((b) => b.base)
+        const rest = mine.filter((b) => !b.base)
+        return (
+          <div key={r}>
+            {r && <div className="tree-repo">{r}</div>}
+            {base && <BranchRow b={base} cell={cell} />}
+            {rest.map((b) => (
+              <BranchRow key={r + b.name} b={b} cell={cell} indent />
+            ))}
+          </div>
+        )
+      })}
     </div>
   )
 }

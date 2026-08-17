@@ -406,14 +406,38 @@ func runBranches(args []string) error {
 	if len(args) == 1 && args[0] != "" {
 		base = args[0]
 	}
-	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
+	// Every repository, each against ITS OWN base branch. A project group's
+	// repositories are separate on the forge and need not agree on what the
+	// base is called — a project with a `master` and a `main` is ordinary —
+	// so one shared answer would be wrong for at least one of them.
+	repos := reposFromEnv()
+	for _, rp := range repos {
+		b := rp.Branch
+		if b == "" {
+			b = base
+		}
+		name := ""
+		if len(repos) > 1 {
+			name = rp.Name
+		}
+		if err := branchesOf(ids.RepoDir(rp.Path), b, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// branchesOf prints one repository's branches. The repository column is
+// empty for a single-repo project, so that output is unchanged.
+func branchesOf(dir, base, repoName string) error {
+	if err := ensureRepoTrusted(dir); err != nil {
 		return err
 	}
 	// Refresh first: the anchor's clone is long-lived, and a branch pushed by
 	// a settle job minutes ago is exactly the one somebody is looking for.
-	_, _ = gitOut(ids.RepoPath, "fetch", "--prune", "--quiet")
+	_, _ = gitOut(dir, "fetch", "--prune", "--quiet")
 
-	out, err := gitOut(ids.RepoPath, "for-each-ref", "--sort=-committerdate",
+	out, err := gitOut(dir, "for-each-ref", "--sort=-committerdate",
 		"--format=%(refname:short)%09%(committerdate:relative)%09%(contents:subject)",
 		"refs/remotes/origin")
 	if err != nil {
@@ -430,7 +454,7 @@ func runBranches(args []string) error {
 		}
 		ahead, behind := "0", "0"
 		if name != base {
-			if c, err := gitOut(ids.RepoPath, "rev-list", "--left-right", "--count",
+			if c, err := gitOut(dir, "rev-list", "--left-right", "--count",
 				"origin/"+base+"..."+parts[0]); err == nil {
 				if f := strings.Fields(strings.TrimSpace(c)); len(f) == 2 {
 					behind, ahead = f[0], f[1]
@@ -444,7 +468,7 @@ func runBranches(args []string) error {
 		if len(parts) > 2 {
 			subject = parts[2]
 		}
-		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", name, ahead, behind, when, subject)
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", name, ahead, behind, when, subject, repoName)
 	}
 	return nil
 }
