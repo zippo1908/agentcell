@@ -8,7 +8,7 @@ what each thing was verified against.
 Nothing is listed as done here unless it has been exercised on a real
 cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
 
-## Done (through v0.1.0-alpha.4)
+## Done (through v0.1.0-alpha.6)
 
 - **Core model** — resident Cell (namespace + anchor StatefulSet + workspace
   PVC), Session slots, mandatory settle (push-confirmed-or-retry, real-git
@@ -52,6 +52,52 @@ cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
   with a signed webhook.
 - **Packaging** — Helm chart and images on GHCR, cloud presets for k3s /
   Alibaba ACK / Tencent TKE.
+
+### Added in alpha.5 → alpha.6
+
+Everything here was exercised on the single-node k3s cluster; the ones that
+were not are named as such.
+
+- **A terminal you can open and type into** — xterm.js attached over a
+  WebSocket to the same tmux window the agent is running in. Only the
+  session's owner may attach; a project maintainer may not. Sessions are
+  resident by default, because a headless agent prints nothing until it
+  finishes and "working" and "stuck" then look identical.
+- **Idle means asleep, not finished** — a session nobody is using gives back
+  its slot and its runtime after ~15 minutes and keeps its worktree and
+  conversation. Opening its terminal or asking one more thing wakes it where
+  it was; the agent is not re-run. A session nobody returns to is published
+  after a week, not deleted.
+- **One live session per person per Cell** — the agent CLIs already open and
+  switch conversations; a second layer of that only made it possible to be
+  locked out of your own work when slots filled. The slot cap now bounds
+  people, not tasks.
+- **Teams and a board** — a membership list that outlives one project, and a
+  stream where `@cell do the thing` dispatches and answers in the same place.
+  The board's conversation with a project is the team's own session, not the
+  asker's.
+- **A project made of several repositories** — one workspace, one agent, N
+  repositories side by side. Each keeps its own remote, base branch and
+  credential, and a session that touches three produces three branches,
+  reviewed separately: there is no cross-repository atomicity to be had, so
+  the platform does not imply one. Existing single-repo projects are
+  unchanged — same paths, same URLs, no migration.
+- **PlacementClass** — an administrator offers machine pools; a maintainer
+  chooses from that list and can express nothing else. Replaces a control
+  that accepted any node label and derived tolerations from the taints it
+  found, which let a project role cross a cluster-admin boundary.
+- **celld leader election** — one replica reconciles, every replica serves
+  the console; ~4s takeover measured. Preview tickets are now single-use
+  across replicas rather than once per process.
+- **Prometheus metrics** — `agentcell_cell_active_sessions` and
+  `agentcell_cells_total` (#41, thanks @OdaloV). Known gap on multi-replica
+  deployments: #42.
+- **Creating a project is choosing, not typing** — devbox, runner and
+  provider offered as cards narrowed to what can actually be driven.
+- **Database configuration slot** — dev and prod name separate secrets; the
+  platform injects a connection and never provisions a database.
+- **In-cluster registry** for clusters that cannot reach ghcr.io, plus an
+  814 MB alpine devbox.
 
 ## Next
 

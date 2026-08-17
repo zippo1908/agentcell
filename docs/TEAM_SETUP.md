@@ -78,7 +78,7 @@ pull secret and point the chart at it instead:
 kubectl -n agentcell-system create secret docker-registry regcred \
   --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
 helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
-  --version 0.1.0-alpha.5 --namespace agentcell-system --create-namespace \
+  --version 0.1.0-alpha.6 --namespace agentcell-system --create-namespace \
   --set image.pullSecret=regcred
 ```
 
@@ -90,12 +90,12 @@ resolves pull secrets locally.
 **This is the item most likely to be missed.** The platform runs whatever
 image a Cell names, and it must contain the agent CLIs, `git`, and `tmux`
 (resident sessions need it). The published one —
-`ghcr.io/zippo1908/devbox:v0.1.0-alpha.5` — carries Claude Code and Codex CLI
+`ghcr.io/zippo1908/devbox:v0.1.0-alpha.6` — carries Claude Code and Codex CLI
 on Node 22, and is about 2 GB, so pre-pull it on the node rather than
 discovering the wait during a demo:
 
 ```sh
-crictl pull ghcr.io/zippo1908/devbox:v0.1.0-alpha.5   # or: nerdctl / docker pull
+crictl pull ghcr.io/zippo1908/devbox:v0.1.0-alpha.6   # or: nerdctl / docker pull
 ```
 
 On a slow internal link that 2 GB is roughly an hour before anyone can try
