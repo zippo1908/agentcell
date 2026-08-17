@@ -162,7 +162,7 @@ func settleAll(uid int64, id, base string, repos []runtimeapi.Repo) (verdict, er
 	if len(repos) == 1 && repos[0].Path == "" {
 		// Exactly what it always did, byte for byte.
 		return settleWorktree(ids.UserRepoPath(uid), ids.WorktreePath(uid, id),
-			ids.SessionBranch(id), base, id, effectiveGitURL(repos[0].URL))
+			ids.SessionBranch(id), base, id, effectiveGitURLFor(repos[0].URL, ""))
 	}
 	out := verdict{}
 	var firstErr error
@@ -171,10 +171,14 @@ func settleAll(uid int64, id, base string, repos []runtimeapi.Repo) (verdict, er
 		if b == "" {
 			b = base
 		}
+		name := r.Name
+		if len(repos) == 1 {
+			name = ""
+		}
 		one, err := settleWorktree(
 			ids.UserRepoDirFor(uid, r.Path),
 			ids.WorktreeDirFor(uid, id, r.Path),
-			ids.SessionBranch(id), b, id, effectiveGitURL(r.URL))
+			ids.SessionBranch(id), b, id, effectiveGitURLFor(r.URL, name))
 		one.Repo = r.Name
 		out.Repos = append(out.Repos, one)
 		if err != nil && firstErr == nil {

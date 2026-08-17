@@ -759,6 +759,10 @@ func (r *SessionReconciler) ensureSettleJob(ctx context.Context, sess *acv1.Sess
 		// config — a malicious session editing .git/config cannot redirect
 		// a credentialed push.
 		{Name: runtimeapi.EnvRepoURL, Value: cell.Spec.Repo.URL},
+		// And every repository of a project group, for the same reason: the
+		// push target is decided here, from the spec, never from whatever a
+		// worktree's own config happens to say.
+		{Name: runtimeapi.EnvRepos, Value: reposJSON(cell)},
 	}
 	if cell.Spec.Repo.SecretName != "" {
 		settleEnv = append(settleEnv, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)

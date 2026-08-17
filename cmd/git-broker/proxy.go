@@ -29,7 +29,7 @@ type identity struct {
 
 // handleGit serves one git smart-HTTP request at /<cell>/<rest>.
 func (s *server) handleGit(w http.ResponseWriter, r *http.Request) {
-	cell, rest := splitCellPath(r.URL.Path)
+	cell, repoName, rest := splitCellPath(r.URL.Path)
 	if cell == "" {
 		http.Error(w, "usage: /<cell>/<git-path>", http.StatusBadRequest)
 		return
@@ -55,12 +55,17 @@ func (s *server) handleGit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cell not found", http.StatusNotFound)
 		return
 	}
-	if c.Spec.Repo.SecretName == "" {
+	repo, ok := repoOf(&c, repoName)
+	if !ok {
+		http.Error(w, "no such repository in this project", http.StatusNotFound)
+		return
+	}
+	if repo.SecretName == "" {
 		http.Error(w, "cell has no git secret configured", http.StatusForbidden)
 		return
 	}
 	var secret corev1.Secret
-	if err := s.k8s.Get(s.ctx(), types.NamespacedName{Namespace: s.controlNS, Name: c.Spec.Repo.SecretName}, &secret); err != nil {
+	if err := s.k8s.Get(s.ctx(), types.NamespacedName{Namespace: s.controlNS, Name: repo.SecretName}, &secret); err != nil {
 		http.Error(w, "git secret not found", http.StatusInternalServerError)
 		return
 	}
@@ -73,11 +78,11 @@ func (s *server) handleGit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "git secret is missing the required repo_url binding", http.StatusForbidden)
 		return
 	}
-	if !sameRepo(bound, c.Spec.Repo.URL) {
+	if !sameRepo(bound, repo.URL) {
 		http.Error(w, "cell repo url is not authorized by this credential", http.StatusForbidden)
 		return
 	}
-	cred, err := s.creds.credentials(s.ctx(), c.Spec.Repo.URL, secret.Data)
+	cred, err := s.creds.credentials(s.ctx(), repo.URL, secret.Data)
 	if err != nil {
 		http.Error(w, "credential error", http.StatusInternalServerError)
 		return
@@ -104,7 +109,7 @@ func (s *server) handleGit(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Proxy to the real remote with the real credential injected. The
 	//    workload's SA token is replaced, never forwarded onward.
-	target, err := url.Parse(c.Spec.Repo.URL)
+	target, err := url.Parse(repo.URL)
 	if err != nil {
 		http.Error(w, "bad remote url", http.StatusInternalServerError)
 		return
@@ -250,12 +255,44 @@ func contains(ss []string, v string) bool {
 	return false
 }
 
-// splitCellPath splits "/shop/info/refs" into ("shop", "info/refs").
-func splitCellPath(p string) (cell, rest string) {
+// splitCellPath splits "/shop/info/refs" into ("shop", "", "info/refs") and
+// "/shop/~web/info/refs" into ("shop", "web", "info/refs").
+//
+// A project may hold several repositories, and the broker has to know which
+// one is being asked for — without it, every repository in a project routed
+// to the same upstream and a two-repo workspace silently contained the same
+// code twice. The "~" prefix keeps the repository segment unambiguous
+// against git's own path components, none of which begin with it.
+func splitCellPath(p string) (cell, repo, rest string) {
 	p = strings.TrimPrefix(p, "/")
 	i := strings.IndexByte(p, '/')
 	if i < 0 {
-		return p, ""
+		return p, "", ""
 	}
-	return p[:i], p[i+1:]
+	cell, rest = p[:i], p[i+1:]
+	if strings.HasPrefix(rest, "~") {
+		j := strings.IndexByte(rest, '/')
+		if j < 0 {
+			return cell, rest[1:], ""
+		}
+		return cell, rest[1:j], rest[j+1:]
+	}
+	return cell, "", rest
+}
+
+// repoOf picks the repository a request names, defaulting to the one at the
+// workspace root. An unknown name is refused rather than resolved to the
+// default: silently serving a different repository is how a workspace ends
+// up holding the same code twice under two names.
+func repoOf(c *acv1.Cell, name string) (acv1.RepoSpec, bool) {
+	all := c.AllRepos()
+	if name == "" {
+		return c.PrimaryRepo(), len(all) > 0
+	}
+	for _, r := range all {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return acv1.RepoSpec{}, false
 }

@@ -51,12 +51,29 @@ func runAskpass(args []string) error {
 // repository. In broker mode that is <broker>/<cell> (the real remote is
 // resolved by the broker from the Cell CR, and never appears here); in
 // direct mode it is the real remote passed in.
-func effectiveGitURL(realURL string) string {
+func effectiveGitURL(realURL string) string { return effectiveGitURLFor(realURL, "") }
+
+// effectiveGitURLFor routes one repository through the broker.
+//
+// The repository name is part of the path, because a project may hold
+// several and the broker has to know which is meant. Without it every
+// repository in a project resolved to the same upstream, and a two-repo
+// workspace quietly contained the same code twice — the kind of wrong that
+// looks fine until somebody reads the files.
+// The repository segment appears ONLY for a project that has more than one.
+// A single-repo project keeps the URL it always had, so every existing
+// checkout, remote and stored config stays valid — no migration, and no
+// clone suddenly pointing somewhere new.
+func effectiveGitURLFor(realURL, repoName string) string {
 	broker := strings.TrimRight(os.Getenv(runtimeapi.EnvGitBroker), "/")
 	if broker == "" {
 		return realURL
 	}
-	return broker + "/" + os.Getenv(runtimeapi.EnvCellName)
+	base := broker + "/" + os.Getenv(runtimeapi.EnvCellName)
+	if repoName != "" {
+		base += "/~" + repoName
+	}
+	return base
 }
 
 // git runs a git command with output to our stdout/stderr and askpass wired.

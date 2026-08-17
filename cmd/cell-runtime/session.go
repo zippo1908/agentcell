@@ -44,9 +44,7 @@ func runSession() error {
 	}
 	// After HOME points at the private tree, so the trust lands in this
 	// user's own git config rather than a shared one.
-	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
-		return err
-	}
+	trustAllRepos()
 	wt := ids.WorktreePath(uid, id)
 	// One worktree per repository. For a single-repo project this is exactly
 	// the old single call: the worktree IS the session directory.

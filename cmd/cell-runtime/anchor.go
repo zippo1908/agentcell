@@ -71,6 +71,10 @@ func runAnchor() error {
 func ensureClone() error {
 	repos := reposFromEnv()
 	for _, r := range repos {
+		if len(repos) == 1 {
+			// Single-repo project: the URL it always had.
+			r.Name = ""
+		}
 		if err := ensureOneClone(r); err != nil {
 			return fmt.Errorf("repo %q: %w", r.Name, err)
 		}
@@ -131,7 +135,7 @@ func ensureOneClone(r runtimeapi.Repo) error {
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, effectiveGitURL(url), repoPath)
+	args = append(args, effectiveGitURLFor(url, r.Name), repoPath)
 	if err := gitNet("/", args...); err != nil {
 		return err
 	}

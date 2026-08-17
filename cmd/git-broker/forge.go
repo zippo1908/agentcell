@@ -60,7 +60,7 @@ func (s *server) handleForge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	cell, _ := splitCellPath(strings.TrimPrefix(r.URL.Path, "/forge"))
+	cell, _, _ := splitCellPath(strings.TrimPrefix(r.URL.Path, "/forge"))
 	if cell == "" {
 		http.Error(w, "usage: POST /forge/<cell>", http.StatusBadRequest)
 		return

@@ -181,6 +181,11 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 		}
 		vars[runtimeapi.EnvAgentConfig] = string(cfgJSON)
 	}
+	// The window needs the project's repositories for the same reason the
+	// one-shot pod does: without them it falls back to the single-repo
+	// layout and goes looking for a checkout that a project group does not
+	// have.
+	vars[runtimeapi.EnvRepos] = reposJSON(cell)
 	vars[runtimeapi.EnvSessionID] = id
 	vars[runtimeapi.EnvBaseBranch] = cell.Spec.Repo.Branch
 	vars[runtimeapi.EnvTask] = sess.Spec.Task

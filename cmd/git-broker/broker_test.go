@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"io"
 	"strings"
 	"testing"
@@ -224,16 +225,44 @@ func userInfo(username string, extra map[string][]string) authnv1.UserInfo {
 }
 
 func TestSplitCellPath(t *testing.T) {
-	for _, c := range []struct{ in, cell, rest string }{
-		{"/shop/info/refs", "shop", "info/refs"},
-		{"/shop/git-receive-pack", "shop", "git-receive-pack"},
-		{"/shop", "shop", ""},
-		{"/", "", ""},
+	for _, c := range []struct{ in, cell, repo, rest string }{
+		// A single-repo project keeps the path it always had, so every
+		// existing checkout and stored remote stays valid.
+		{"/shop/info/refs", "shop", "", "info/refs"},
+		{"/shop/git-receive-pack", "shop", "", "git-receive-pack"},
+		{"/shop", "shop", "", ""},
+		{"/", "", "", ""},
+		// A project group names the repository. Without this every
+		// repository routed to the same upstream and a two-repo workspace
+		// quietly held the same code twice.
+		{"/shop/~web/info/refs", "shop", "web", "info/refs"},
+		{"/shop/~api/git-receive-pack", "shop", "api", "git-receive-pack"},
+		{"/shop/~web", "shop", "web", ""},
 	} {
-		cell, rest := splitCellPath(c.in)
-		if cell != c.cell || rest != c.rest {
-			t.Errorf("splitCellPath(%q) = (%q,%q), want (%q,%q)", c.in, cell, rest, c.cell, c.rest)
+		cell, repo, rest := splitCellPath(c.in)
+		if cell != c.cell || repo != c.repo || rest != c.rest {
+			t.Errorf("splitCellPath(%q) = (%q,%q,%q), want (%q,%q,%q)",
+				c.in, cell, repo, rest, c.cell, c.repo, c.rest)
 		}
+	}
+}
+
+// An unknown repository name is refused, not quietly resolved to the default.
+// Serving a different repository under the name somebody asked for is how a
+// workspace ends up holding the wrong code with no error anywhere.
+func TestUnknownRepoIsRefused(t *testing.T) {
+	c := &acv1.Cell{}
+	c.Spec.Repo = acv1.RepoSpec{Name: "api", Path: "api", URL: "https://git/api.git"}
+	c.Spec.Repos = []acv1.RepoSpec{{Name: "web", Path: "web", URL: "https://git/web.git"}}
+
+	if r, ok := repoOf(c, "web"); !ok || r.URL != "https://git/web.git" {
+		t.Errorf("named repo resolved to %+v, ok=%v", r, ok)
+	}
+	if _, ok := repoOf(c, "mobile"); ok {
+		t.Error("an unknown repository name was accepted")
+	}
+	if r, ok := repoOf(c, ""); !ok || r.Name != "api" {
+		t.Errorf("empty name should mean the primary, got %+v", r)
 	}
 }
 

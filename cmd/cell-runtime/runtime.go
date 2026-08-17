@@ -34,9 +34,7 @@ func runUserRuntime() error {
 	if err := ensurePrivateHome(uid); err != nil {
 		return err
 	}
-	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
-		return err
-	}
+	trustAllRepos()
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return fmt.Errorf("the user runtime needs tmux, and it is not in this Cell's image: " +
 			"install it in the devbox image")
@@ -50,7 +48,7 @@ func runUserRuntime() error {
 	}
 	// A server with no sessions exits, so it is held open by one that is
 	// never handed out. Windows for real sessions are added beside it.
-	if out, err := tmux(sock, "new-session", "-d", "-s", ids.TmuxHolder, "-c", ids.RepoPath); err != nil {
+	if out, err := tmux(sock, "new-session", "-d", "-s", ids.TmuxHolder, "-c", holderDir()); err != nil {
 		return fmt.Errorf("tmux start: %v: %s", err, out)
 	}
 	fmt.Printf("user runtime: tmux server on %s\n", sock)
@@ -118,10 +116,8 @@ func runWindowOpen(args []string) error {
 		}
 	}
 	// This runs as a fresh exec, so it does not inherit whatever PID 1 set
-	// up; the trust entry is idempotent and cheap.
-	if err := ensureRepoTrusted(ids.RepoPath); err != nil {
-		return err
-	}
+	// up; the trust entries are idempotent and cheap.
+	trustAllRepos()
 	wt := ids.WorktreePath(uid, id)
 	// Every repository, not just the first: a project group exists so the
 	// agent can see both halves of a change, and a terminal opened on half
@@ -425,3 +421,25 @@ func prepareWorktreeFor(wt, id, base, path string) error {
 }
 
 var _ = json.Marshal
+
+// trustAllRepos marks every repository of the project as safe for git.
+//
+// One fixed path was enough when a project was one repository; a project
+// group has several and none of them is at the old location, so trusting the
+// old path alone left every git command refusing to run.
+func trustAllRepos() {
+	for _, r := range reposFromEnv() {
+		_ = ensureRepoTrusted(ids.RepoDir(r.Path))
+	}
+}
+
+// holderDir is where the tmux holder session sits: the single repository if
+// there is one, otherwise the workspace itself, which is the only directory
+// a project group has in common.
+func holderDir() string {
+	repos := reposFromEnv()
+	if len(repos) == 1 {
+		return ids.RepoDir(repos[0].Path)
+	}
+	return "/workspace"
+}
