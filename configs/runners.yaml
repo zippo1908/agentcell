@@ -85,7 +85,11 @@ runners:
     # model line. Print mode has none of that by design — it answers once
     # and exits — which is why a resident terminal running -p looked like a
     # log rather than a place to work.
-    interactive: ["kimi"]
+    # --yolo, for the same reason Claude gets --dangerously-skip-permissions
+    # and Codex gets danger-full-access: the CONTAINER is the boundary. An
+    # agent that stops to ask before every file write, in a terminal nobody
+    # is necessarily watching, is an agent that silently does nothing.
+    interactive: ["kimi", "--yolo"]
     # Kimi mints its own session ids, so the platform cannot name the
     # conversation up front. It resumes the most recent one in the working
     # directory instead — which is only unambiguous if each session has its
