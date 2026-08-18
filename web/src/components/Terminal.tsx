@@ -50,10 +50,21 @@ export function Terminal({ session }: { session: string }) {
     let attempt = 0
     let lastReason = ''
     let ws: WebSocket | undefined
+    // Back off as attempts pile up, capped: a wake that is queued behind
+    // somebody else's work should not be asked about every three seconds
+    // for as long as it takes.
+    const backoff = () => Math.min(3000 * Math.max(1, attempt), 15000)
     const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m))
     const sendSize = () => {
-      fit.fit()
-      send({ c: term.cols, r: term.rows })
+      // A hidden terminal has no dimensions to fit to. Guard rather than
+      // skip: a deck keeps terminals mounted while invisible, and a throw
+      // here would take out the resize path for the visible one too.
+      try {
+        fit.fit()
+      } catch {
+        return
+      }
+      if (term.cols > 0 && term.rows > 0) send({ c: term.cols, r: term.rows })
     }
     const connect = () => {
       if (closed) return
@@ -61,15 +72,29 @@ export function Terminal({ session }: { session: string }) {
       ws = new WebSocket(`${proto}//${location.host}/api/sessions/${session}/terminal`)
       ws.binaryType = 'arraybuffer'
 
-      ws.onopen = () => {
-        attempt = 0
-        setState('open')
-        sendSize()
-      }
+      // Deliberately NOT "connected" yet, and deliberately no backoff reset.
+      //
+      // The server accepts the websocket first and attaches to the tmux
+      // window afterwards, so this fires whether or not the attach then
+      // works. Treating it as success is what turns a persistently failing
+      // attach into a one-second reconnect loop that says "waking up"
+      // forever instead of ever admitting it cannot get in.
+      ws.onopen = () => sendSize()
+
       ws.onmessage = (e) => {
-        term.write(
-          typeof e.data === 'string' ? e.data : new Uint8Array(e.data as ArrayBuffer),
-        )
+        // Text frames are protocol, binary frames are the screen. Keeping
+        // them apart means a control message can never be mistaken for
+        // output the agent printed.
+        if (typeof e.data === 'string') {
+          if (e.data.includes('"ready"')) {
+            attempt = 0
+            lastReason = ''
+            setState('open')
+            sendSize()
+          }
+          return
+        }
+        term.write(new Uint8Array(e.data as ArrayBuffer))
       }
       ws.onclose = () => {
         if (closed) return
@@ -93,15 +118,25 @@ export function Terminal({ session }: { session: string }) {
               lastReason = st.message
               term.write(`\x1b[90m${st.message}\x1b[0m\r\n`)
             }
-            // Keep waiting as long as the platform says it is coming. A
-            // wake blocked on a slot can take as long as somebody else's
-            // work does, and timing out would just hide that.
-            setTimeout(connect, 3000)
+            // A session the platform says is RUNNING, which we still
+            // cannot attach to after many tries, is not waking — it is
+            // broken, and saying "waking up" forever is the one answer that
+            // helps nobody. Waiting on a wake stays unbounded, because a
+            // wake blocked on a busy slot legitimately takes as long as
+            // somebody else's work does.
+            if (st.phase === 'Running' && attempt > 8) {
+              setState('closed')
+              term.write(
+                '\r\n\x1b[90m—— 会话在运行,但终端连不上;打开它的日志或重新派工 ——\x1b[0m\r\n',
+              )
+              return
+            }
+            setTimeout(connect, backoff())
           })
           .catch(() => {
             if (closed) return
             if (attempt < 12) {
-              setTimeout(connect, 3000)
+              setTimeout(connect, backoff())
               return
             }
             setState('closed')

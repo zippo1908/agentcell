@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { Branch } from '../api/types'
-import { Terminal } from '../components/Terminal'
+import { TerminalDeck } from '../components/TerminalDeck'
 import { Splitter, usePaneWidth } from '../components/Splitter'
 import { Badge, Spinner, useToast } from '../ui/primitives'
 import { cellTone } from '../lib/format'
@@ -172,7 +172,7 @@ function CellWork({ cell }: { cell: string }) {
 
       <div className="ws-term">
         {live ? (
-          <Terminal session={live.name} />
+          <TerminalDeck session={live.name} />
         ) : (
           <div className="ws-empty">
             <p>这个项目还没有你的会话。</p>

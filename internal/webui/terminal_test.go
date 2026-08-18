@@ -3,7 +3,11 @@ package webui
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gorilla/websocket"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // A terminal must survive the one header a websocket proxy actually sends.
@@ -52,5 +56,65 @@ func TestUpgradeIgnoresForwardedHeadersWhenUntrusted(t *testing.T) {
 	r.Header.Set("X-Forwarded-Host", "attacker.example.com")
 	if h.upgrader().CheckOrigin(r) {
 		t.Error("a spoofed X-Forwarded-Host was honoured")
+	}
+}
+
+// The browser must be told when the attach actually succeeded.
+//
+// The websocket is accepted before the attach is attempted, so onopen says
+// nothing about whether there is a tty on the other end. Without an
+// explicit signal a client resets its backoff on every failed attempt and
+// reconnects forever — which is exactly what "会话在休眠,正在唤醒" showing
+// for minutes on end was.
+func TestFirstOutputAnnouncesAttached(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer c.Close()
+		term := &wsTerminal{conn: c, sizes: make(chan remotecommand.TerminalSize, 1)}
+		if _, err := term.Write([]byte("hello")); err != nil {
+			t.Error(err)
+		}
+		if _, err := term.Write([]byte(" again")); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+
+	c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	typ, data, err := c.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typ != websocket.TextMessage || !strings.Contains(string(data), `"ready"`) {
+		t.Fatalf("first frame = %d %q, want a text ready frame", typ, data)
+	}
+
+	// Screen output stays binary, so a control message can never be
+	// mistaken for something the agent printed.
+	typ, data, err = c.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typ != websocket.BinaryMessage || string(data) != "hello" {
+		t.Fatalf("second frame = %d %q, want binary output", typ, data)
+	}
+
+	// And it is announced exactly once, not before every write.
+	typ, data, err = c.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typ != websocket.BinaryMessage || string(data) != " again" {
+		t.Fatalf("third frame = %d %q, want the next chunk of output", typ, data)
 	}
 }

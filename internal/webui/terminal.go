@@ -198,6 +198,9 @@ type wsTerminal struct {
 	sizes  chan remotecommand.TerminalSize
 	cancel context.CancelFunc
 
+	// readyOnce guards the single "attached" frame; see Write.
+	readyOnce sync.Once
+
 	// in carries keystrokes from readLoop to Read. A channel rather than a
 	// buffer because the reader and the websocket live on different
 	// goroutines and gorilla permits exactly one reader.
@@ -283,6 +286,19 @@ func (t *wsTerminal) Read(p []byte) (int, error) {
 func (t *wsTerminal) Write(p []byte) (int, error) {
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
+	// The first byte of screen output is the only honest "you are attached"
+	// signal this protocol has.
+	//
+	// The websocket is accepted BEFORE the attach is attempted — finding the
+	// container, building the executor and opening the stream all happen
+	// after the 101. So the browser's onopen fires whether or not the attach
+	// then succeeds, and a client that treats onopen as success will reset
+	// its backoff on every failed attempt and reconnect forever, reporting
+	// "waking up" the entire time. Saying it explicitly, once, costs one
+	// frame and removes a whole class of silent spin.
+	t.readyOnce.Do(func() {
+		_ = t.conn.WriteMessage(websocket.TextMessage, []byte(`{"t":"ready"}`))
+	})
 	if err := t.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
 		return 0, err
 	}
