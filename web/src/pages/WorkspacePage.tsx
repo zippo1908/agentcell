@@ -127,9 +127,20 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
   const toast = useToast()
   const [text, setText] = useState('')
   const [view, setViewRaw] = useState<'terminal' | 'preview'>('terminal')
+  // The preview URL is taken ONCE and then left alone.
+  //
+  // Its ticket is single-use by design, and the project query refetches
+  // every few seconds with a freshly minted one — so binding the iframe to
+  // the live value re-pointed it constantly, and any reload that reused an
+  // already-spent ticket came back "preview session required". One ticket,
+  // exchanged for the preview cookie on first load, is the whole flow.
+  const [previewSrc, setPreviewSrc] = useState('')
   const setView = (v: 'terminal' | 'preview') => {
     setViewRaw(v)
     onView(v)
+    if (v === 'preview' && !previewSrc && detail.data?.cell?.previewURL) {
+      setPreviewSrc(detail.data.cell.previewURL)
+    }
   }
 
   const detail = useQuery({
@@ -146,6 +157,10 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
   // Opening a project means going to your terminal in it. Waiting for
   // somebody to think of a first instruction before anything exists is what
   // made this screen open onto nothing.
+  useEffect(() => {
+    setPreviewSrc('')
+  }, [cell])
+
   const opening = useRef('')
   useEffect(() => {
     if (!cell || live || detail.isLoading || opening.current === cell) return
@@ -235,7 +250,7 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
 
       {view === 'preview' && (
         <div className="ws-preview">
-          {detail.data?.cell?.previewURL ? (
+          {previewSrc ? (
             // A different ORIGIN, deliberately (ADR-0007): the page in here
             // is agent-written and unreviewed, so the browser must keep it
             // away from the console's session. An iframe across origins is
@@ -243,7 +258,7 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
             // of ours.
             <iframe
               title="预览"
-              src={detail.data.cell.previewURL}
+              src={previewSrc}
               referrerPolicy="no-referrer"
             />
           ) : (

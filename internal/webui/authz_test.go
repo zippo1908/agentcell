@@ -32,14 +32,14 @@ func TestReleaseRequiresMaintainer(t *testing.T) {
 		acv1.Member{UserID: alice.ID(), Role: acv1.RoleMaintainer},
 		acv1.Member{UserID: bob.ID(), Role: acv1.RoleMember},
 	)
-	if !can(alice, cell, nil, ActionRelease) {
+	if !can(alice, cell, ActionRelease) {
 		t.Error("a maintainer cannot release")
 	}
-	if can(bob, cell, nil, ActionRelease) {
+	if can(bob, cell, ActionRelease) {
 		t.Error("a member can release; that is the one action that must not be open")
 	}
 	// A member can still do the work.
-	if !can(bob, cell, nil, ActionDispatch) || !can(bob, cell, nil, ActionReview) {
+	if !can(bob, cell, ActionDispatch) || !can(bob, cell, ActionReview) {
 		t.Error("a member cannot dispatch or review")
 	}
 }
@@ -47,16 +47,16 @@ func TestReleaseRequiresMaintainer(t *testing.T) {
 func TestRolesAreOrdered(t *testing.T) {
 	viewer := cellWithMembers(acv1.Member{UserID: alice.ID(), Role: acv1.RoleViewer})
 	for _, a := range []Action{ActionDispatch, ActionReview, ActionRelease, ActionSettings} {
-		if can(alice, viewer, nil, a) {
+		if can(alice, viewer, a) {
 			t.Errorf("a viewer can %s", a)
 		}
 	}
-	if !can(alice, viewer, nil, ActionView) {
+	if !can(alice, viewer, ActionView) {
 		t.Error("a viewer cannot view")
 	}
 	// An unknown role must rank BELOW viewer, not accidentally above it.
 	weird := cellWithMembers(acv1.Member{UserID: alice.ID(), Role: acv1.Role("superuser")})
-	if can(alice, weird, nil, ActionView) {
+	if can(alice, weird, ActionView) {
 		t.Error("an unrecognised role granted access; unknown must fail closed")
 	}
 }
@@ -68,7 +68,7 @@ func TestACellWithoutMembersIsUnchanged(t *testing.T) {
 	open := cellWithMembers()
 	for _, p := range []identity.Principal{alice, bob, identity.StaticToken} {
 		for _, a := range []Action{ActionView, ActionDispatch, ActionReview, ActionRelease, ActionSettings} {
-			if !can(p, open, nil, a) {
+			if !can(p, open, a) {
 				t.Errorf("%s cannot %s on a Cell with no members", p.Display(), a)
 			}
 		}
@@ -79,7 +79,7 @@ func TestACellWithoutMembersIsUnchanged(t *testing.T) {
 // the single-user story out of its own console.
 func TestStaticTokenIsMaintainerEverywhere(t *testing.T) {
 	cell := cellWithMembers(acv1.Member{UserID: alice.ID(), Role: acv1.RoleViewer})
-	if !can(identity.StaticToken, cell, nil, ActionRelease) {
+	if !can(identity.StaticToken, cell, ActionRelease) {
 		t.Error("the static-token principal lost control of a Cell")
 	}
 }
@@ -286,7 +286,7 @@ func TestAddingAMemberClosesAnOpenCell(t *testing.T) {
 	if effectiveAccess(&got) != acv1.AccessRestricted {
 		t.Error("the Cell stayed open with a member list nobody enforces")
 	}
-	if can(bob, &got, nil, ActionView) {
+	if can(bob, &got, ActionView) {
 		t.Error("an outsider can still see a Cell that now has members")
 	}
 }

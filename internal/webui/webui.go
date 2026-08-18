@@ -130,14 +130,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
 	mux.HandleFunc("GET /api/new-project-options", h.newProjectOptions)
 	mux.HandleFunc("GET /api/cells/{cell}/branches", h.listBranches)
-	mux.HandleFunc("GET /api/teams", h.listTeams)
-	mux.HandleFunc("GET /api/teams/{team}/board", h.listBoard)
-	mux.HandleFunc("POST /api/teams/{team}/board", h.postToBoard)
-	mux.HandleFunc("POST /api/teams", h.createTeam)
-	mux.HandleFunc("PUT /api/teams/{team}/members", h.putTeamMember)
-	mux.HandleFunc("DELETE /api/teams/{team}/members/{user}", h.deleteTeamMember)
-	mux.HandleFunc("DELETE /api/teams/{team}", h.deleteTeam)
-	mux.HandleFunc("PUT /api/cells/{cell}/team", h.putCellTeam)
+	mux.HandleFunc("GET /api/cells/{cell}/board", h.listBoard)
+	mux.HandleFunc("POST /api/cells/{cell}/board", h.postToBoard)
 	mux.HandleFunc("GET /api/sessions/{session}/terminal", h.sessionTerminal)
 	mux.HandleFunc("PUT /api/cells/{cell}/placement", h.putPlacement)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
@@ -217,12 +211,18 @@ func CellFromPreviewRequest(r *http.Request) string {
 // here — a real trap, and the reason the test below enumerates them.
 func isClientRoute(p string) bool {
 	switch p {
-	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities", "/credentials", "/teams", "/board", "/workspace":
+	case "/", "/dashboard", "/cells", "/cells/new", "/reviews", "/capabilities", "/credentials", "/people", "/board", "/workspace":
 		return true
 	}
 	if rest, ok := strings.CutPrefix(p, "/cells/"); ok {
 		// /cells/<name> only; no deeper synthetic paths.
 		return !strings.Contains(rest, "/")
+	}
+	// /workspace/<project>. The project moved into the URL so a link to what
+	// somebody is looking at can be pasted to a colleague — which only works
+	// if the server serves that link on a cold load.
+	if rest, ok := strings.CutPrefix(p, "/workspace/"); ok {
+		return rest != "" && !strings.Contains(rest, "/")
 	}
 	return false
 }
@@ -309,6 +309,9 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		// private from anyone else holding the token. Saying so plainly beats
 		// a UI that implies isolation it does not have.
 		"shared": p.Kind == identity.KindToken,
+		// The console hides what you cannot do rather than offering it and
+		// refusing later.
+		"admin": p.Admin,
 	})
 }
 
@@ -410,7 +413,7 @@ func (h *Handler) listCells(w http.ResponseWriter, r *http.Request) {
 	p := identity.FromContext(r.Context())
 	views := make([]cellView, 0, len(list.Items))
 	for i := range list.Items {
-		if !can(p, &list.Items[i], h.teamFor(r, &list.Items[i]), ActionView) {
+		if !can(p, &list.Items[i], ActionView) {
 			continue
 		}
 		views = append(views, h.toCellView(r, &list.Items[i]))

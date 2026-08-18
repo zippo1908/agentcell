@@ -227,8 +227,18 @@ a:hover { border-bottom-color: var(--text); }
 
 /* Folding the navigation. 0 width rather than display:none so the button
    that brings it back has somewhere to live. */
-.sidebar.folded { width: 34px; }
-.sidebar.folded nav, .sidebar.folded .user-box, .sidebar.folded .brand span { display: none; }
+/* Folded: a column of icons, not an empty strip.
+   The point of folding is to give the terminal the width, not to make
+   somebody unfold the menu every time they want the board. */
+.sidebar.folded { width: 46px; }
+.sidebar.folded .logo-block span:not(.logo-glyph),
+.sidebar.folded .nav-projects, .sidebar.folded .nav-projects-label,
+.sidebar.folded .nav-label, .sidebar.folded .nav-count,
+.sidebar.folded .user-line span:not(.user-mark) { display: none; }
+.sidebar.folded nav a { justify-content: center; padding: 9px 0; }
+.sidebar.folded nav a span, .sidebar.folded nav a:not(:has(svg)) { display: none; }
+.sidebar.folded .user-box { padding: 10px 6px; }
+.sidebar.folded .user-menu { left: calc(100% + 6px); right: auto; width: 190px; }
 .nav-fold {
   align-self: flex-end; margin: 6px 6px 0; background: transparent;
   border: 1px solid var(--border); color: var(--text-dim);

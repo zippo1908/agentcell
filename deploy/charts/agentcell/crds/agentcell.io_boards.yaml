@@ -17,8 +17,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.team
-      name: Team
+    - jsonPath: .spec.cell
+      name: Cell
       type: string
     - jsonPath: .spec.count
       name: Posts
@@ -46,6 +46,16 @@ spec:
             type: object
           spec:
             properties:
+              cell:
+                description: |-
+                  Cell this board belongs to. One board per project, named after it.
+
+                  It used to be one per TEAM, which was a second membership model on top
+                  of the one every capability here already uses: a terminal, a preview
+                  and a release all belong to a project, so "who may see this
+                  conversation" was already answered by that project's member list.
+                  Two answers to one question is how they drift apart.
+                type: string
               count:
                 description: Count mirrors len(Posts) for a printcolumn.
                 type: integer
@@ -114,10 +124,6 @@ spec:
                   seen. Unread mentions are derived from it, never stored — a counter
                   somebody has to remember to decrement is a counter that goes wrong.
                 type: object
-              team:
-                description: Team this board belongs to. One board per team, named
-                  after it.
-                type: string
             type: object
         type: object
     served: true

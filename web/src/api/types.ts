@@ -233,6 +233,8 @@ export interface Me {
   email?: string
   kind: string
   shared: boolean
+  /** May invite people and act where the product says an administrator may. */
+  admin?: boolean
 }
 
 /** A model key you own. The key itself is never returned — `hint` is its

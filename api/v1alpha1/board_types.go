@@ -18,7 +18,7 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:shortName=bd
-// +kubebuilder:printcolumn:name="Team",type=string,JSONPath=`.spec.team`
+// +kubebuilder:printcolumn:name="Cell",type=string,JSONPath=`.spec.cell`
 // +kubebuilder:printcolumn:name="Posts",type=integer,JSONPath=`.spec.count`
 type Board struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -28,8 +28,14 @@ type Board struct {
 }
 
 type BoardSpec struct {
-	// Team this board belongs to. One board per team, named after it.
-	Team string `json:"team,omitempty"`
+	// Cell this board belongs to. One board per project, named after it.
+	//
+	// It used to be one per TEAM, which was a second membership model on top
+	// of the one every capability here already uses: a terminal, a preview
+	// and a release all belong to a project, so "who may see this
+	// conversation" was already answered by that project's member list.
+	// Two answers to one question is how they drift apart.
+	Cell string `json:"cell,omitempty"`
 	// Posts, oldest first, bounded.
 	//
 	// The whole conversation lives in one object rather than one object per

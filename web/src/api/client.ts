@@ -7,7 +7,6 @@ import type {
   Me,
   Meta,
   NodePool,
-  Team,
   NewProjectOptions,
   Post,
   Branch,
@@ -95,35 +94,23 @@ export const api = {
   kimiDisconnect: () =>
     req<{ status: string; message?: string }>('/api/kimi/login', { method: 'DELETE' }),
 
-  teams: () => req<Team[]>('/api/teams'),
+  // The board belongs to a PROJECT: whoever may work on it is whoever may
+  // see the conversation about it. There is no team layer.
+  board: (cell: string) =>
+    req<{ posts: Post[]; latest: number }>(`/api/cells/${cell}/board`),
 
-  board: (team: string) =>
-    req<{ posts: Post[]; latest: number }>(`/api/teams/${team}/board`),
-
-  postToBoard: (team: string, body: string) =>
-    req<{ id: number }>(`/api/teams/${team}/board`, {
+  postToBoard: (cell: string, body: string) =>
+    req<{ id: number }>(`/api/cells/${cell}/board`, {
       method: 'POST',
       body: JSON.stringify({ body }),
     }),
 
-  createTeam: (name: string, displayName: string) =>
-    req<Team>('/api/teams', { method: 'POST', body: JSON.stringify({ name, displayName }) }),
-
-  putTeamMember: (team: string, userID: string, role: string) =>
-    req<{ members: { userID: string; role: string }[] }>(`/api/teams/${team}/members`, {
-      method: 'PUT',
-      body: JSON.stringify({ userID, role }),
-    }),
-
-  deleteTeamMember: (team: string, userID: string) =>
-    req<{ members: { userID: string; role: string }[] }>(
-      `/api/teams/${team}/members/${userID}`, { method: 'DELETE' }),
-
-  /** Empty team detaches the Cell and returns it to its own member list. */
-  setCellTeam: (name: string, team: string) =>
-    req<{ team: string }>(`/api/cells/${name}/team`, {
-      method: 'PUT',
-      body: JSON.stringify({ team }),
+  people: () =>
+    req<{ email: string; name?: string; admin?: boolean; disabled?: boolean }[]>('/api/people'),
+  createInvite: (email: string, name: string, admin: boolean) =>
+    req<{ invite: string; path: string; expires: string }>('/api/invites', {
+      method: 'POST',
+      body: JSON.stringify({ email, name, admin }),
     }),
 
   nodePools: () => req<NodePool[]>('/api/nodepools'),

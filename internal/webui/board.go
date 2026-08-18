@@ -52,15 +52,36 @@ type postView struct {
 	Mine bool `json:"mine,omitempty"`
 }
 
-func (h *Handler) boardName(team string) types.NamespacedName {
-	return types.NamespacedName{Namespace: h.Namespace, Name: "board-" + team}
+func (h *Handler) boardName(cell string) types.NamespacedName {
+	return types.NamespacedName{Namespace: h.Namespace, Name: "board-" + cell}
 }
 
-// boardFor loads a team's board, creating it on first use, after checking the
-// caller is in the team.
-func (h *Handler) boardFor(w http.ResponseWriter, r *http.Request) (*acv1.Team, *acv1.Board, bool) {
-	t, ok := h.teamFromRequest(w, r, "")
-	if !ok {
+// boardFor loads a PROJECT's board, creating it on first use, after checking
+// the caller may see that project.
+//
+// The board used to belong to a team, which meant this platform carried two
+// membership models: the project's member list decided who gets a terminal,
+// a preview and a release, while a separate team list decided who sees the
+// conversation about that same work. Two answers to one question is how
+// they drift apart — somebody in the team but off the project could read
+// about work they cannot open. The project is the atom here, so it owns its
+// conversation too.
+func (h *Handler) boardFor(w http.ResponseWriter, r *http.Request) (*acv1.Cell, *acv1.Board, bool) {
+	name := r.PathValue("cell")
+	if name == "" {
+		name = r.URL.Query().Get("cell")
+	}
+	if name == "" {
+		writeErr(w, 400, fmt.Errorf("要先选一个项目"))
+		return nil, nil, false
+	}
+	var t acv1.Cell
+	if err := h.Client.Get(r.Context(),
+		types.NamespacedName{Namespace: h.Namespace, Name: name}, &t); err != nil {
+		writeErr(w, 404, errNotFound)
+		return nil, nil, false
+	}
+	if !h.authorize(w, r, &t, ActionView) {
 		return nil, nil, false
 	}
 	var b acv1.Board
@@ -70,7 +91,7 @@ func (h *Handler) boardFor(w http.ResponseWriter, r *http.Request) (*acv1.Team, 
 	case err == nil:
 	case apierrors.IsNotFound(err):
 		b = acv1.Board{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}
-		b.Spec.Team = t.Name
+		b.Spec.Cell = t.Name
 		if err := h.Client.Create(r.Context(), &b); err != nil && !apierrors.IsAlreadyExists(err) {
 			writeErr(w, 500, err)
 			return nil, nil, false
@@ -85,7 +106,7 @@ func (h *Handler) boardFor(w http.ResponseWriter, r *http.Request) (*acv1.Team, 
 		writeErr(w, 500, err)
 		return nil, nil, false
 	}
-	return t, &b, true
+	return &t, &b, true
 }
 
 func (h *Handler) listBoard(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +177,7 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	p := identity.FromContext(r.Context())
 
-	cells, users := h.resolveMentions(r.Context(), t, text)
+	users := h.resolveMentions(t, text)
 	post := acv1.Post{
 		Kind: acv1.PostUser, Author: p.ID(), Body: text, Mentions: users,
 	}
@@ -165,26 +186,10 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// An @ that reached nobody must say so, in the stream, rather than
-	// leaving somebody waiting for an answer that was never going to come.
-	if len(cells) == 0 && hasBotAlias(text) {
-		if named := h.teamCells(r.Context(), t.Name); len(named) == 1 {
-			cells = named
-		} else if len(named) > 1 {
-			opts := make([]string, 0, len(named))
-			for _, c := range named {
-				opts = append(opts, "@"+c)
-			}
-			h.systemPost(r.Context(), t.Name, fmt.Sprintf(
-				"这个团队有好几个工作区,得说清楚是哪一个:%s", strings.Join(opts, " ")), "")
-		} else {
-			h.systemPost(r.Context(), t.Name,
-				"这个团队名下还没有工作区,所以没有 agent 可以接这单。", "")
-		}
-	}
-
-	for _, cell := range cells {
-		h.dispatchFromBoard(r.Context(), t.Name, cell, text, p)
+	// Addressing the agent no longer needs a name. One board, one project,
+	// one agent — so calling it is just saying so.
+	if hasBotAlias(text) {
+		h.dispatchFromBoard(r.Context(), t.Name, t.Name, text, p)
 	}
 	writeJSON(w, 201, map[string]any{"id": post.ID})
 }
@@ -231,28 +236,26 @@ func (h *Handler) teamCells(ctx context.Context, team string) []string {
 // resolveMentions scans the body against two small known sets — the team's
 // Cells and the team's members — rather than parsing freely. An unknown
 // token is not a mention; it is just text with an @ in it.
-func (h *Handler) resolveMentions(ctx context.Context, t *acv1.Team, body string) (cells, users []string) {
-	known := map[string]bool{}
-	for _, c := range h.teamCells(ctx, t.Name) {
-		known[c] = true
-	}
+// resolveMentions finds the people named in a post.
+//
+// Only people: the board belongs to one project now, so there is no second
+// project it could be addressed to. Naming which agent to talk to was a
+// question a team-wide board had to ask; here the answer is the project the
+// board is on.
+func (h *Handler) resolveMentions(t *acv1.Cell, body string) (users []string) {
 	member := map[string]bool{}
 	for _, m := range t.Spec.Members {
 		member[m.UserID] = true
 	}
-	seenCell, seenUser := map[string]bool{}, map[string]bool{}
+	seen := map[string]bool{}
 	for _, m := range mentionRe.FindAllStringSubmatch(body, -1) {
 		tok := m[1]
-		switch {
-		case known[tok] && !seenCell[tok]:
-			seenCell[tok] = true
-			cells = append(cells, tok)
-		case member[tok] && !seenUser[tok]:
-			seenUser[tok] = true
+		if member[tok] && !seen[tok] {
+			seen[tok] = true
 			users = append(users, tok)
 		}
 	}
-	return cells, users
+	return users
 }
 
 func hasBotAlias(body string) bool {
@@ -281,7 +284,7 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		h.systemPost(ctx, team, "找不到工作区 "+cell+"。", "")
 		return
 	}
-	if !can(p, &c, h.teamByName(ctx, c.Spec.Team), ActionDispatch) {
+	if !can(p, &c, ActionDispatch) {
 		h.systemPost(ctx, team, "你在 "+cell+" 里没有动手的权限。", cell)
 		return
 	}
@@ -340,17 +343,6 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		Body: "接了:" + task,
 	}
 	_ = h.appendPost(ctx, team, &ack)
-}
-
-func (h *Handler) teamByName(ctx context.Context, name string) *acv1.Team {
-	if name == "" {
-		return nil
-	}
-	var t acv1.Team
-	if err := h.Client.Get(ctx, types.NamespacedName{Namespace: h.Namespace, Name: name}, &t); err != nil {
-		return nil
-	}
-	return &t
 }
 
 // soleCredential picks the caller's model key when there is exactly one.

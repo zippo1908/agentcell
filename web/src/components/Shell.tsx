@@ -13,12 +13,12 @@ const icon = (d: string) => (
   </svg>
 )
 const IconHome = icon('M3 11l9-8 9 8|M5 10v10h14V10')
+const IconPeople = icon('M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z|M3 20a6 6 0 0 1 12 0|M17 11a3 3 0 1 0 0-6|M17 14a6 6 0 0 1 4 6')
 const IconCells = icon('M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z')
 const IconReview = icon('M9 11l3 3 8-8|M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11')
 const IconKey = icon('M15 7a4 4 0 1 1-3.9 5H7v3H4v-3l3.1-3H11a4 4 0 0 1 4-4z')
 const IconWork = icon('M4 6h16v12H4z|M4 10h16|M9 10v8')
 const IconBoard = icon('M4 5h16v11H4z|M8 20l4-4 4 4')
-const IconTeam = icon('M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z|M3 20a6 6 0 0 1 12 0|M17 11a3 3 0 1 0 0-6|M17 14a6 6 0 0 1 4 6')
 const IconCaps = icon('M12 3l8 4.5v9L12 21l-8-4.5v-9z|M12 12l8-4.5|M12 12v9|M12 12L4 7.5')
 
 /**
@@ -131,11 +131,11 @@ export function Shell() {
               <NavLink to="/credentials" className={link} onClick={() => setMenuOpen(false)}>
                 {IconKey} 我的凭据
               </NavLink>
-              <NavLink to="/teams" className={link} onClick={() => setMenuOpen(false)}>
-                {IconTeam} 团队
-              </NavLink>
               <NavLink to="/cells" className={link} onClick={() => setMenuOpen(false)}>
                 {IconCells} 全部项目
+              </NavLink>
+              <NavLink to="/people" className={link} onClick={() => setMenuOpen(false)}>
+                {IconPeople} 人员与邀请
               </NavLink>
               <form method="post" action="/logout">
                 <button className="user-menu-out" type="submit">

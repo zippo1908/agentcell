@@ -20,11 +20,13 @@ import { Spinner, useToast } from '../ui/primitives'
 export function BoardPage() {
   const qc = useQueryClient()
   const toast = useToast()
+  // The board belongs to a PROJECT. There is no team layer: whoever may
+  // work on the project is whoever may see the conversation about it.
   const [team, setTeam] = useState<string>('')
   const [text, setText] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
 
-  const teams = useQuery({ queryKey: ['teams'], queryFn: () => api.teams() })
+  const teams = useQuery({ queryKey: ['cells'], queryFn: () => api.cells() })
   useEffect(() => {
     if (!team && teams.data?.length) setTeam(teams.data[0].name)
   }, [teams.data, team])
@@ -62,8 +64,8 @@ export function BoardPage() {
         </div>
         <div className="card">
           <p className="hint" style={{ margin: 0 }}>
-            黑板挂在团队上。先<Link to="/teams"> 建一个团队 </Link>
-            并把工作区归到它名下,之后就能在这里 <code className="mono">@工作区</code> 直接说话。
+            黑板挂在项目上。先<Link to="/cells/new"> 建一个项目 </Link>
+            ,之后在这里说话就是对它的 agent 说 —— 不用点名,一个项目一块黑板。
           </p>
         </div>
       </div>
@@ -78,12 +80,12 @@ export function BoardPage() {
           <select value={team} onChange={(e) => setTeam(e.target.value)} style={{ width: 200 }}>
             {teams.data.map((t) => (
               <option key={t.name} value={t.name}>
-                {t.displayName || t.name}
+                {t.name}
               </option>
             ))}
           </select>
         ) : (
-          <span className="faint">{teams.data[0].displayName || teams.data[0].name}</span>
+          <span className="faint">{teams.data[0].name}</span>
         )}
       </div>
 

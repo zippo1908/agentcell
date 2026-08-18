@@ -9,8 +9,8 @@ import { CellsPage } from './pages/CellsPage'
 import { CellNewPage } from './pages/CellNewPage'
 import { CapabilitiesPage } from './pages/CapabilitiesPage'
 import { CredentialsPage } from './pages/CredentialsPage'
-import { TeamsPage } from './pages/TeamsPage'
 import { BoardPage } from './pages/BoardPage'
+import { PeoplePage } from './pages/PeoplePage'
 import { WorkspacePage } from './pages/WorkspacePage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ToastProvider } from './ui/primitives'
@@ -36,8 +36,8 @@ const router = createBrowserRouter([
       { path: '/cells/new', element: <CellNewPage /> },
       { path: '/capabilities', element: <CapabilitiesPage /> },
       { path: '/credentials', element: <CredentialsPage /> },
-      { path: '/teams', element: <TeamsPage /> },
       { path: '/board', element: <BoardPage /> },
+      { path: '/people', element: <PeoplePage /> },
       { path: '/workspace', element: <WorkspacePage /> },
       { path: '/workspace/:cell', element: <WorkspacePage /> },
       { path: '/cells/:name', element: <CellPage /> },

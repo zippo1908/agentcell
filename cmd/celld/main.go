@@ -155,10 +155,6 @@ func main() {
 	// the allocator returns the shared project identity, so single-principal
 	// deployments behave exactly as before.
 	sessionReconciler.UIDs = &useruid.Allocator{Client: mgr.GetClient(), Namespace: *controlNS}
-	if err := (&controller.TeamReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
-		log.Error(err, "setup team controller")
-		os.Exit(1)
-	}
 	if err := sessionReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "setup session controller")
 		os.Exit(1)

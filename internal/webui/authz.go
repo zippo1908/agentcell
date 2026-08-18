@@ -2,7 +2,6 @@ package webui
 
 import (
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
 	"net/http"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
@@ -66,11 +65,12 @@ func required(a Action) acv1.Role {
 // that locked people out of their own projects would be reverted before it
 // was understood. Membership is opt-in, and taking it up is what turns the
 // rules on.
-// The team is passed in rather than fetched here so this stays a pure
-// function of (who, what, which team) — the property that makes the whole
-// rule set readable on one screen and exhaustively testable without a
-// cluster. nil means the Cell names no team, or the team is gone.
-func roleOf(p identity.Principal, cell *acv1.Cell, team *acv1.Team) acv1.Role {
+// Membership is the PROJECT's member list and nothing else. There used to
+// be a team fallback, which meant two lists answered "may this person work
+// here" — and a platform where a terminal, a preview and a release all
+// belong to a project has no use for a second scope that can disagree with
+// the first.
+func roleOf(p identity.Principal, cell *acv1.Cell) acv1.Role {
 	if effectiveAccess(cell) == acv1.AccessOpen {
 		return acv1.RoleMaintainer
 	}
@@ -81,27 +81,17 @@ func roleOf(p identity.Principal, cell *acv1.Cell, team *acv1.Team) acv1.Role {
 		return acv1.RoleMaintainer
 	}
 	id := p.ID()
-	// An explicit entry on the Cell WINS over the team — in both directions.
-	//
-	// Taking the higher of the two would look generous and be wrong: it
-	// would make "this person is a viewer on this one project" unsayable,
-	// which is precisely the exception a team exists to have. So a name on
-	// the Cell is the answer, and the team is the default for everyone not
-	// named.
 	for _, m := range cell.Spec.Members {
 		if m.UserID == id {
 			return m.Role
 		}
 	}
-	if team != nil {
-		return team.RoleOf(id)
-	}
 	return ""
 }
 
 // can is the decision.
-func can(p identity.Principal, cell *acv1.Cell, team *acv1.Team, a Action) bool {
-	return rank(roleOf(p, cell, team)) >= rank(required(a))
+func can(p identity.Principal, cell *acv1.Cell, a Action) bool {
+	return rank(roleOf(p, cell)) >= rank(required(a))
 }
 
 // authorize checks a request and writes the refusal itself.
@@ -113,11 +103,10 @@ func can(p identity.Principal, cell *acv1.Cell, team *acv1.Team, a Action) bool 
 // someone ask the right person for access instead of guessing.
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, cell *acv1.Cell, a Action) bool {
 	p := identity.FromContext(r.Context())
-	team := h.teamFor(r, cell)
-	if can(p, cell, team, a) {
+	if can(p, cell, a) {
 		return true
 	}
-	if can(p, cell, team, ActionView) {
+	if can(p, cell, ActionView) {
 		writeErr(w, http.StatusForbidden,
 			errRequiresRole(a, required(a)))
 		return false
@@ -138,21 +127,3 @@ func errRequiresRole(a Action, role acv1.Role) error {
 // effectiveAccess delegates to the type, so the rule the controller records
 // in status and the rule enforced here cannot drift apart.
 func effectiveAccess(cell *acv1.Cell) acv1.AccessMode { return cell.EffectiveAccess() }
-
-// teamFor loads the Team a Cell names, or nil.
-//
-// A missing team is nil rather than an error on purpose: a Cell whose team
-// was deleted must not become unreachable to everyone including the people
-// who could fix it. It falls back to the Cell's own member list, which is
-// the state it would have had without a team at all.
-func (h *Handler) teamFor(r *http.Request, cell *acv1.Cell) *acv1.Team {
-	if cell.Spec.Team == "" {
-		return nil
-	}
-	var t acv1.Team
-	if err := h.Client.Get(r.Context(),
-		types.NamespacedName{Namespace: h.Namespace, Name: cell.Spec.Team}, &t); err != nil {
-		return nil
-	}
-	return &t
-}

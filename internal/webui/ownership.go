@@ -60,9 +60,13 @@ func (h *Handler) maySession(r *http.Request, sess *acv1.Session) bool {
 	if p.Owns(owner) {
 		return true
 	}
-	if team, ok := strings.CutPrefix(owner, TeamOwnerPrefix); ok {
-		if t := h.teamByName(r.Context(), team); t != nil {
-			return teamRoleOf(p, t) != ""
+	// A session the PROJECT owns rather than a person — the board's own
+	// conversation with it — belongs to whoever may work on that project.
+	if cellName, ok := strings.CutPrefix(owner, TeamOwnerPrefix); ok {
+		var c acv1.Cell
+		if err := h.Client.Get(r.Context(),
+			types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &c); err == nil {
+			return can(p, &c, ActionDispatch)
 		}
 	}
 	return false
