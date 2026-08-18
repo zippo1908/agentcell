@@ -661,6 +661,32 @@ func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptio
 		})
 		return
 	}
+	// Claim before creating. Looking for a live session and then creating
+	// one is a race that two clicks can win at once; the claim is a Create,
+	// which only one caller can complete.
+	won, existing, cerr := h.claimLiveSession(r.Context(), cellName, p.ID())
+	if cerr != nil {
+		writeErr(w, 409, cerr)
+		return
+	}
+	if !won {
+		var live acv1.Session
+		if err := h.Client.Get(r.Context(), types.NamespacedName{
+			Namespace: h.Namespace, Name: existing}, &live); err == nil {
+			if strings.TrimSpace(req.Task) != "" {
+				if err := h.queueFollowUp(r.Context(), &live, req.Task); err != nil {
+					writeErr(w, 500, err)
+					return
+				}
+			}
+			writeJSON(w, 200, map[string]any{
+				"session": live.Name, "continued": true,
+				"message": "接着你在这个工作区的会话说的——不是新开一条。",
+			})
+			return
+		}
+	}
+
 	id := ids.NewSessionID()
 	sess := &acv1.Session{}
 	sess.Namespace = h.Namespace
@@ -668,13 +694,26 @@ func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptio
 	sess.Spec = acv1.SessionSpec{
 		Cell: cellName, Task: req.Task, Runner: req.Runner, Provider: req.Provider,
 		Model: req.Model, CredentialSecret: req.CredentialSecret, FollowPreview: req.FollowPreview,
-		Resident:    req.Resident,
-		TTLSeconds:  req.TTLSeconds,
+		Resident:   req.Resident,
+		TTLSeconds: req.TTLSeconds,
+		// Persisted, not merely accepted. The API took this field and threw
+		// it away: somebody setting a longer idle window watched their
+		// session sleep on the default anyway, with nothing anywhere saying
+		// their setting had been ignored.
+		IdleSeconds: req.IdleSeconds,
 		OwnerUserID: identity.FromContext(r.Context()).ID(),
 	}
 	if err := h.Client.Create(r.Context(), sess); err != nil {
+		// Nothing was created, so the claim must not be left standing: the
+		// next caller would wait for a session that is never coming.
+		h.releaseClaim(r.Context(), cellName, p.ID())
 		writeErr(w, 500, err)
 		return
+	}
+	if err := h.nameTheClaim(r.Context(), cellName, p.ID(), sess); err != nil {
+		// The session exists and is the answer; a claim that failed to
+		// record it only costs the next caller a short wait.
+		writeErr(w, 200, err)
 	}
 	out := map[string]string{"session": sess.Name}
 	if binding.CrossVendor {

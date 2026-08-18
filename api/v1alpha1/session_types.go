@@ -99,13 +99,25 @@ type SessionSpec struct {
 	// mean false, which is exactly the wrong default to have inherited.
 	// +kubebuilder:default=true
 	Resident *bool `json:"resident,omitempty"`
-	// PendingTask is a follow-up waiting to be typed into this session's
-	// terminal.
+	// PendingTasks are follow-ups waiting to be typed into this session's
+	// terminal, in the order they were said.
 	//
-	// It exists because a session may be ASLEEP when the next instruction
-	// arrives, and the honest options then are to lose it, to block the
-	// caller while a pod is scheduled, or to write it down and deliver it on
-	// waking. Only the third is both quick and lossless.
+	// A queue, not a slot. It exists because a session may be ASLEEP when
+	// the next instruction arrives, and the honest options then are to lose
+	// it, to block the caller while a pod is scheduled, or to write it down
+	// and deliver it on waking — only the third is both quick and lossless.
+	//
+	// It was a single string, which lost work in the most ordinary case
+	// there is: say two things in a row, and the second overwrote the first
+	// before anything delivered it. Nobody was told; the first instruction
+	// simply never happened.
+	PendingTasks []string `json:"pendingTasks,omitempty"`
+
+	// PendingTask is the LEGACY single-slot form, drained into the queue and
+	// cleared on first sight. Kept only so a session written before the
+	// change does not lose the instruction it was holding.
+	//
+	// +optional
 	PendingTask string `json:"pendingTask,omitempty"`
 	// Board names the project board this work was asked for on, and marks
 	// the session as SHARED: everyone who may dispatch in the project can

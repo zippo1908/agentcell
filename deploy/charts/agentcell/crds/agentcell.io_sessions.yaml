@@ -129,14 +129,27 @@ spec:
                   rule: oldSelf == '' || self == oldSelf
               pendingTask:
                 description: |-
-                  PendingTask is a follow-up waiting to be typed into this session's
-                  terminal.
-
-                  It exists because a session may be ASLEEP when the next instruction
-                  arrives, and the honest options then are to lose it, to block the
-                  caller while a pod is scheduled, or to write it down and deliver it on
-                  waking. Only the third is both quick and lossless.
+                  PendingTask is the LEGACY single-slot form, drained into the queue and
+                  cleared on first sight. Kept only so a session written before the
+                  change does not lose the instruction it was holding.
                 type: string
+              pendingTasks:
+                description: |-
+                  PendingTasks are follow-ups waiting to be typed into this session's
+                  terminal, in the order they were said.
+
+                  A queue, not a slot. It exists because a session may be ASLEEP when
+                  the next instruction arrives, and the honest options then are to lose
+                  it, to block the caller while a pod is scheduled, or to write it down
+                  and deliver it on waking — only the third is both quick and lossless.
+
+                  It was a single string, which lost work in the most ordinary case
+                  there is: say two things in a row, and the second overwrote the first
+                  before anything delivered it. Nobody was told; the first instruction
+                  simply never happened.
+                items:
+                  type: string
+                type: array
               provider:
                 description: Provider is a name from the provider registry (e.g. aliyun-bailian).
                 type: string

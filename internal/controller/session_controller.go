@@ -45,12 +45,8 @@ const (
 	// holding compute. Short, because going dormant costs nothing: the
 	// worktree and the CLI's conversation stay on the volume and the
 	// terminal comes back where it was.
-	defaultIdle = int64(900)
-	// defaultDormantTTL bounds how long a session nobody returns to keeps a
-	// worktree. It publishes rather than deletes — a week of not looking at
-	// something is not consent to throw it away.
-	defaultDormantTTL = int64(7 * 24 * 3600)
-	pollInterval      = 10 * time.Second
+	defaultIdle  = int64(900)
+	pollInterval = 10 * time.Second
 )
 
 // SessionReconciler drives dispatch → work → settle → reclaim. Settle is
@@ -684,7 +680,7 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		// A follow-up written while the session was asleep is delivered now
 		// that its terminal is back. Same path whether it was awake or not,
 		// so the two cannot drift into behaving differently.
-		if sess.Spec.PendingTask != "" && alive {
+		if len(pendingQueue(sess)) > 0 && alive {
 			if err := r.deliverPending(ctx, sess, ns, id); err != nil {
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
@@ -809,22 +805,17 @@ func (r *SessionReconciler) goDormant(ctx context.Context, sess *acv1.Session, i
 	return ctrl.Result{}, nil
 }
 
-// observeDormant waits for somebody to come back, and eventually publishes.
+// observeDormant waits for somebody to come back. That is the whole job.
+//
+// It used to say it "eventually publishes", and carried a dormant TTL to do
+// it with. Neither is true any more and both are gone: a dormant session
+// holds no compute — a worktree on a volume is all it costs — so there is
+// nothing to reclaim by ending it, and "you did not open this project for a
+// week" is not a decision to deliver somebody's unfinished work. Ending a
+// project is something a person does.
 func (r *SessionReconciler) observeDormant(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) (ctrl.Result, error) {
 	if sess.Spec.DesiredState == acv1.SessionDesiredRunning {
 		return r.wake(ctx, sess, cell, ns, id)
-	}
-	ttl := sess.Spec.TTLSeconds
-	if ttl == 0 {
-		ttl = defaultDormantTTL
-	}
-	if since := sess.Status.DormantSince; since != nil &&
-		time.Since(since.Time) > time.Duration(ttl)*time.Second {
-		// Stay parked. A dormant session holds no compute — only a worktree
-		// on a volume — so there is nothing to reclaim by ending it, and
-		// "you did not open this project for a week" is not a decision to
-		// deliver its work. Ending a project is something a person does.
-		_ = ttl
 	}
 	// Nothing is running, so this is a cheap, rare check.
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
@@ -1186,16 +1177,30 @@ func (r *SessionReconciler) deliverPending(ctx context.Context, sess *acv1.Sessi
 	// the same thing the person would do. Starting another one-shot process
 	// would either be read as text by the agent already there, or launch a
 	// second agent inside the first.
+	// ONE at a time, oldest first, and removed only once it is actually
+	// delivered.
+	//
+	// Taking the whole queue and clearing it would turn one failed exec into
+	// several lost instructions. Removing before delivering would do the
+	// same on any error in between. So: read the head, send it, and only
+	// then take it off — the surviving risk is a repeat, which the person
+	// can see and correct, rather than a silence they cannot.
+	queue := pendingQueue(sess)
+	if len(queue) == 0 {
+		return nil
+	}
+	task := queue[0]
+
 	var cmd []string
 	if len(access.InteractiveArgvFor(sess.Spec.Runner)) > 0 {
-		cmd = []string{runtimeapi.RuntimeBin, "tell", id, "-say", sess.Spec.PendingTask}
+		cmd = []string{runtimeapi.RuntimeBin, "tell", id, "-say", task}
 	} else {
-		argv, err := access.ResumeArgvFor(sess.Spec.Runner, sess.Spec.PendingTask, sess.Status.RunnerSessionID)
+		argv, err := access.ResumeArgvFor(sess.Spec.Runner, task, sess.Status.RunnerSessionID)
 		if err != nil {
 			// A runner that cannot resume starts fresh in the same worktree,
 			// which is honest and visible — the alternative is silently
 			// dropping what somebody asked for.
-			argv, err = access.HeadlessArgv(sess.Spec.Runner, sess.Spec.PendingTask)
+			argv, err = access.HeadlessArgv(sess.Spec.Runner, task)
 			if err != nil {
 				return err
 			}
@@ -1205,8 +1210,40 @@ func (r *SessionReconciler) deliverPending(ctx context.Context, sess *acv1.Sessi
 	if _, err := r.Exec(ctx, ns, sess.Status.PodName, cmd, nil); err != nil {
 		return err
 	}
-	sess.Spec.PendingTask = ""
-	return r.Update(ctx, sess)
+
+	// Re-read before removing: somebody may have queued another instruction
+	// while this one was being typed, and a write of the slice we read
+	// earlier would drop it.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh acv1.Session
+		if err := r.Get(ctx, types.NamespacedName{
+			Namespace: sess.Namespace, Name: sess.Name}, &fresh); err != nil {
+			return err
+		}
+		q := pendingQueue(&fresh)
+		if len(q) > 0 && q[0] == task {
+			q = q[1:]
+		}
+		fresh.Spec.PendingTasks = q
+		fresh.Spec.PendingTask = ""
+		if err := r.Update(ctx, &fresh); err != nil {
+			return err
+		}
+		sess.Spec.PendingTasks = q
+		sess.Spec.PendingTask = ""
+		sess.ResourceVersion = fresh.ResourceVersion
+		return nil
+	})
+}
+
+// pendingQueue is the follow-ups this session owes, oldest first, with the
+// legacy single-slot field folded in at the front so an upgrade does not
+// drop the instruction a session was already holding.
+func pendingQueue(s *acv1.Session) []string {
+	if s.Spec.PendingTask == "" {
+		return s.Spec.PendingTasks
+	}
+	return append([]string{s.Spec.PendingTask}, s.Spec.PendingTasks...)
 }
 
 // accountCredential is the session owner's stored CLI login, if they have
