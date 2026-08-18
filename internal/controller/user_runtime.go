@@ -195,6 +195,9 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	if cred := r.accountCredential(ctx, sess); cred != "" {
 		vars[runtimeapi.EnvAccount] = cred
 	}
+	if lib := r.libraryBlob(ctx, sess.Spec.Cell); lib != "" {
+		vars[runtimeapi.EnvLibrary] = lib
+	}
 	vars[runtimeapi.EnvRepos] = reposJSON(cell)
 	vars[runtimeapi.EnvSessionID] = id
 	vars[runtimeapi.EnvBaseBranch] = cell.Spec.Repo.Branch

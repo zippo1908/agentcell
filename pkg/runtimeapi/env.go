@@ -19,6 +19,17 @@ const (
 	EnvBaseBranch  = "AGENTCELL_BASE_BRANCH"
 	EnvDescription = "AGENTCELL_DESCRIPTION" // the Cell's living product description
 	EnvResident    = "AGENTCELL_RESIDENT"    // "1" keeps the slot alive in tmux
+	// EnvLibrary carries the project's readable files as a base64 tar, so
+	// the agent can open them the way it opens anything else: with its own
+	// Read tool, by name, from a directory. The alternative — a lookup tool
+	// the agent must know to call — makes every CLI's built-in file
+	// handling useless for the one corpus that matters most.
+	//
+	// Only the TEXT layer travels. Images and PDFs stay in the console and
+	// appear in the index, because shipping them into every container costs
+	// the same bytes repeatedly for something no agent can read.
+	EnvLibrary = "AGENTCELL_LIBRARY"
+
 	// EnvAgentConfig carries a config file some CLIs need in order to honour
 	// the endpoint AgentCell chose: {"path":"<absolute>","content":"..."}.
 	// The path is resolved by the controller, which knows where this

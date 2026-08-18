@@ -145,6 +145,9 @@ func runWindowOpen(args []string) error {
 	if err := writeAccountCredential(); err != nil {
 		return err
 	}
+	if err := writeLibrary(wt); err != nil {
+		return err
+	}
 	sock := ids.TmuxSocket(uid)
 	window := ids.TmuxWindow(id)
 	// Idempotent: a reconciler retries, and a second window for one session

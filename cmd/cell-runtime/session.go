@@ -79,6 +79,9 @@ func runSession() error {
 	if err := writeAccountCredential(); err != nil {
 		return err
 	}
+	if err := writeLibrary(wt); err != nil {
+		return err
+	}
 
 	if os.Getenv(runtimeapi.EnvResident) == "1" {
 		return runResident(uid, id, wt, argv)
@@ -179,6 +182,43 @@ func writeAccountCredential() error {
 		return err
 	}
 	fmt.Println("session: connected account credential installed")
+	return nil
+}
+
+// writeLibrary unpacks the project's readable files into the worktree.
+//
+// It lands at .agentcell/library/ INSIDE the worktree, so the agent finds
+// it with the same Read and Grep it uses for code — no new tool to learn,
+// no lookup API to remember, and `grep -r` over the specification works
+// the way anybody would expect.
+//
+// Written fresh on every window open rather than synced: the library is
+// small, the console is the source of truth, and a stale copy of a
+// specification is worse than no copy — an agent quoting last week's
+// requirement is confidently wrong, which is the failure mode with the
+// highest cost here.
+func writeLibrary(dir string) error {
+	blob := os.Getenv(runtimeapi.EnvLibrary)
+	if blob == "" {
+		return nil
+	}
+	dest := filepath.Join(dir, ".agentcell", "library")
+	if err := os.RemoveAll(dest); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(dest))
+	cmd.Stdin = strings.NewReader(blob)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Not fatal. A session that cannot start because a document failed
+		// to unpack is a worse outcome than a session without the
+		// documents, and the agent can be told.
+		fmt.Printf("session: 项目文件没能展开(%v: %s)\n", err, out)
+		return nil
+	}
+	fmt.Println("session: 项目文件在 .agentcell/library/")
 	return nil
 }
 

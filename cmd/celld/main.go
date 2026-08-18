@@ -195,6 +195,9 @@ func main() {
 		}
 		defer func() { _ = db.Close() }()
 		auth.Accounts = &webui.Accounts{DB: db, Key: auth.SessionKey()}
+		// The same database holds the project files, and the session
+		// controller is what puts them in front of an agent.
+		sessionReconciler.Library = db
 		if *bootstrapAdmin != "" {
 			pw := os.Getenv("AGENTCELL_BOOTSTRAP_PASSWORD")
 			if pw == "" {

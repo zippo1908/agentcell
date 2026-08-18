@@ -1,10 +1,15 @@
 package controller
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,6 +73,89 @@ type SessionReconciler struct {
 	// nil keeps every workload on the shared project identity, which is the
 	// pre-identity behaviour.
 	UIDs *useruid.Allocator
+	// Library reads the project files people uploaded, so a session starts
+	// with the specification in its worktree instead of the agent being
+	// told about documents it cannot open. nil simply means no library.
+	Library LibraryReader
+}
+
+// maxLibraryBytes bounds the uncompressed text shipped into one session.
+// Generous for prose — roughly a small book — and far below the pod spec
+// limit even before compression.
+const maxLibraryBytes = 2 << 20
+
+// LibraryReader is the slice of the store this controller needs: the
+// readable layer of one project's files. An interface, not the store type,
+// so the controller keeps no opinion about where those files live.
+type LibraryReader interface {
+	TextLayer(ctx context.Context, cell string) (map[string]string, error)
+}
+
+// libraryBlob packs a project's readable files for the runtime.
+//
+// A tar rather than a JSON map because it lands as a directory tree the
+// agent walks with the same tools it uses for code; gzip because a
+// specification is text and text compresses, and this value travels in a
+// window environment.
+func (r *SessionReconciler) libraryBlob(ctx context.Context, cell string) string {
+	if r.Library == nil {
+		return ""
+	}
+	files, err := r.Library.TextLayer(ctx, cell)
+	if err != nil || len(files) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	// Sorted, so the same library produces the same bytes and an unchanged
+	// project does not look changed on every reconcile.
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	// Bounded, because for a one-shot session this value travels in the POD
+	// SPEC — and a spec that exceeds what the API server accepts does not
+	// truncate, it fails, so an oversized library would stop sessions from
+	// starting at all rather than arriving incomplete.
+	total := 0
+	var omitted []string
+	for _, n := range names {
+		body := []byte(files[n])
+		if total+len(body) > maxLibraryBytes {
+			omitted = append(omitted, n)
+			continue
+		}
+		total += len(body)
+		if err := tw.WriteHeader(&tar.Header{
+			Name: n, Mode: 0o644, Size: int64(len(body)),
+		}); err != nil {
+			return ""
+		}
+		if _, err := tw.Write(body); err != nil {
+			return ""
+		}
+	}
+	// Say what was left out, in the library itself. A silently partial
+	// corpus is the worst possible shape: the agent answers confidently
+	// from the half it received and nobody can tell which half that was.
+	if len(omitted) > 0 {
+		note := "这些文件太大,没有放进这次会话(在控制台的文件页里能看到):\n" +
+			strings.Join(omitted, "\n") + "\n"
+		if err := tw.WriteHeader(&tar.Header{
+			Name: "_omitted.txt", Mode: 0o644, Size: int64(len(note)),
+		}); err == nil {
+			_, _ = tw.Write([]byte(note))
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return ""
+	}
+	if err := zw.Close(); err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 // ownerUID resolves the Unix identity this Session's pods run as. Without an
@@ -377,6 +465,7 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 				Key:                  "key",
 			},
 		}},
+		{Name: runtimeapi.EnvLibrary, Value: r.libraryBlob(ctx, sess.Spec.Cell)},
 		{Name: runtimeapi.EnvAccount, ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: ids.SessionSecretName(id)},

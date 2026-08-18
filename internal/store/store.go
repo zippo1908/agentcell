@@ -102,6 +102,30 @@ func (db *DB) migrate() error {
 			created_at   INTEGER NOT NULL,
 			UNIQUE (granter_id, grantee_kind, grantee_id, provider)
 		)`,
+		// A project's own files: what people upload for the agent to work
+		// from — specs, screenshots, exported spreadsheets, meeting notes.
+		//
+		// Content lives here rather than on a volume because it has to
+		// reach runtime pods in other namespaces, and a namespaced RWO
+		// volume cannot be shared with them. Keeping bytes in one place the
+		// control plane already backs up beats a second storage system for
+		// what is, in practice, a few megabytes of text per project.
+		`CREATE TABLE IF NOT EXISTS files (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			cell        TEXT NOT NULL,
+			path        TEXT NOT NULL,
+			size        INTEGER NOT NULL,
+			mime        TEXT NOT NULL DEFAULT '',
+			-- text is the layer an agent can actually read. Extracted once
+			-- at upload for formats worth extracting, empty for the rest,
+			-- so materialising into a sandbox never has to parse anything.
+			text        TEXT NOT NULL DEFAULT '',
+			content     BLOB,
+			uploaded_by TEXT NOT NULL DEFAULT '',
+			created_at  INTEGER NOT NULL,
+			UNIQUE (cell, path)
+		)`,
+		`CREATE INDEX IF NOT EXISTS files_by_cell ON files (cell, path)`,
 		// A person's own forge identity. Never shared and never granted:
 		// a commit pushed with somebody else's token is that person's
 		// commit as far as GitLab is concerned, and an audit trail that
@@ -414,6 +438,108 @@ func (db *DB) GitProviders(ctx context.Context, userID string) (map[string]strin
 func (db *DB) DeleteGitIdentity(ctx context.Context, userID, provider string) error {
 	_, err := db.sql.ExecContext(ctx,
 		`DELETE FROM git_identities WHERE user_id=? AND provider=?`, userID, provider)
+	return err
+}
+
+// --- files -----------------------------------------------------------
+
+// File is one uploaded document. Content is omitted from listings: a tree
+// view that carries every byte would be a download of the whole library
+// every time somebody opens a folder.
+type File struct {
+	Path       string
+	Size       int64
+	Mime       string
+	HasText    bool
+	UploadedBy string
+	CreatedAt  int64
+}
+
+// PutFile stores or replaces a file at a path within a project.
+func (db *DB) PutFile(ctx context.Context, cell, path, mime, text string, content []byte, by string) error {
+	_, err := db.sql.ExecContext(ctx,
+		`INSERT INTO files (cell, path, size, mime, text, content, uploaded_by, created_at)
+		 VALUES (?,?,?,?,?,?,?,?)
+		 ON CONFLICT(cell, path) DO UPDATE SET
+		   size=excluded.size, mime=excluded.mime, text=excluded.text,
+		   content=excluded.content, uploaded_by=excluded.uploaded_by,
+		   created_at=excluded.created_at`,
+		cell, path, len(content), mime, text, content, by, time.Now().Unix())
+	return err
+}
+
+// Files lists a project's files, newest path order, without their bytes.
+func (db *DB) Files(ctx context.Context, cell string) ([]File, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT path, size, mime, length(text) > 0, uploaded_by, created_at
+		 FROM files WHERE cell = ? ORDER BY path`, cell)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []File
+	for rows.Next() {
+		var f File
+		if err := rows.Scan(&f.Path, &f.Size, &f.Mime, &f.HasText, &f.UploadedBy, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// FileContent returns one file's bytes and its extracted text.
+func (db *DB) FileContent(ctx context.Context, cell, path string) ([]byte, string, string, error) {
+	row := db.sql.QueryRowContext(ctx,
+		`SELECT content, text, mime FROM files WHERE cell = ? AND path = ?`, cell, path)
+	var content []byte
+	var text, mime string
+	if err := row.Scan(&content, &text, &mime); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", "", ErrNotFound
+		}
+		return nil, "", "", err
+	}
+	return content, text, mime, nil
+}
+
+// TextLayer returns everything an agent can read, for materialising into a
+// sandbox. Binary files are deliberately absent: pushing images into every
+// container costs the same bytes over and over and an agent cannot read
+// them anyway — they stay in the console, and the index says they exist.
+func (db *DB) TextLayer(ctx context.Context, cell string) (map[string]string, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT path, text FROM files WHERE cell = ? AND length(text) > 0`, cell)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var p, t string
+		if err := rows.Scan(&p, &t); err != nil {
+			return nil, err
+		}
+		out[p] = t
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) DeleteFile(ctx context.Context, cell, path string) error {
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM files WHERE cell = ? AND path = ?`, cell, path)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteCellFiles removes a project's whole library, for when the project
+// itself goes.
+func (db *DB) DeleteCellFiles(ctx context.Context, cell string) error {
+	_, err := db.sql.ExecContext(ctx, `DELETE FROM files WHERE cell = ?`, cell)
 	return err
 }
 
