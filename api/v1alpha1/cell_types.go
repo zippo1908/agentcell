@@ -192,12 +192,14 @@ type CellSpec struct {
 	// backups, its upgrades and its outages. What the platform does is
 	// deliver the connection to the workloads that need it.
 	Database DatabaseSpec `json:"database,omitempty"`
-	// Team names a Team whose members carry their role into this Cell.
+	// Team is LEGACY and ignored.
 	//
-	// Naming a team is naming an inside, so it closes the Cell the same way
-	// adding the first member does — a project that belongs to a group is
-	// not simultaneously open to everyone who can log in.
-	// +kubebuilder:validation:MaxLength=63
+	// Kept as a field so a Cell written before teams were removed still
+	// round-trips through the API instead of being rejected, and so the
+	// controller can see it in order to clear it and say so. Nothing reads
+	// it for a decision: membership is this project's own member list.
+	//
+	// +optional
 	Team string `json:"team,omitempty"`
 }
 
@@ -382,12 +384,20 @@ type Member struct {
 // authorization check, which enforces it. Two copies of this rule is how a
 // Cell ends up reporting "open" while refusing everybody, or the reverse.
 //
-// Naming a team is naming an inside, exactly as adding the first member is.
+// An empty member list means OPEN, whatever else the spec still carries.
+//
+// This used to also treat a named team as "an inside". Teams are gone, and
+// keeping that clause would have locked people out of their own projects on
+// upgrade: a Cell created before the change has spec.team set and no
+// members, so it would report restricted with a member list that names
+// nobody — closed to everybody, administrators included, and recoverable
+// only by editing the CR. A rule that turns an upgrade into a lockout is
+// worse than a rule that is briefly too generous.
 func (c *Cell) EffectiveAccess() AccessMode {
 	if c.Spec.Access != "" {
 		return c.Spec.Access
 	}
-	if len(c.Spec.Members) == 0 && c.Spec.Team == "" {
+	if len(c.Spec.Members) == 0 {
 		return AccessOpen
 	}
 	return AccessRestricted

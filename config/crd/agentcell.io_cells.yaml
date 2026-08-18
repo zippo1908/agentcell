@@ -428,12 +428,12 @@ spec:
                 type: string
               team:
                 description: |-
-                  Team names a Team whose members carry their role into this Cell.
+                  Team is LEGACY and ignored.
 
-                  Naming a team is naming an inside, so it closes the Cell the same way
-                  adding the first member does — a project that belongs to a group is
-                  not simultaneously open to everyone who can log in.
-                maxLength: 63
+                  Kept as a field so a Cell written before teams were removed still
+                  round-trips through the API instead of being rejected, and so the
+                  controller can see it in order to clear it and say so. Nothing reads
+                  it for a decision: membership is this project's own member list.
                 type: string
               workspaceSize:
                 description: WorkspaceSize is the PVC size, default "10Gi".

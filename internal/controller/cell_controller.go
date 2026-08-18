@@ -65,6 +65,9 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := ids.ValidateCellName(cell.Name); err != nil {
 		return r.fail(ctx, &cell, err)
 	}
+	if err := r.retireLegacyTeam(ctx, &cell); err != nil {
+		return ctrl.Result{}, err
+	}
 	applyCellDefaults(&cell)
 
 	ns := ids.WorkloadNamespace(cell.Name)
@@ -201,6 +204,46 @@ func applyCellDefaults(cell *acv1.Cell) {
 // The scheduler already explains itself, in a pod condition nobody without
 // cluster access can reach. This carries that sentence up to where the
 // question gets asked.
+// retireLegacyTeam clears a field that no longer governs anything, and says
+// so where somebody will read it.
+//
+// Teams were removed; a Cell written before that still carries spec.team.
+// Leaving it would be quiet in the wrong way: the field reads like it still
+// grants access, and the next person to look would reasonably assume the
+// people it named can still get in. They cannot — nothing resolves a team
+// any more.
+//
+// Clearing it is safe because it is already inert. What is NOT safe is
+// leaving the project with an empty member list and calling it restricted,
+// which is why EffectiveAccess treats an empty list as open: the project
+// falls back to "everyone who can log in", and the message below tells an
+// administrator to name the people who should actually have it.
+func (r *CellReconciler) retireLegacyTeam(ctx context.Context, cell *acv1.Cell) error {
+	if cell.Spec.Team == "" {
+		return nil
+	}
+	was := cell.Spec.Team
+	cell.Spec.Team = ""
+	if err := r.Update(ctx, cell); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf(
+		"这个项目原来归属团队 %q。团队这一层已经取消——范围就是项目成员。"+
+			"现在它的成员名单是空的,也就是对所有登录用户开放;"+
+			"要收紧的话,在项目设置里点名成员。", was)
+	if len(cell.Spec.Members) > 0 {
+		msg = fmt.Sprintf("这个项目原来归属团队 %q,该字段已清除;访问按它自己的成员名单。", was)
+	}
+	cell.Status.Message = msg
+	if err := r.Status().Update(ctx, cell); err != nil {
+		return err
+	}
+	logf.FromContext(ctx).Info("retired legacy team binding",
+		"cell", cell.Name, "team", was, "members", len(cell.Spec.Members),
+		"access", cell.EffectiveAccess())
+	return nil
+}
+
 func (r *CellReconciler) observePlacement(ctx context.Context, ns string) (node, why string) {
 	var pod corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ids.AnchorStatefulSet + "-0"}, &pod); err != nil {
