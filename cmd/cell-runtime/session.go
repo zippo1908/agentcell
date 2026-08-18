@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -632,5 +634,72 @@ func branchesOf(dir, base, repoName string) error {
 		}
 		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", name, ahead, behind, when, subject, repoName)
 	}
+	return nil
+}
+
+// runPreviewStart serves one session's worktree from inside the user's
+// runtime.
+//
+// A resident session has no pod of its own — it is a window in the runtime
+// its owner shares across projects — so there was nowhere for a preview to
+// run. The Cell's preview machinery still assumed the old shape: it points
+// a Service at "the session's pod", which for a resident session selected
+// nothing at all, and the preview page came up blank with no error anywhere.
+//
+// It cannot run in the anchor instead: a worktree lives in its owner's
+// private 0700 tree, which is exactly the boundary that makes one person's
+// unfinished work invisible to another. So it runs here, as the owner.
+//
+// Idempotent, because the controller calls it on every reconcile: a pidfile
+// says whether the server is already up, and a second one would fight for
+// the port.
+func runPreviewStart(args []string) error {
+	if len(args) < 3 {
+		return fmt.Errorf("preview-start: need <session-id> <port> <argv...>")
+	}
+	id, portArg, argv := args[0], args[1], args[2:]
+	port, err := strconv.Atoi(portArg)
+	if err != nil || port <= 0 {
+		return fmt.Errorf("preview-start: bad port %q", portArg)
+	}
+	// Already serving? Ask the PORT, not a pidfile.
+	//
+	// The pidfile version reported "already running" for a server that had
+	// died on startup: the supervising shell was left as a zombie, and a
+	// zombie answers signal 0 exactly like a healthy process. So the check
+	// said yes forever while nothing was listening, and the preview stayed
+	// blank with no error anywhere. What the caller actually wants to know
+	// is whether the port answers.
+	if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second); err == nil {
+		_ = c.Close()
+		fmt.Println("preview already listening")
+		return nil
+	}
+	uid := int64(os.Getuid())
+	wt := ids.WorktreePath(uid, id)
+	if _, err := os.Stat(wt); err != nil {
+		return fmt.Errorf("preview-start: no worktree for %s yet", id)
+	}
+	logFile := filepath.Join(ids.UserHome(uid), "preview-"+id+".log")
+	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lf.Close() }()
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = wt
+	cmd.Stdout, cmd.Stderr = lf, lf
+	cmd.Stdin = nil
+	// Its own process group: it outlives this exec, and killing it later
+	// must not depend on who started it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("preview-start: %w", err)
+	}
+	// Reap it here rather than leaving a zombie behind: this process is
+	// about to exit, and a server that fails on startup should not leave
+	// something that looks alive to the next caller.
+	go func() { _ = cmd.Wait() }()
+	fmt.Printf("preview serving %s (pid %d)\n", wt, cmd.Process.Pid)
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -15,6 +16,7 @@ import (
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/pkg/ids"
+	"github.com/zippo1908/agentcell/pkg/runtimeapi"
 )
 
 // Keeping a connected account alive across sessions.
@@ -135,3 +137,57 @@ func credentialExpiry(blob string) (int64, bool) {
 
 // shellQuoteArg makes a path safe inside the single shell line this uses.
 func shellQuoteArg(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// servePreviewFrom runs this session's preview inside the runtime that hosts
+// it, and points the Cell's preview Service at that runtime.
+//
+// The preview machinery was written when a session was a pod: it selects
+// "the session's pod" by label and expects something in that pod to be
+// serving. A resident session has neither — it is a window in a runtime
+// shared across the owner's projects — so following a session selected no
+// pod at all and the preview came up blank, with nothing anywhere saying
+// why.
+//
+// The label goes on the RUNTIME pod because that is what actually holds the
+// worktree and can therefore serve it. Only one session per Cell is followed
+// at a time, so at most one runtime carries the label for that Cell.
+func (r *SessionReconciler) servePreviewFrom(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64) {
+	if r.Exec == nil || cell == nil || len(cell.Spec.Preview.Command) == 0 {
+		return
+	}
+	if cell.Spec.Preview.FollowSession != id {
+		return
+	}
+	pod := sess.Status.PodName
+	if pod == "" {
+		return
+	}
+	// The Service selects by session id; the runtime pod is labelled by cell
+	// and user, so without this it matches nothing.
+	var live corev1.Pod
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: pod}, &live); err == nil {
+		if live.Labels[ids.SessionLabelKey] != id {
+			if live.Labels == nil {
+				live.Labels = map[string]string{}
+			}
+			live.Labels[ids.SessionLabelKey] = id
+			_ = r.Update(ctx, &live)
+		}
+	}
+	argv := append([]string{runtimeapi.RuntimeBin, "preview-start", id,
+		strconv.Itoa(int(previewPort(cell)))}, previewArgv(cell)...)
+	// Idempotent inside the pod: a pidfile stops a second server fighting
+	// the first for the port, so calling this every reconcile is free.
+	_, _ = r.Exec(ctx, ns, pod, argv, nil)
+}
+
+// previewArgv is the command a preview runs, in the shape the runtime can
+// exec. One element means a shell line, which is how the Cell type
+// documents it.
+func previewArgv(cell *acv1.Cell) []string {
+	cmd := cell.Spec.Preview.Command
+	if len(cmd) == 1 {
+		return []string{"sh", "-c", cmd[0]}
+	}
+	return cmd
+}

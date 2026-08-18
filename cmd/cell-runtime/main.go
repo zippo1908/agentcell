@@ -55,6 +55,8 @@ func main() {
 		err = runBranches(os.Args[2:])
 	case "detach":
 		err = runDetach(os.Args[2:])
+	case "preview-start":
+		err = runPreviewStart(os.Args[2:])
 	case "tell":
 		err = runTell(os.Args[2:])
 	case "askpass":

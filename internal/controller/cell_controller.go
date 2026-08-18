@@ -80,7 +80,7 @@ func (r *CellReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.ensureQuota(ctx, &cell, ns); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("resource quota: %w", err))
 	}
-	if err := r.ensureNetworkPolicies(ctx, ns, cell.Namespace); err != nil {
+	if err := r.ensureNetworkPolicies(ctx, &cell, ns, cell.Namespace); err != nil {
 		return r.fail(ctx, &cell, fmt.Errorf("network policies: %w", err))
 	}
 	if r.GitBrokerURL != "" {
@@ -332,7 +332,7 @@ func (r *CellReconciler) ensureNamespace(ctx context.Context, name, cellName str
 // git over 443) and ingress from the control-plane namespace to the
 // preview/prod ports. Cross-project reachability is thereby removed even
 // though projects share the cluster network.
-func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, ns, controlNS string) error {
+func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, cell *acv1.Cell, ns, controlNS string) error {
 	deny := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "default-deny"}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, deny, func() error {
 		deny.Spec = netv1.NetworkPolicySpec{
@@ -412,6 +412,47 @@ func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, ns, controlN
 						MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
 					},
 				}},
+			}},
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// The FOLLOWED session serves its own preview, and nothing could reach
+	// it.
+	//
+	// The policy above was written when a followed preview ran in a pod of
+	// its own carrying the anchor role. A resident session serves from the
+	// runtime its owner shares, which carries no such label — so it fell to
+	// default-deny and the preview page answered "upstream not ready" while
+	// the server inside was serving perfectly well. Nothing in the cluster
+	// said which of the two was wrong.
+	//
+	// Kept narrow on purpose: only pods labelled with a session id (the
+	// controller labels exactly the followed one), only from the control
+	// plane, only the preview port. A runtime runs agent-written code, so
+	// "reachable" has to stay a short list.
+	previewIn := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: "allow-followed-session-preview"}}
+	port := intstr.FromInt32(previewPort(cell))
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, previewIn, func() error {
+		previewIn.Spec = netv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      ids.SessionLabelKey,
+					Operator: metav1.LabelSelectorOpExists,
+				}},
+			},
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress},
+			Ingress: []netv1.NetworkPolicyIngressRule{{
+				From: []netv1.NetworkPolicyPeer{{
+					NamespaceSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
+					},
+				}},
+				Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
 			}},
 		}
 		return nil
