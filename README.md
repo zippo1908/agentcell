@@ -318,9 +318,18 @@ invitations, email logins, and a principal per human — each with their own
 ownership, uid and runtime.
 
 ```sh
---set accounts.db=/var/lib/agentcell/agentcell.db \
---set accounts.bootstrapAdmin=you@example.com   # with AGENTCELL_BOOTSTRAP_PASSWORD
+kubectl create secret generic celld-bootstrap --from-literal=password='…' -n agentcell-system
+
+helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
+  --set accounts.enabled=true \
+  --set accounts.bootstrapAdmin=you@example.com \
+  --set accounts.bootstrapPasswordSecret=celld-bootstrap
 ```
+
+One writer: SQLite allows exactly one, so the chart refuses to render with
+`celld.replicas > 1` rather than installing two account systems under one
+name. The database lives on a PersistentVolumeClaim the chart creates
+(`accounts.persistence.*`, or bring your own with `existingClaim`).
 
 There is no self-registration: an account here comes with a shell inside the
 cluster, so somebody already inside hands it over deliberately. The invite

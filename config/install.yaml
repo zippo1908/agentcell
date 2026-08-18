@@ -98,6 +98,24 @@ spec:
             # Route all workload git through the broker so no workload pod
             # holds a forge token (ADR-0005). Remove to use direct mode.
             - "--git-broker-url=http://git-broker.agentcell-system.svc:8080"
+            # Accounts are OFF in this manifest: the smallest useful install
+            # is one operator with a token, and pretending otherwise would
+            # mean shipping a database nobody asked for. To turn them on, add
+            # the two flags below, the volume at the end of this file, and a
+            # Secret holding the first administrator's password:
+            #
+            #   - "--db=/var/lib/agentcell/agentcell.db"
+            #   - "--bootstrap-admin=you@example.com"
+            #
+            # with AGENTCELL_BOOTSTRAP_PASSWORD from that Secret, and
+            #
+            #   volumeMounts: [{name: accounts, mountPath: /var/lib/agentcell}]
+            #   volumes: [{name: accounts, persistentVolumeClaim: {claimName: celld-accounts}}]
+            #
+            # SQLite takes ONE writer, so keep replicas at 1. Two celld
+            # replicas would each open their own file and answer as if they
+            # were one account system — somebody invited on one could not log
+            # in on the other.
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
@@ -245,3 +263,17 @@ spec:
   selector: {app: git-broker}
   ports:
     - {name: http, port: 8080, targetPort: http}
+---
+# The accounts database, for the install above with accounts turned on.
+# Left here rather than in the Deployment so the default manifest creates no
+# storage nobody asked for.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: celld-accounts
+  namespace: agentcell-system
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

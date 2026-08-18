@@ -265,9 +265,17 @@ kubectl -n agentcell-system port-forward svc/celld 8080:80   # http://localhost:
 邀请、邮箱登录、一人一个主体,各自有归属、uid 和运行时。
 
 ```sh
---set accounts.db=/var/lib/agentcell/agentcell.db \
---set accounts.bootstrapAdmin=you@example.com   # 配合 AGENTCELL_BOOTSTRAP_PASSWORD
+kubectl create secret generic celld-bootstrap --from-literal=password='…' -n agentcell-system
+
+helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
+  --set accounts.enabled=true \
+  --set accounts.bootstrapAdmin=you@example.com \
+  --set accounts.bootstrapPasswordSecret=celld-bootstrap
 ```
+
+只有一个写者:SQLite 一次只允许一个,所以 `celld.replicas > 1` 时 chart
+直接拒绝渲染,而不是装出两套账号系统顶着一个名字。数据库落在 chart 创建
+的 PVC 上(`accounts.persistence.*`,也可以用 `existingClaim` 指自己的)。
 
 **没有自助注册**:这里的账号附带集群里的一个 shell,所以得由已经在里面的人
 郑重交出去。邀请链接一次性、自己会过期、且只按哈希存储。

@@ -64,7 +64,14 @@ fmt-check:
 # on files I had edited, and a web lockfile that no longer matched
 # package.json. Both are instant locally and neither is something to
 # remember — so they stop being something to remember.
-preflight: fmt-check vet test verify-generate web-lock-check web-check
+# chart-check needs helm; skipped with a word rather than silently when it is
+# not installed, because "checks passed" must never mean "checks not run".
+chart-check:
+	@command -v helm >/dev/null 2>&1 \
+	  && ./deploy/charts/agentcell/lint.sh \
+	  || echo "chart-check SKIPPED: helm is not installed"
+
+preflight: fmt-check vet test verify-generate web-lock-check web-check chart-check
 	@echo "preflight OK"
 
 # web-lock-check fails the same way CI does, for the same reason: a

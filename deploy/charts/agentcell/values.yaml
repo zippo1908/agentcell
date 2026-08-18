@@ -61,6 +61,32 @@ preview:
 # celld verifies the ID token itself, so ANY standards-compliant provider
 # works and no gateway is required. See deploy/identity/ for a Casdoor +
 # Apache APISIX® path.
+# People with accounts: invitations, email login, one principal per human.
+#
+# Off by default, because the smallest useful deployment is one operator with
+# a token and saying so is more honest than implying isolation that is not
+# there. Turned on, celld keeps people, invitations, lent credentials and
+# linked forge identities in ONE SQLite file on a volume.
+#
+# One writer. SQLite allows exactly one, so the chart refuses to render with
+# more than one celld replica rather than installing two account systems
+# wearing one name.
+accounts:
+  enabled: false
+  # Where the file lives. Its directory is what gets the volume.
+  db: /var/lib/agentcell/agentcell.db
+  # Email of the first administrator, created once if the table is empty.
+  # Requires bootstrapPasswordSecret — a password does not go in values.
+  bootstrapAdmin: ""
+  # Secret with key `password`, read as AGENTCELL_BOOTSTRAP_PASSWORD.
+  bootstrapPasswordSecret: ""
+  persistence:
+    # Bring your own claim if you have one; otherwise the chart makes it.
+    existingClaim: ""
+    size: 1Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+
 oidc:
   issuer: ""             # e.g. https://casdoor.example.com
   clientID: ""

@@ -1,3 +1,20 @@
+{{- if .Values.accounts.enabled }}
+{{- /*
+  SQLite takes ONE writer. Two celld replicas each open their own file on
+  their own volume and answer as if they were one account system: somebody
+  invited on replica A cannot log in on replica B, and whichever replica
+  answers a password change leaves the other still accepting the old one.
+  That is not a degraded mode, it is two products wearing one name — so this
+  refuses to render rather than installing something that looks fine until
+  the second person joins.
+*/}}
+{{- if gt (int .Values.celld.replicas) 1 }}
+{{- fail "accounts.enabled=true 只支持单个 celld 副本(SQLite 一次只允许一个写者)。要多副本,先实现并验证共享数据库方案;现在请把 celld.replicas 设为 1。" }}
+{{- end }}
+{{- if and .Values.accounts.bootstrapAdmin (not .Values.accounts.bootstrapPasswordSecret) }}
+{{- fail "设置了 accounts.bootstrapAdmin 就必须给 accounts.bootstrapPasswordSecret:第一个管理员的密码只能来自 Secret,不能写在 values 里。" }}
+{{- end }}
+{{- end }}
 {{- if and (not .Values.celld.auth.existingSecret) .Values.celld.auth.tokens }}
 apiVersion: v1
 kind: Secret
@@ -58,6 +75,12 @@ spec:
             {{- if .Values.celld.auth.allowNoAuth }}
             - "--allow-no-auth"
             {{- end }}
+            {{- if .Values.accounts.enabled }}
+            - "--db={{ .Values.accounts.db }}"
+            {{- with .Values.accounts.bootstrapAdmin }}
+            - "--bootstrap-admin={{ . }}"
+            {{- end }}
+            {{- end }}
             {{- with .Values.oidc.issuer }}
             - "--oidc-issuer={{ . }}"
             {{- end }}
@@ -67,8 +90,16 @@ spec:
             {{- with .Values.oidc.redirectURL }}
             - "--oidc-redirect-url={{ . }}"
             {{- end }}
-          {{- if or .Values.oidc.existingSecret .Values.previewKeySecret }}
+          {{- if or .Values.oidc.existingSecret .Values.previewKeySecret .Values.accounts.bootstrapPasswordSecret }}
           env:
+            {{- with .Values.accounts.bootstrapPasswordSecret }}
+            # Read from a Secret, never from values: a password in values ends
+            # up in `helm get values`, in CI logs and in whatever holds the
+            # release history.
+            - name: AGENTCELL_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ . }}, key: password}
+            {{- end }}
             {{- with .Values.oidc.existingSecret }}
             # The client secret is read from a Secret, never from values.
             - name: AGENTCELL_OIDC_CLIENT_SECRET
@@ -105,6 +136,9 @@ spec:
             {{- if .Values.gitBroker.enabled }}
             - {name: git-broker-token, mountPath: /var/run/secrets/agentcell/git-broker, readOnly: true}
             {{- end }}
+            {{- if .Values.accounts.enabled }}
+            - {name: accounts, mountPath: {{ dir .Values.accounts.db }}}
+            {{- end }}
       volumes:
         {{- if .Values.presets.providers }}
         - name: providers-d
@@ -120,6 +154,11 @@ spec:
             secretName: {{ .Values.celld.auth.existingSecret | default "celld-tokens" }}
             items:
               - {key: tokens, path: tokens}
+        {{- end }}
+        {{- if .Values.accounts.enabled }}
+        - name: accounts
+          persistentVolumeClaim:
+            claimName: {{ .Values.accounts.persistence.existingClaim | default "celld-accounts" }}
         {{- end }}
         {{- if .Values.gitBroker.enabled }}
         - name: git-broker-token
@@ -202,4 +241,27 @@ spec:
               service:
                 name: celld
                 port: {number: {{ .Values.preview.port }}}
+{{- end }}
+
+{{- if and .Values.accounts.enabled (not .Values.accounts.persistence.existingClaim) }}
+---
+# The accounts database. One file, on one volume, written by one celld.
+#
+# ReadWriteOnce is not a limitation to work around here: it matches what
+# SQLite can actually support, and a volume that let two writers in would
+# only make the failure quieter.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: celld-accounts
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+spec:
+  accessModes: [{{ .Values.accounts.persistence.accessMode }}]
+  resources:
+    requests:
+      storage: {{ .Values.accounts.persistence.size }}
+  {{- with .Values.accounts.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
 {{- end }}
