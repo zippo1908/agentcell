@@ -50,6 +50,11 @@ type runnerPreset struct {
 	// commands. Empty means the runner has no interactive mode and can only
 	// be given one instruction at a time.
 	Interactive []string `yaml:"interactive"`
+	// InteractiveResume is the same interface, reopened on the conversation
+	// that was already happening here. Used when a runtime is rebuilt:
+	// the person did not end anything, so they should not come back to a
+	// blank screen.
+	InteractiveResume []string `yaml:"interactive_resume"`
 
 	ConfigFile *configFilePreset `yaml:"config_file"`
 	// AccountConfigFile is the same file for a CLI authenticated by a
@@ -145,6 +150,9 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 	}
 	if len(p.Interactive) > 0 {
 		r.InteractiveArgv = append([]string(nil), p.Interactive...)
+	}
+	if len(p.InteractiveResume) > 0 {
+		r.InteractiveResumeArgv = append([]string(nil), p.InteractiveResume...)
 	}
 	if p.ConfigFile != nil {
 		r.ConfigPath, r.ConfigTemplate = p.ConfigFile.Path, p.ConfigFile.Template

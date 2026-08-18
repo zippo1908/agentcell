@@ -23,6 +23,7 @@ runners:
     # shows Claude Code's own interface rather than the tail of a process
     # that has already exited.
     interactive: ["claude", "--dangerously-skip-permissions"]
+    interactive_resume: ["claude", "--dangerously-skip-permissions", "--continue"]
     # Claude Code accepts a caller-chosen conversation id, and requires a
     # UUID — AgentCell mints one per Session and records it.
     session_id: uuid
@@ -90,6 +91,9 @@ runners:
     # agent that stops to ask before every file write, in a terminal nobody
     # is necessarily watching, is an agent that silently does nothing.
     interactive: ["kimi", "--yolo"]
+    # -c reopens the conversation that belongs to this working directory,
+    # which is exactly what a rebuilt runtime should come back to.
+    interactive_resume: ["kimi", "--yolo", "-c"]
     # Kimi mints its own session ids, so the platform cannot name the
     # conversation up front. It resumes the most recent one in the working
     # directory instead — which is only unambiguous if each session has its

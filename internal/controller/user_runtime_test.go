@@ -335,8 +335,16 @@ func TestLostRuntimeIsRebuiltRatherThanSettled(t *testing.T) {
 		argv  []string
 		stdin string
 	}
+	// What marks a restore is that the agent came back on the conversation
+	// that was already here — not a flag. With an interactive agent the
+	// terminal IS the agent, so "restored" and "the agent is running with
+	// --continue" are the same statement.
 	for i := range rec.calls {
-		if len(rec.calls[i].argv) > 2 && rec.calls[i].argv[2] == "-restore" {
+		if len(rec.calls[i].argv) < 2 || rec.calls[i].argv[1] != "window-open" {
+			continue
+		}
+		joined := strings.Join(rec.calls[i].argv, " ")
+		if strings.Contains(joined, "-restore") || strings.Contains(joined, "--continue") {
 			restore = &rec.calls[i]
 		}
 	}
@@ -710,7 +718,11 @@ func TestRuntimeRestartRecoversInsteadOfSettling(t *testing.T) {
 	}
 	restored := false
 	for _, call := range rec.calls {
-		if len(call.argv) > 2 && call.argv[2] == "-restore" {
+		if len(call.argv) < 2 || call.argv[1] != "window-open" {
+			continue
+		}
+		joined := strings.Join(call.argv, " ")
+		if strings.Contains(joined, "-restore") || strings.Contains(joined, "--continue") {
 			restored = true
 		}
 	}
@@ -899,5 +911,55 @@ func TestOpeningWithNoTaskStartsNoAgent(t *testing.T) {
 		if len(call.argv) > 2 && call.argv[1] == "tell" {
 			t.Errorf("something was said to an agent nobody spoke to: %v", call.argv)
 		}
+	}
+}
+
+// A rebuilt runtime must come back with the agent in it, on the same
+// conversation — not with an empty shell.
+//
+// Reported as "重启工作台以后啥都没有了". Restoring used to start nothing,
+// which was right when the agent was a one-shot command that had already
+// finished. With an interactive agent the terminal IS the agent, so a
+// restore without it is a blank screen beside a worktree full of work.
+func TestRestoringBringsTheAgentBackOnTheSameConversation(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "some earlier task")
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = rec.exec
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, uid); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := r.Registry.Resolve(s.Spec.Runner, s.Spec.Provider, s.Spec.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.restoreWindow(ctx, s, testCell(), ns, "a", uid, binding); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, call := range rec.calls {
+		if len(call.argv) < 2 || call.argv[1] != "window-open" {
+			continue
+		}
+		found = true
+		joined := strings.Join(call.argv, " ")
+		if !strings.Contains(joined, "claude") {
+			t.Errorf("restored without the agent: %v", call.argv)
+		}
+		if !strings.Contains(joined, "--continue") {
+			t.Errorf("restored on a fresh conversation instead of the one that was here: %v", call.argv)
+		}
+		// And never the task again: the work was done once already.
+		if strings.Contains(joined, "some earlier task") {
+			t.Errorf("restoring re-ran the original task: %v", call.argv)
+		}
+	}
+	if !found {
+		t.Fatalf("no window was opened: %v", rec.calls)
 	}
 }

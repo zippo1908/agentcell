@@ -150,6 +150,9 @@ type Runner struct {
 	// InteractiveArgv starts the CLI the way a person would, in its own
 	// interface. Empty for a runner that only has a one-shot mode.
 	InteractiveArgv []string
+	// InteractiveResumeArgv reopens the conversation already in this
+	// directory. Empty falls back to starting fresh.
+	InteractiveResumeArgv []string
 
 	ConfigPath     string
 	ConfigTemplate string
@@ -171,6 +174,25 @@ func InteractiveArgvFor(runner string) []string {
 	r, ok := runners[runner]
 	if !ok {
 		return nil
+	}
+	return append([]string(nil), r.InteractiveArgv...)
+}
+
+// InteractiveResumeArgvFor reopens the conversation that was already
+// happening in this worktree.
+//
+// A rebuilt runtime is not a new session: the worktree, the conversation and
+// the CLI's own state are all on the volume, and the person did not end
+// anything. Starting the plain interactive form there would put them in
+// front of an empty screen next to a directory full of work they cannot see
+// the history of.
+func InteractiveResumeArgvFor(runner string) []string {
+	r, ok := runners[runner]
+	if !ok {
+		return nil
+	}
+	if len(r.InteractiveResumeArgv) > 0 {
+		return append([]string(nil), r.InteractiveResumeArgv...)
 	}
 	return append([]string(nil), r.InteractiveArgv...)
 }

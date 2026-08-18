@@ -186,6 +186,17 @@ func (r *SessionReconciler) sayToWindow(ctx context.Context, ns, pod, id, text s
 // restoreWindow rebuilds the terminal for an existing session without
 // starting the agent again.
 func (r *SessionReconciler) restoreWindow(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64, binding access.Binding) error {
+	// Bring the agent BACK, on the conversation that was already here.
+	//
+	// Starting nothing was right when the agent was a one-shot command: it
+	// had already run, and re-running it would repeat the work. With an
+	// interactive agent the terminal IS the agent, so restoring without it
+	// hands somebody an empty shell next to a worktree full of work whose
+	// history they cannot see — which is exactly what "重启工作台以后啥都
+	// 没有了" looked like.
+	if ra := access.InteractiveResumeArgvFor(sess.Spec.Runner); len(ra) > 0 {
+		return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, ra, false)
+	}
 	return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, nil, true)
 }
 

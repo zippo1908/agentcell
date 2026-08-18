@@ -174,6 +174,11 @@ func runWindowOpen(args []string) error {
 	// prompt) and say so out loud when it is off. Set on the server, once,
 	// so every window has it.
 	_, _ = tmux(sock, "set", "-g", "extended-keys", "on")
+	// csi-u, which is the encoding the agent CLIs actually read. tmux's
+	// default (xterm) makes them say so on every start; a warning printed
+	// above the prompt on every session is noise nobody can act on from
+	// inside the container.
+	_, _ = tmux(sock, "set", "-g", "extended-keys-format", "csi-u")
 	if out, err := tmux(sock, "new-window", "-d", "-t", ids.TmuxHolder, "-n", window, "-c", wt); err != nil {
 		_ = os.Remove(envFile)
 		return fmt.Errorf("tmux new-window: %v: %s", err, out)
