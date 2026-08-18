@@ -22,11 +22,23 @@ import { cellTone } from '../lib/format'
 export function WorkspacePage() {
   const [cell, setCell] = useState<string>('')
   const [showTree, setShowTree] = useState(true)
+  // The project list folds away for the same reason the branch tree does:
+  // when you are reading a terminal, every column that is not the terminal
+  // is in the way.
+  const [showList, setShowList] = useState(true)
+  // Which pane the middle is showing. The parent needs to know because a
+  // preview takes the branch column's width as well.
+  const [mainView, setMainView] = useState<'terminal' | 'preview'>('terminal')
   const root = useRef<HTMLDivElement>(null)
   // Both side columns are draggable and both remember their width. The
   // middle takes whatever is left, because the middle is the terminal.
   const [listW, setListW] = usePaneWidth('list', 210, 140, 420)
   const [treeW, setTreeW] = usePaneWidth('tree', 260, 180, 520)
+  // The page's own side margin. On a wide screen the default gutter throws
+  // away exactly the width a terminal wants; on a narrow one, removing it
+  // makes the columns touch the edge. So it is a setting, and it is
+  // remembered.
+  const [gutter, setGutter] = usePaneWidth('gutter', 16, 0, 160)
 
   // -1 from a double-click means "back to the default".
   const dragList = useCallback(
@@ -35,6 +47,12 @@ export function WorkspacePage() {
       setListW(x < 0 ? 210 : x - left)
     },
     [setListW],
+  )
+  // Dragging the page edge itself. Measured from the window, not the grid,
+  // because the thing being sized IS the space outside the grid.
+  const dragGutter = useCallback(
+    (x: number) => setGutter(x < 0 ? 16 : Math.max(0, Math.min(160, x))),
+    [setGutter],
   )
   const dragTree = useCallback(
     (x: number) => {
@@ -63,20 +81,34 @@ export function WorkspacePage() {
   return (
     <div
       ref={root}
-      className={`ws ${showTree ? '' : 'ws-notree'}`}
+      className={`ws ${showTree && mainView === 'terminal' ? '' : 'ws-notree'} ${
+        showList ? '' : 'ws-nolist'
+      }`}
       style={
         {
           '--ws-list': `${listW}px`,
           '--ws-tree': `${treeW}px`,
+          '--ws-gutter': `${gutter}px`,
         } as React.CSSProperties
       }
     >
+      {/* The gutter track needs an element of its own: grid items fill
+          tracks in order, and a track with no child shifts every column
+          after it one place to the left — which put the terminal into a
+          five-pixel divider. */}
+      <div className="ws-gutter" />
+      <Splitter onDrag={dragGutter} title="拖动调整页面左右留白(双击复位)" />
+
+      {showList ? (
       <aside className="ws-list">
         <div className="ws-head">
           <span>项目</span>
           <Link to="/cells/new" className="ws-new" title="新建项目">
             +
           </Link>
+          <button className="ws-fold" onClick={() => setShowList(false)} title="收起项目栏">
+            ‹
+          </button>
         </div>
         {cells.data.map((c) => (
           <button
@@ -92,14 +124,23 @@ export function WorkspacePage() {
           </button>
         ))}
       </aside>
+      ) : (
+        <button className="ws-unfold left" onClick={() => setShowList(true)} title="展开项目栏">
+          ›
+        </button>
+      )}
 
-      <Splitter onDrag={dragList} title="拖动调整项目栏宽度(双击复位)" />
+      {showList && <Splitter onDrag={dragList} title="拖动调整项目栏宽度(双击复位)" />}
 
-      <section className="ws-main">{cell && <CellWork cell={cell} />}</section>
+      <section className="ws-main">
+        {cell && <CellWork cell={cell} onView={setMainView} />}
+      </section>
 
-      {showTree && <Splitter onDrag={dragTree} side="right" title="拖动调整分支栏宽度(双击复位)" />}
+      {showTree && mainView === 'terminal' && (
+        <Splitter onDrag={dragTree} side="right" title="拖动调整分支栏宽度(双击复位)" />
+      )}
 
-      {showTree ? (
+      {showTree && mainView === 'terminal' ? (
         <aside className="ws-tree">
           <div className="ws-head">
             <span>分支</span>
@@ -109,20 +150,25 @@ export function WorkspacePage() {
           </div>
           {cell && <BranchTree cell={cell} />}
         </aside>
-      ) : (
+      ) : mainView === 'terminal' ? (
         <button className="ws-unfold" onClick={() => setShowTree(true)} title="展开分支">
           ‹
         </button>
-      )}
+      ) : null}
     </div>
   )
 }
 
 /** The middle column: this project's session, its terminal, and one input. */
-function CellWork({ cell }: { cell: string }) {
+function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'preview') => void }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [text, setText] = useState('')
+  const [view, setViewRaw] = useState<'terminal' | 'preview'>('terminal')
+  const setView = (v: 'terminal' | 'preview') => {
+    setViewRaw(v)
+    onView(v)
+  }
 
   const detail = useQuery({
     queryKey: ['cell', cell],
@@ -170,6 +216,12 @@ function CellWork({ cell }: { cell: string }) {
     onError: (e: Error) => toast.error(e.message),
   })
 
+  // Terminal or preview, in the same pane.
+  //
+  // The preview used to open in another tab, which meant leaving the work to
+  // look at the result of the work and finding your place again on the way
+  // back. In here it gets the full width — the branch column folds away
+  // while it is showing, because a preview is a page and pages want room.
   if (detail.isLoading) return <Spinner />
 
   return (
@@ -189,7 +241,26 @@ function CellWork({ cell }: { cell: string }) {
         {live && <SessionControls session={live.name} phase={live.phase} onDone={() => qc.invalidateQueries({ queryKey: ['cell', cell] })} />}
       </div>
 
-      <div className="ws-term">
+      <div className="ws-tabs">
+        <button className={`ws-tab ${view === 'terminal' ? 'on' : ''}`} onClick={() => setView('terminal')}>
+          终端
+        </button>
+        <button
+          className={`ws-tab ${view === 'preview' ? 'on' : ''}`}
+          onClick={() => setView('preview')}
+          disabled={!detail.data?.cell?.previewURL}
+          title={detail.data?.cell?.previewURL ? '看这个项目现在长什么样' : '这个项目还没配预览'}
+        >
+          预览
+        </button>
+        {view === 'preview' && detail.data?.cell?.previewURL && (
+          <a className="small" href={detail.data.cell.previewURL} target="_blank" rel="noreferrer">
+            在新标签页打开 ↗
+          </a>
+        )}
+      </div>
+
+      <div className="ws-term" hidden={view !== 'terminal'}>
         {live ? (
           <TerminalDeck session={live.name} />
         ) : (
@@ -200,7 +271,29 @@ function CellWork({ cell }: { cell: string }) {
         )}
       </div>
 
-      <div className="ws-say">
+      {view === 'preview' && (
+        <div className="ws-preview">
+          {detail.data?.cell?.previewURL ? (
+            // A different ORIGIN, deliberately (ADR-0007): the page in here
+            // is agent-written and unreviewed, so the browser must keep it
+            // away from the console's session. An iframe across origins is
+            // exactly that boundary — it can draw, and it can reach nothing
+            // of ours.
+            <iframe
+              title="预览"
+              src={detail.data.cell.previewURL}
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="ws-empty">
+              <p>这个项目还没配预览。</p>
+              <p className="hint">在项目设置里给它一条启动命令,agent 写完就能在这里看到。</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="ws-say" hidden={view !== 'terminal'}>
         <textarea
           rows={2}
           value={text}
