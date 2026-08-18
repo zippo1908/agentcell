@@ -110,6 +110,16 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 	if creator.Kind == identity.KindOIDC || creator.Kind == identity.KindUser {
 		members = []acv1.Member{{UserID: creator.ID(), Role: acv1.RoleMaintainer}}
 	}
+	// With exactly one pool, use it. An administrator who described a single
+	// pool described where work goes; a project created without it lands
+	// wherever the scheduler likes, which on a cluster with tainted nodes
+	// means Pending with no explanation the creator can act on.
+	if req.PlacementClass == "" {
+		var classes acv1.PlacementClassList
+		if err := h.Client.List(r.Context(), &classes); err == nil && len(classes.Items) == 1 {
+			req.PlacementClass = classes.Items[0].Name
+		}
+	}
 	if req.PlacementClass != "" {
 		// Must be an offer that exists. The API never invents a placement,
 		// and a name that resolves to nothing would strand the Cell Pending.

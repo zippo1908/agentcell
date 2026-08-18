@@ -96,6 +96,13 @@ func (h *Handler) uploadFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Bound the WHOLE body, not just the part we later read.
+	//
+	// ParseMultipartForm's argument is how much to keep in memory, not a
+	// limit on what the client may send: a request with fifty parts, or one
+	// part streamed forever, was read to disk and to memory regardless. The
+	// reader below makes the connection fail at the limit instead.
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpload+1<<20)
 	if err := r.ParseMultipartForm(maxUpload); err != nil {
 		writeErr(w, 400, fmt.Errorf("上传失败:%w", err))
 		return
@@ -265,6 +272,17 @@ func extractText(name, ct string, body []byte) string {
 // text does not: a NUL.
 func looksBinary(b []byte) bool { return bytes.IndexByte(b, 0) >= 0 }
 
+// maxExtracted bounds the TOTAL text pulled out of one document, and
+// maxEntries how many parts are opened at all.
+//
+// A per-part limit is not a limit: a 200 KB archive can hold hundreds of
+// parts that each decompress to the per-part maximum, so the bound that
+// matters is the sum. Both are generous for prose and cheap to hold.
+const (
+	maxExtracted = 8 << 20
+	maxEntries   = 512
+)
+
 // officeText pulls the visible text out of an OOXML part. Not a converter —
 // no styling, no layout, no attempt at fidelity — because what an agent
 // needs from a specification is its sentences.
@@ -274,15 +292,28 @@ func officeText(body []byte, prefix string) string {
 		return ""
 	}
 	var out strings.Builder
+	opened := 0
 	for _, f := range zr.File {
 		if !strings.HasPrefix(f.Name, prefix) || !strings.HasSuffix(f.Name, ".xml") {
 			continue
+		}
+		if opened++; opened > maxEntries {
+			break
+		}
+		// The archive's own claim about how big this part is. A declared
+		// size wildly larger than the compressed bytes is the shape of a
+		// zip bomb, and refusing on the header costs nothing to check.
+		if f.UncompressedSize64 > uint64(maxExtracted) {
+			continue
+		}
+		if remaining := maxExtracted - out.Len(); remaining <= 0 {
+			break
 		}
 		rc, err := f.Open()
 		if err != nil {
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, maxUpload))
+		data, err := io.ReadAll(io.LimitReader(rc, int64(maxExtracted-out.Len())))
 		_ = rc.Close()
 		if err != nil {
 			continue
@@ -309,7 +340,7 @@ func xlsxText(body []byte) string {
 		if err != nil {
 			return ""
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, maxUpload))
+		data, err := io.ReadAll(io.LimitReader(rc, maxExtracted))
 		_ = rc.Close()
 		if err != nil {
 			return ""

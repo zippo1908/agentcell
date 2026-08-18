@@ -268,7 +268,15 @@ func (a *Authenticator) accountLogin(w http.ResponseWriter, r *http.Request) {
 		a.tokenLogin(w, r)
 		return
 	}
-	p, ok := a.Accounts.Verify(r.Context(), r.FormValue("email"), r.FormValue("password"))
+	email := r.FormValue("email")
+	// Refused BEFORE the password work, which is the whole point: the cost
+	// this protects is the argon2 derivation itself.
+	if a.tooManyLogins(r, email) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write(loginPageHTML("尝试太频繁了,过一分钟再试"))
+		return
+	}
+	p, ok := a.Accounts.Verify(r.Context(), email, r.FormValue("password"))
 	if !ok {
 		// One message for a wrong address and a wrong password. Telling
 		// them apart is a way to find out who has an account here.

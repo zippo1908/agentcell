@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"github.com/zippo1908/agentcell/internal/identity"
 	"net/http"
 	"sort"
 
@@ -36,8 +37,12 @@ type newProjectOptions struct {
 	Runners   []access.RunnerInfo   `json:"runners"`
 	Providers []access.ProviderInfo `json:"providers"`
 	// DefaultRunner and DefaultProvider are what a new project starts with.
-	DefaultRunner   string `json:"defaultRunner,omitempty"`
-	DefaultProvider string `json:"defaultProvider,omitempty"`
+	DefaultRunner string `json:"defaultRunner,omitempty"`
+	// DefaultPlacementClass is the pool to preselect when an administrator
+	// has described exactly one: with a single pool there is nothing to
+	// choose, and leaving it unset put projects nowhere in particular.
+	DefaultPlacementClass string `json:"defaultPlacementClass,omitempty"`
+	DefaultProvider       string `json:"defaultProvider,omitempty"`
 }
 
 func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
@@ -54,19 +59,42 @@ func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
 	// place.
 	out.DefaultRunner, out.DefaultProvider = h.DefaultRunner, h.DefaultProvider
 
-	// Forge credentials are basic-auth Secrets in the control namespace.
+	// Forge credentials this caller may actually use.
+	//
+	// It used to list every basic-auth Secret in the control namespace,
+	// which handed one person the NAMES of everybody else's forge
+	// credentials — and a name is not nothing: it says who works with which
+	// host, and it is what somebody would try to reference. Ownership is the
+	// same rule that governs using one, so listing follows it.
+	p := identity.FromContext(r.Context())
 	var secrets corev1.SecretList
 	if err := h.Client.List(r.Context(), &secrets, client.InNamespace(h.Namespace)); err == nil {
 		for i := range secrets.Items {
-			if secrets.Items[i].Type == corev1.SecretTypeBasicAuth {
-				out.GitCredentials = append(out.GitCredentials, secrets.Items[i].Name)
+			sec := &secrets.Items[i]
+			if sec.Type != corev1.SecretTypeBasicAuth {
+				continue
 			}
+			// An unowned credential is the platform's own, offered to
+			// everyone; anything with an owner is offered only to them.
+			if owner := sec.Labels[OwnerLabel]; owner != "" && !p.Owns(owner) {
+				continue
+			}
+			out.GitCredentials = append(out.GitCredentials, sec.Name)
 		}
 		sort.Strings(out.GitCredentials)
 	}
 
 	// Machine pools, only when there is a choice to make.
+	// One class is not "no choice to make" — it is the choice, already made.
+	//
+	// Hiding the selector when only one pool exists also stopped it being
+	// APPLIED, so projects landed with no placement at all on a cluster
+	// whose administrator had gone to the trouble of describing exactly one
+	// pool they should land on. Returning it lets the console preselect it.
 	var classes acv1.PlacementClassList
+	if err := h.Client.List(r.Context(), &classes); err == nil && len(classes.Items) == 1 {
+		out.DefaultPlacementClass = classes.Items[0].Name
+	}
 	if err := h.Client.List(r.Context(), &classes); err == nil && len(classes.Items) > 1 {
 		var nodes corev1.NodeList
 		_ = h.Client.List(r.Context(), &nodes)

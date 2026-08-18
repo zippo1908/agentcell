@@ -43,6 +43,9 @@ type Authenticator struct {
 	// email logins, invitations, and a principal per human. Without it the
 	// static token remains the only way in and everyone is one principal.
 	Accounts *Accounts
+	// logins bounds password attempts; see ratelimit.go for why the login
+	// form is the cheapest thing to attack here.
+	logins *rateLimiter
 	// tickets is the single-use guard. Shared through the API server when a
 	// client is wired, because "used once" has to hold across replicas.
 	tickets sharedTickets
@@ -64,7 +67,7 @@ func NewAuthenticator(raw string) *Authenticator {
 			tokens[t] = struct{}{}
 		}
 	}
-	return &Authenticator{tokens: tokens, keyMaterial: freshKeyMaterial()}
+	return &Authenticator{tokens: tokens, keyMaterial: freshKeyMaterial(), logins: newRateLimiter()}
 }
 
 // freshKeyMaterial backs the preview ticket key when nothing else does. It
