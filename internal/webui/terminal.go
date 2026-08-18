@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/zippo1908/agentcell/internal/identity"
 	"io"
 	"net/http"
 	"strings"
@@ -61,6 +62,20 @@ func (h *Handler) upgrader() *websocket.Upgrader {
 		},
 	}
 }
+
+// maxTerminalsPerUser bounds how many terminals one person may hold open.
+//
+// The cost being bounded is not memory here: every attached terminal is a
+// live exec stream through the kube-apiserver to a kubelet, which is one of
+// the more expensive things a cluster does. Twenty tabs left open over a
+// week is not an attack, it is an ordinary Tuesday, and the platform should
+// say so rather than quietly loading the API server.
+const maxTerminalsPerUser = 8
+
+// terminalReadTimeout is how long a terminal may say nothing at all before
+// it is treated as gone. Comfortably longer than the 30s keepalive, so it
+// only ever fires for a peer that has stopped answering.
+const terminalReadTimeout = 90 * time.Second
 
 // termMessage is what the browser sends up: either keystrokes or a resize.
 // Output travels down as raw binary frames, unwrapped, because that is the
@@ -122,6 +137,18 @@ func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, fmt.Errorf("session has no id yet"))
 		return
 	}
+
+	// Refuse before upgrading: a websocket that is accepted and then closed
+	// looks to the browser like a broken connection, and the person is left
+	// guessing. A refusal at this point still carries a status and a reason.
+	who := identity.FromContext(r.Context()).ID()
+	if n := h.terminals.count(who); n >= maxTerminalsPerUser {
+		writeErr(w, http.StatusTooManyRequests, fmt.Errorf(
+			"你已经开着 %d 个终端了——每个都占着一条到集群的连接。关掉几个再来。", n))
+		return
+	}
+	h.terminals.add(who)
+	defer h.terminals.done(who)
 
 	conn, err := h.upgrader().Upgrade(w, r, nil)
 	if err != nil {
@@ -221,12 +248,25 @@ func (t *wsTerminal) readLoop(ctx context.Context) {
 	// dead mid-run with nothing to say why.
 	go t.keepalive(ctx)
 	t.conn.SetReadLimit(1 << 20)
+	// A read deadline, refreshed by every pong.
+	//
+	// Without it this goroutine — and the exec stream behind it — waits on
+	// a connection that may already be gone: a half-open TCP socket reads
+	// nothing and reports nothing, so the pair stayed alive until the
+	// kernel's own keepalive gave up, which is hours. The keepalive ping
+	// every 30s is what refreshes this, so a peer that is actually there
+	// never notices the deadline exists.
+	_ = t.conn.SetReadDeadline(time.Now().Add(terminalReadTimeout))
+	t.conn.SetPongHandler(func(string) error {
+		return t.conn.SetReadDeadline(time.Now().Add(terminalReadTimeout))
+	})
 	for {
 		typ, data, err := t.conn.ReadMessage()
 		if err != nil {
 			t.cancel()
 			return
 		}
+		_ = t.conn.SetReadDeadline(time.Now().Add(terminalReadTimeout))
 		if typ != websocket.TextMessage {
 			continue
 		}
@@ -312,3 +352,58 @@ func (t *wsTerminal) Next() *remotecommand.TerminalSize {
 	}
 	return &s
 }
+
+// terminalCounter tracks how many terminals each person currently holds.
+//
+// In memory, and deliberately so while celld runs one replica — which the
+// accounts database already requires. With several replicas this becomes a
+// per-replica count, i.e. a cap multiplied by the replica count; that is the
+// same seam as the login limiter, and both move together when there is a
+// shared store to move them to.
+type terminalCounter struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func newTerminalCounter() *terminalCounter { return &terminalCounter{n: map[string]int{}} }
+
+func (c *terminalCounter) count(user string) int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n[user]
+}
+
+func (c *terminalCounter) add(user string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n[user]++
+}
+
+func (c *terminalCounter) done(user string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.n[user] <= 1 {
+		// Drop the key rather than leaving a zero behind: a map keyed by
+		// user that only ever grows is a slow leak on a long-lived process.
+		delete(c.n, user)
+		return
+	}
+	c.n[user]--
+}
+
+// EnableTerminalLimit turns on the per-person terminal cap.
+//
+// Explicit rather than implicit in the zero value, because a nil counter
+// means "no limit" and a test that builds a Handler by hand should not
+// silently acquire one. The server asks for it; the tests that care ask
+// too.
+func (h *Handler) EnableTerminalLimit() { h.terminals = newTerminalCounter() }

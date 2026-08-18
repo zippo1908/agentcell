@@ -60,6 +60,9 @@ type Handler struct {
 	// API token of its own (ADR-0005).
 	RESTConfig *rest.Config
 	Kube       kubernetes.Interface
+	// terminals bounds how many exec streams one person can hold open; see
+	// maxTerminalsPerUser.
+	terminals *terminalCounter
 }
 
 // previewBaseFor returns the origin serving a specific Cell's untrusted

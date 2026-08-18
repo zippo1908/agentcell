@@ -155,3 +155,40 @@ func TestSinglePlacementClassIsApplied(t *testing.T) {
 		t.Errorf("the single pool was not offered at all: %s", rec.Body)
 	}
 }
+
+// One person's open terminals are bounded, because each is a live exec
+// stream through the API server — the expensive thing here is the cluster's,
+// not ours. Twenty tabs left open over a week is an ordinary Tuesday.
+func TestTerminalsPerUserAreBounded(t *testing.T) {
+	c := newTerminalCounter()
+	for i := 0; i < maxTerminalsPerUser; i++ {
+		c.add(alice.ID())
+	}
+	if got := c.count(alice.ID()); got != maxTerminalsPerUser {
+		t.Fatalf("count = %d, want %d", got, maxTerminalsPerUser)
+	}
+	// Somebody else is unaffected: the cap is per person, not global.
+	if c.count(bob.ID()) != 0 {
+		t.Error("one person's terminals counted against another's")
+	}
+	// Closing frees the slot, and the key is dropped rather than left at
+	// zero — a map keyed by user that only grows is a slow leak.
+	for i := 0; i < maxTerminalsPerUser; i++ {
+		c.done(alice.ID())
+	}
+	if got := c.count(alice.ID()); got != 0 {
+		t.Errorf("count = %d after closing every terminal", got)
+	}
+	c.mu.Lock()
+	n := len(c.n)
+	c.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d keys left behind for users holding nothing", n)
+	}
+	// A nil counter means no limit, so a Handler built by hand in a test
+	// does not silently acquire one.
+	var none *terminalCounter
+	if none.count("anyone") != 0 {
+		t.Error("a nil counter reported holdings")
+	}
+}

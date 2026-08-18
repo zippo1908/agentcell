@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -247,6 +248,7 @@ func main() {
 		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
 		PreviewDomain: *previewDomain, Auth: auth,
 	}
+	ui.EnableTerminalLimit()
 	mux := http.NewServeMux()
 	auth.LoginRoutes(mux)
 	ui.PublicRoutes(mux)
@@ -257,7 +259,22 @@ func main() {
 	})
 	// The HTTP surface starts with the manager so it uses the warmed cache.
 	if err := mgr.Add(alwaysRun(func(ctx context.Context) error {
-		srv := &http.Server{Addr: *httpAddr, Handler: mux}
+		// Timeouts, because a server with none has no defence against a
+		// client that simply never finishes. One connection that sends half
+		// a request header and then stops holds a goroutine and a socket
+		// until the kernel gives up on it — which is hours. That costs
+		// nothing to mount and does not need many connections to matter.
+		//
+		// No WriteTimeout: this handler serves websockets, and a write
+		// deadline would cut a terminal off mid-session. Idle and header
+		// timeouts bound the thing that is actually being abused.
+		srv := &http.Server{
+			Addr:              *httpAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
 		go func() {
 			<-ctx.Done()
 			_ = srv.Close()
@@ -280,7 +297,15 @@ func main() {
 		// Untrusted content is authorized by a short-lived per-Cell ticket,
 		// never by the console credential (ADR-0007).
 		pmux.Handle("/", auth.PreviewMiddleware(ui.PreviewRoutes()))
-		srv := &http.Server{Addr: *previewAddr, Handler: pmux}
+		srv := &http.Server{
+			Addr:              *previewAddr,
+			Handler:           pmux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      120 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
 		go func() {
 			<-ctx.Done()
 			_ = srv.Close()
