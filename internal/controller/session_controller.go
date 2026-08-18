@@ -332,11 +332,21 @@ func (r *SessionReconciler) releaseSlot(ctx context.Context, controlNS, cellName
 
 func (r *SessionReconciler) copyCredential(ctx context.Context, sess *acv1.Session, ns, id string) error {
 	var src corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.CredentialSecret}, &src); err != nil {
-		return err
-	}
-	if _, ok := src.Data["key"]; !ok {
-		return fmt.Errorf("secret %q has no %q entry", sess.Spec.CredentialSecret, "key")
+	// No key is a legitimate state now: somebody who connected an account
+	// has a credential, it is simply not one they pasted. Looking one up
+	// anyway asked the API server for Secret "" and reported "Secret \"\"
+	// not found" — which reads like the platform lost something rather than
+	// like nothing was ever meant to be there.
+	if sess.Spec.CredentialSecret != "" {
+		if err := r.Get(ctx, types.NamespacedName{
+			Namespace: sess.Namespace, Name: sess.Spec.CredentialSecret}, &src); err != nil {
+			return err
+		}
+		if _, ok := src.Data["key"]; !ok {
+			return fmt.Errorf("secret %q has no %q entry", sess.Spec.CredentialSecret, "key")
+		}
+	} else if r.accountCredential(ctx, sess) == "" {
+		return fmt.Errorf("这条会话既没有模型 key,也没有连好的账号")
 	}
 	dst := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ids.SessionSecretName(id)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dst, func() error {

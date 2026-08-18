@@ -195,4 +195,12 @@ func TestAccountConfigDoesNotCarryAKey(t *testing.T) {
 	if !strings.Contains(withAccount, "oauth") {
 		t.Errorf("the account form has no oauth reference:\n%s", withAccount)
 	}
+	// And it must still say WHERE to send the request. A connected account
+	// names the service that issued the token, not the endpoint that
+	// accepts it; leaving base_url out sent a kimi-code token to the CLI's
+	// own default and came back "401 Invalid Authentication", which reads
+	// like a bad credential and is really a wrong address.
+	if !strings.Contains(withAccount, b.BaseURL) {
+		t.Errorf("the account form does not carry the endpoint:\n%s", withAccount)
+	}
 }

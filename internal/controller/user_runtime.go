@@ -141,13 +141,20 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 		return fmt.Errorf("resident sessions need exec access to the runtime pod")
 	}
 	var sec corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{
-		Namespace: sess.Namespace, Name: sess.Spec.CredentialSecret}, &sec); err != nil {
-		return err
-	}
-	key := string(sec.Data["key"])
-	if key == "" {
-		return fmt.Errorf("secret %q has no %q entry", sess.Spec.CredentialSecret, "key")
+	var key string
+	if sess.Spec.CredentialSecret != "" {
+		if err := r.Get(ctx, types.NamespacedName{
+			Namespace: sess.Namespace, Name: sess.Spec.CredentialSecret}, &sec); err != nil {
+			return err
+		}
+		key = string(sec.Data["key"])
+		if key == "" {
+			return fmt.Errorf("secret %q has no %q entry", sess.Spec.CredentialSecret, "key")
+		}
+	} else if r.accountCredential(ctx, sess) == "" {
+		// A session with neither is one nothing can authenticate; say that
+		// rather than starting an agent that will 401 on its first call.
+		return fmt.Errorf("这条会话既没有模型 key,也没有连好的账号")
 	}
 	// One JSON object, not KEY=VALUE lines.
 	//

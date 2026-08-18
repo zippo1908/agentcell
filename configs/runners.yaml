@@ -112,6 +112,11 @@ runners:
         max_context_size = {{context_tokens}}
     # Used instead when the person has connected their Kimi account.
     #
+    # base_url is NOT optional here even though the credential already says
+    # which service issued it: without it the CLI sends a kimi-code token to
+    # its own default endpoint and gets "401 Invalid Authentication" — an
+    # error that reads like a bad token and is really a wrong address.
+    #
     # NOT the same file with the key left out: the CLI decides how to
     # authenticate by what the provider block contains. With an api_key it
     # uses the key; with an `oauth` reference it looks up the credential it
@@ -126,6 +131,7 @@ runners:
 
         [providers.kimi-code]
         type = "kimi"
+        base_url = "{{base_url}}"
 
         [providers.kimi-code.oauth]
         storage = "file"
