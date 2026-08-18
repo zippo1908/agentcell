@@ -272,6 +272,13 @@ func (r *SessionReconciler) dispatch(ctx context.Context, sess *acv1.Session, ce
 			}
 		}
 	}
+	// A one-shot session with nothing to do is a mistake, not a terminal:
+	// unlike a resident session there is no window to type into, so it
+	// would spend a run on an empty prompt and settle. Refuse where it can
+	// still be read as an error.
+	if !sess.IsResident() && strings.TrimSpace(sess.Spec.Task) == "" {
+		return r.fail(ctx, sess, fmt.Errorf("这条会话没有任务,也没有终端可以输入"))
+	}
 	argv, err := access.StartArgvFor(sess.Spec.Runner, sess.Spec.Task, sess.Status.RunnerSessionID)
 	if err != nil {
 		return r.fail(ctx, sess, err)

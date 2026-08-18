@@ -25,7 +25,16 @@ export function Terminal({ session }: { session: string }) {
     if (!host.current) return
     const term = new Xterm({
       fontSize: 12,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      // A CJK-capable fallback is not optional here. The first three names
+      // exist only on macOS, so on Windows this fell through to the generic
+      // monospace face, which has no Chinese glyphs — and the terminal drew
+      // every Chinese character, including the agent's own output, as an
+      // underscore. Consolas/DejaVu keep the ASCII shape somebody expects;
+      // the CJK families are what make the rest legible at all.
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", ' +
+        '"Microsoft YaHei Mono", "Microsoft YaHei", "Noto Sans Mono CJK SC", ' +
+        '"Source Han Mono SC", "PingFang SC", monospace',
       cursorBlink: true,
       // Enough to scroll back through a long build without holding a
       // session's entire life in memory.

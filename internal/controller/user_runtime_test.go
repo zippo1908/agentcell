@@ -841,3 +841,52 @@ func TestResidentSessionIdlesOutRatherThanAgesOut(t *testing.T) {
 		})
 	}
 }
+
+// Opening a project with nothing to say gives you a terminal, not an agent
+// run with an empty prompt.
+//
+// Seen in a real session: 打开项目 produced `kimi --continue -p ”`, which
+// starts a conversation nobody began, spends the person's quota on it, and
+// leaves a transcript whose first turn is blank. The window still gets its
+// full environment, so whatever they type next runs exactly as it would
+// have.
+func TestOpeningWithNoTaskStartsNoAgent(t *testing.T) {
+	s := residentSession("sess-a", "u-aaaa1111", "")
+	c := newFake(t, testCell(), credSecret("bailian-key"), s)
+	rec := &recorder{}
+	r := sessionReconciler(t, c)
+	r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
+	r.Exec = rec.exec
+	ctx := context.Background()
+	ns := ids.WorkloadNamespace("shop")
+	uid, _ := r.UIDs.Ensure(ctx, "u-aaaa1111")
+	if _, err := r.ensureUserRuntime(ctx, testCell(), ns, uid); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := r.Registry.Resolve(s.Spec.Runner, s.Spec.Provider, s.Spec.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.openWindow(ctx, s, testCell(), ns, "a", uid, binding,
+		[]string{"kimi", "-p", ""}); err != nil {
+		t.Fatal(err)
+	}
+
+	opened := false
+	for _, call := range rec.calls {
+		if len(call.argv) < 2 || call.argv[1] != "window-open" {
+			continue
+		}
+		opened = true
+		joined := strings.Join(call.argv, " ")
+		if !strings.Contains(joined, "-restore") {
+			t.Errorf("window opened without -restore: %v", call.argv)
+		}
+		if strings.Contains(joined, "kimi") {
+			t.Errorf("an agent was started for a session with no task: %v", call.argv)
+		}
+	}
+	if !opened {
+		t.Fatalf("no window was opened at all: %v", rec.calls)
+	}
+}

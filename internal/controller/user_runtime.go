@@ -127,6 +127,18 @@ func (r *SessionReconciler) ensureUserRuntime(ctx context.Context, cell *acv1.Ce
 // per-session uids or pods, which is exactly what sharing a runtime trades
 // away (ADR-0010).
 func (r *SessionReconciler) openWindow(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64, binding access.Binding, argv []string) error {
+	// Opening a project with nothing to say opens a TERMINAL, not an agent
+	// run with an empty prompt.
+	//
+	// "打开项目" exists so somebody can go and look — at the checkout, at
+	// what the last session left, at anything — before deciding what to
+	// ask. Handing that to the CLI as `-p ''` starts a conversation nobody
+	// began, spends the person's quota on it, and leaves a transcript whose
+	// first turn is blank. The window still gets its full environment, so
+	// the first thing they say runs exactly as it would have.
+	if strings.TrimSpace(sess.Spec.Task) == "" {
+		return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, nil, true)
+	}
 	return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, argv, false)
 }
 
@@ -198,6 +210,12 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	if lib := r.libraryBlob(ctx, sess.Spec.Cell); lib != "" {
 		vars[runtimeapi.EnvLibrary] = lib
 	}
+	// A UTF-8 locale. Without it the runtime inherits the C locale, and
+	// programs that measure text by locale — every CLI that draws a box or
+	// pads a column — mis-handle wide characters, so Chinese output comes
+	// back mangled in a terminal that is perfectly capable of showing it.
+	vars["LANG"] = "C.UTF-8"
+	vars["LC_ALL"] = "C.UTF-8"
 	vars[runtimeapi.EnvRepos] = reposJSON(cell)
 	vars[runtimeapi.EnvSessionID] = id
 	vars[runtimeapi.EnvBaseBranch] = cell.Spec.Repo.Branch
