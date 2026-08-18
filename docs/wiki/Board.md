@@ -5,7 +5,7 @@
 控制台每个名词都有一个页面,却没有一个可以站的地方:工作台数三个数字,派工表单
 埋在项目里的第二个 tab 下面。你可以把整套系统操作一遍,却始终没看见它在发生什么。
 
-黑板是团队的一条流:
+黑板是一个项目的一条流:
 
 ```
 @e2e 把商品卡片改成两列
@@ -23,9 +23,9 @@
 资源,一千条小 CR 就是一千个 watch 事件,而它只是给人看的。有上限(300 条)——
 Kubernetes 对象不是数据库,**真正的记录是这些工作产出的 git 历史,不是关于它们的聊天。**
 
-**团队会话独立于个人会话。** 黑板和项目的那段对话属于**团队**,不属于恰好开口的
+**黑板会话独立于个人会话。** 黑板和项目的那段对话属于**这个项目**,不属于恰好开口的
 那个人——否则第一个说话的人等于把自己的私有终端借了出去,第二个人则被回答在别人
-的会话里。它有自己的 uid、自己的私有目录;团队成员都能驱动它。
+的会话里。它有自己的 uid、自己的私有目录;项目成员都能驱动它。
 
 **@ 匹配不到时绝不静默。** 单个项目直接路由;多个项目就明说该 @ 哪一个;一个都
 没有就说清楚。让人对着一条永远不会来的回复干等,是最糟的失败方式。
@@ -41,7 +41,7 @@ Kubernetes 对象不是数据库,**真正的记录是这些工作产出的 git �
 <details>
 <summary><b>English</b> — the board</summary>
 
-The console had a page per noun and nowhere to stand. The board is the team's
+The console had a page per noun and nowhere to stand. The board is the project's
 message stream: type `@shop make the product cards two columns` and the agent
 answers there — once when it takes the job, once when it finishes, both with
 a link to the work. `@someone` mentions a person; reading the stream marks it
@@ -52,7 +52,7 @@ Three decisions worth knowing:
 - **Posts live in one object, not one per post.** A post is not something
   anybody reconciles, and the durable record of what happened is the git
   history the work produced — not the chat about it. Bounded at 300.
-- **The team's conversation with a project is its own session**, not the
+- **The board's conversation with a project is its own session**, not the
   asker's. Otherwise the first person to type lends out their private
   terminal, and the second is answered inside somebody else's session.
 - **An `@` that matches nothing never silently does nothing.** One project,

@@ -19,7 +19,7 @@
 ### 用起来是什么样
 
 1. **建一个项目。** 指一个仓库,从列表里挑 agent 和模型。工作间大约一分钟起来。
-2. **交代一件事。** 在团队黑板上打 `@shop 把商品卡片改成两列`,或者从项目页派。
+2. **交代一件事。** 在这个项目的黑板上直接说「把商品卡片改成两列」,或者从项目页派。
 3. **想看就看。** agent 接单时回你一句,做完再回一句。想知道它在干嘛,就打开它
    的终端。
 4. **看它做了什么。** 产出是一条带 diff 的分支。批准就变成 PR,发布就进正式区。
@@ -64,8 +64,7 @@ AgentCell 做的每一件事,都是八个名词之一在作用于另一个。搞
 |---|---|---|
 | **项目** | 一个仓库,给它配好环境并一直开着 | 其他一切都挂在它上面 |
 | **会话** | 你在这个项目里的工作副本和终端 | 每人一条,你就是在这儿跟 agent 说话 |
-| **团队** | 一份名单,写清谁能做什么 | 加一次就行,不用每个项目加一遍 |
-| **黑板** | 团队的消息流 | 在这儿交代活,也在这儿被告知做完了 |
+| **黑板** | 这个项目的消息流 | 在这儿交代活,也在这儿被告知做完了 |
 | **槽位** | 在一个项目里占用机器的许可 | 限的是**同时几个人**在干活,不是几个任务 |
 | **机器池** | 管理员提供的一类机器 | 这个项目跑在哪台服务器上 |
 | **模型 key** | 你的 API key | 自己加、自己花,不会稀里糊涂被别人用掉 |
@@ -74,7 +73,7 @@ AgentCell 做的每一件事,都是八个名词之一在作用于另一个。搞
 真正承载设计的是它们之间的关系:
 
 ```
-Team ──治理──▶ Cell ──落在──▶ Pool(一台机器;Cell 不能跨节点)
+Cell ──落在──▶ Pool(一台机器;Cell 不能跨节点)
                 │
                 ├── anchor ........ 共享检出 + 基础预览
                 └── Runtime(每人一个,0700)──▶ Session(一个 tmux 窗口)
@@ -89,7 +88,6 @@ Team ──治理──▶ Cell ──落在──▶ Pool(一台机器;Cell 不
 
 ```mermaid
 flowchart TB
-    TEAM["团队<br/>谁能做什么"]
     subgraph CELL["一个项目 —— 住在一台机器上"]
         OBJ[("代码<br/>共享,对会话只读")]
         ANCHOR["常驻的那部分<br/>守着检出和预览"]
@@ -99,17 +97,16 @@ flowchart TB
         subgraph UB["Bob 的私有区"]
             WB["他的会话"]
         end
-        subgraph UT["团队自己的区"]
+        subgraph UT["你在这个项目里的私有区"]
             WT["黑板的会话<br/>回答 @项目 的交代"]
         end
     end
-    TEAM -.->|"给每个人角色"| CELL
     WA & WB & WT -.->|"读"| OBJ
     WA & WB & WT -->|"交活 —— 唯一的出口"| BR["一条分支 → 有人看过 → PR → 发布"]
 ```
 
 这张图该这样读:**项目才是长期存在的那个东西。** 它里面每个人有自己的一角——
-自己的文件副本、自己的终端,彼此看不见。团队也有一角,黑板上的交代就由它来答。
+自己的文件副本、自己的终端,彼此看不见。项目自己也有一角,黑板上的交代就由它来答。
 东西离开这里只有一条路:交活;而且必须有人看过才算数。
 
 <details>
@@ -117,7 +114,6 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    TEAM["Team<br/>who is allowed to do what"]
     subgraph CELL["A project — lives on one machine"]
         OBJ[("The code<br/>shared, read-only to sessions")]
         ANCHOR["Always-on part<br/>keeps the checkout and the preview"]
@@ -127,11 +123,10 @@ flowchart TB
         subgraph UB["Bob's private area"]
             WB["his session"]
         end
-        subgraph UT["The team's own area"]
+        subgraph UT["Your own area in the project"]
             WT["the board's session<br/>answers @project asks"]
         end
     end
-    TEAM -.->|"gives people their roles"| CELL
     WA & WB & WT -.->|"read"| OBJ
     WA & WB & WT -->|"hand it in — the only way out"| BR["a branch → someone reads it → PR → released"]
 ```
@@ -183,7 +178,11 @@ flowchart TB
 | 派工表单由服务端目录驱动:选 runner 只列它能驱动的 provider、默认同厂商、模型来自清单且可自填 | ✅ |
 | **浏览器内终端**(xterm.js ↔ tmux over WebSocket,可读写);只有会话的 owner 能 attach,Cell 的 maintainer 也不行 | ✅ 已验证 |
 | **休眠回收**:空闲会话交回槽位与运行时,保留 worktree 与对话;打开终端或追问即在原处唤醒 | ✅ 已验证 |
-| **团队**:一份名单覆盖多个工作区;Cell 上的点名双向覆盖它;归属团队会让工作区变为按成员授权 | ✅ 已验证([ADR-0013](docs/adr/0013-authorization.md)) |
+| **账号**:邀请、邮箱登录、一人一个主体;改一次密码所有地方的登录同时失效(cookie 签名覆盖了密码哈希) | ✅ 已验证 |
+| **文件**:上传规格、表格;文本在上传时抽一次,落到 worktree 的 `.agentcell/library/`,agent 用 Read 和 grep 直接读 | ✅ 已验证 |
+| **交互式 agent**:常驻会话按人的用法启动 CLI——它自己的界面、自己的斜杠命令;后续消息是打字打给它 | ✅ 已验证 |
+| **预览**:项目把进行中的成果服务在自己的源上,在终端旁边的页签里看 | ✅ 已验证 |
+| **成员**:每个项目自己带一份名单,写清谁能做什么;点名第一个人就把这个项目对其他人关上 | ✅ 已验证([ADR-0013](docs/adr/0013-authorization.md)) |
 | **运行位置**:从真实存在的机器池里挑;污点自动推导而非手写;调度不出去时如实报出调度器原话 | ✅ 已验证 |
 | 模型凭据由属主在控制台自助管理(只写,只回显后四位) | ✅ 已验证 |
 | 集群内镜像仓库(拉不到 ghcr.io 的内网适用)+ 814MB 的 alpine devbox | ✅ 已验证([TEAM_SETUP](docs/TEAM_SETUP.md)) |
@@ -193,7 +192,7 @@ flowchart TB
 | **正式区可外置**:Cell 内隔离正式区,或把发布交给真正在跑它的系统(签名 webhook) | ✅ 实测 |
 | 容量:所有负载声明 requests/limits,每个 Cell 有 ResourceQuota。注意常驻会话是 tmux window,与同一 runtime 内其他窗口共享额度——K8s 按 pod 预留,而 window 不是 pod | ✅ 实测([Run 8](docs/E2E_RESULTS.md)) |
 | runtime pod 被替换后续上原对话(窗口会恢复,但重新接上 CLI 对话未接) | ⬜ 设计中 |
-| **黑板**:团队流里 `@工作区 交代一件事` 就派工,答复回到同一处;`@某人` 记提及;团队与项目的那段对话是它自己的会话,不占用提问者的 | ✅ 已验证 |
+| **黑板**:一个项目一块黑板——在上面说话就是对它的 agent 说,不用点名;`@某人` 记提及;黑板那段对话是它自己的会话,不占用提问者的 | ✅ 已验证 |
 | **每人每工作区一条活会话**,追问排队、唤醒后送达;槽位数的是人,不是任务 | ✅ 已验证 |
 | **PlacementClass**:机器池由管理员提供;maintainer 送来的任何东西都不会变成节点选择器或污点容忍 | ✅ 已验证 |
 | **新建项目靠选择**:devbox、runner、供应商都是卡片,且按可驱动的组合收窄;只有名称和仓库要打字 | ✅ |
@@ -257,7 +256,23 @@ kubectl -n agentcell-system port-forward svc/celld 8080:80   # http://localhost:
 
 ## 多人使用
 
-开箱只有一个主体:持有令牌的人。接上 OIDC 之后,每个人有自己的归属、uid 和运行时:
+三种进法,按部署规模从小到大。
+
+**一个令牌。** 开箱只有一个主体:持有它的人。适合一个人自己用——把这件事
+说明白,好过做出一副有隔离的样子。
+
+**账号,存在一个文件里。** 给 celld 指一个 SQLite 文件,它就长出人来:
+邀请、邮箱登录、一人一个主体,各自有归属、uid 和运行时。
+
+```sh
+--set accounts.db=/var/lib/agentcell/agentcell.db \
+--set accounts.bootstrapAdmin=you@example.com   # 配合 AGENTCELL_BOOTSTRAP_PASSWORD
+```
+
+**没有自助注册**:这里的账号附带集群里的一个 shell,所以得由已经在里面的人
+郑重交出去。邀请链接一次性、自己会过期、且只按哈希存储。
+
+**OIDC。** 接上供应商,身份就由它来定:
 
 ```sh
 helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \

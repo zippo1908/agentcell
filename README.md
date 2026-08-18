@@ -23,7 +23,7 @@ it become a pull request.
 
 1. **Make a project.** Point it at a repo, pick an agent and a model from a
    list. The workspace comes up in about a minute.
-2. **Ask for something.** Type it on the team board — `@shop make the product
+2. **Ask for something.** Type it on the project board — `@shop make the product
    cards two columns` — or from the project page.
 3. **Watch, or don't.** The agent answers on the board when it takes the job
    and again when it finishes. If you want to see what it is doing, open its
@@ -85,8 +85,7 @@ those, and which one owns which, is most of learning the system.
 |---|---|---|
 | **Project** | one repository, set up and kept running | it is the unit everything else hangs off |
 | **Session** | your working copy and your terminal in a project | one per person; it is where you talk to the agent |
-| **Team** | a list of people and what they may do | join once, not once per project |
-| **Board** | the team's message stream | ask for work here, get told here when it is done |
+| **Board** | the project's message stream | ask for work here, get told here when it is done |
 | **Slot** | permission to use the machine in a project | limits how many **people** work there at once, not how many tasks |
 | **Machine pool** | a class of machine an admin offers | which server a project runs on |
 | **Model key** | your API key | yours to add, yours to spend, never shared by accident |
@@ -95,7 +94,7 @@ those, and which one owns which, is most of learning the system.
 The relationships that carry the design:
 
 ```
-Team ──governs──▶ Cell ──placed on──▶ Pool (one node; the Cell cannot span nodes)
+Cell ──placed on──▶ Pool (one node; the Cell cannot span nodes)
                    │
                    ├── anchor ........ the shared checkout + base preview
                    └── Runtime (per user, 0700) ──▶ Session (a tmux window)
@@ -111,7 +110,6 @@ process layer. Nobody attaches to anybody else's terminal.
 
 ```mermaid
 flowchart TB
-    TEAM["Team<br/>who is allowed to do what"]
     subgraph CELL["A project — lives on one machine"]
         OBJ[("The code<br/>shared, read-only to sessions")]
         ANCHOR["Always-on part<br/>keeps the checkout and the preview"]
@@ -121,18 +119,17 @@ flowchart TB
         subgraph UB["Bob's private area"]
             WB["his session"]
         end
-        subgraph UT["The team's own area"]
+        subgraph UT["Your own area in the project"]
             WT["the board's session<br/>answers @project asks"]
         end
     end
-    TEAM -.->|"gives people their roles"| CELL
     WA & WB & WT -.->|"read"| OBJ
     WA & WB & WT -->|"hand it in — the only way out"| BR["a branch → someone reads it → PR → released"]
 ```
 
 Read it like this: **the project is the thing that lasts.** Inside it, each
 person gets their own corner — their own copy of the files, their own
-terminal — and those corners cannot see into each other. The team gets one
+terminal — and those corners cannot see into each other. The project gets one
 too, which is what answers questions asked on the board. The only way
 anything leaves is by being handed in, and a person reads it before it counts.
 
@@ -141,7 +138,6 @@ anything leaves is by being handed in, and a person reads it before it counts.
 
 ```mermaid
 flowchart TB
-    TEAM["团队<br/>谁能做什么"]
     subgraph CELL["一个项目 —— 住在一台机器上"]
         OBJ[("代码<br/>共享,对会话只读")]
         ANCHOR["常驻的那部分<br/>守着检出和预览"]
@@ -151,11 +147,10 @@ flowchart TB
         subgraph UB["Bob 的私有区"]
             WB["他的会话"]
         end
-        subgraph UT["团队自己的区"]
+        subgraph UT["你在这个项目里的私有区"]
             WT["黑板的会话<br/>回答 @项目 的交代"]
         end
     end
-    TEAM -.->|"给每个人角色"| CELL
     WA & WB & WT -.->|"读"| OBJ
     WA & WB & WT -->|"交活 —— 唯一的出口"| BR["一条分支 → 有人看过 → PR → 发布"]
 ```
@@ -214,7 +209,11 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Helm chart + GHCR images + cloud presets (k3s / ACK / TKE) | ✅ `helm lint`-verified |
 | **Terminal in the browser** (xterm.js ↔ tmux over WebSocket, read-write); only the session's owner may attach — a Cell maintainer may not | ✅ tested |
 | **Dormancy**: an idle session gives back its slot and runtime and keeps its worktree + conversation; opening the terminal or a follow-up wakes it where it was | ✅ tested |
-| **Teams**: one membership list across many Cells; a Cell entry overrides it in both directions; naming a team closes the Cell | ✅ tested ([ADR-0013](docs/adr/0013-authorization.md)) |
+| **Accounts**: invitations, email login, a principal per person; a password change ends every session because the cookie signature covers the hash | ✅ tested |
+| **Files**: upload a spec or a spreadsheet; text is extracted once, on upload, and lands in the worktree at `.agentcell/library/` for the agent to Read and grep | ✅ tested |
+| **Interactive agent**: the resident session runs the CLI the way a person would — its own screen, its own slash commands — and a follow-up is typed at it | ✅ tested |
+| **Preview**: a project serves its own work-in-progress on its own origin, shown in a tab beside the terminal | ✅ tested |
+| **Members**: each project carries its own list of people and what they may do; naming the first person closes the project to everyone else | ✅ tested ([ADR-0013](docs/adr/0013-authorization.md)) |
 | **Placement**: pick the machine class a Cell runs on from the pools that actually exist; taints derived, not hand-written; an unschedulable Cell reports the scheduler's own reason | ✅ tested |
 | Model credentials managed by their owner in the console (write-only, last-four hint) | ✅ tested |
 | In-cluster image registry for clusters that cannot reach ghcr.io, plus an 814 MB alpine devbox | ✅ tested ([TEAM_SETUP](docs/TEAM_SETUP.md)) |
@@ -224,7 +223,7 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | Re-attaching a restored window to the CLI's own conversation (the window comes back; the CLI is not told to resume into it) | ⬜ designed |
 | **celld leader election**: one replica reconciles, every replica serves the console, ~4s takeover measured on a killed leader | ✅ tested |
 | Single-use preview tickets enforced across replicas (redemption is an atomic create against the API server, not a map in one process) | ✅ tested |
-| **Board**: `@cell do the thing` on a team stream dispatches and answers in the same place; `@user` mentions; the team's board conversation is its own session, not the asker's | ✅ tested |
+| **Board**: one stream per project — saying something there IS asking that project's agent, no `@cell` needed; `@user` mentions; the board's conversation is its own session, not the asker's | ✅ tested |
 | **One live session per person per Cell**, with follow-ups queued and delivered on wake; the slot cap bounds people, not tasks | ✅ tested |
 | **PlacementClass**: an administrator offers machine pools; nothing a maintainer sends can become a node selector or a toleration | ✅ tested |
 | **Create-a-project by choosing**: devbox, runner and provider as cards narrowed to what can be driven; only name and repo are typed | ✅ |
@@ -308,9 +307,26 @@ level of authorization, and AgentCell does not pretend otherwise.
 
 ## Multi-user
 
-Out of the box AgentCell has one principal: whoever holds the token. Point it
-at an OIDC provider and each person gets their own ownership, uid and
-runtime:
+Three ways in, from smallest to largest deployment.
+
+**A token.** Out of the box AgentCell has one principal: whoever holds it.
+Right for one operator; say so rather than implying isolation that is not
+there.
+
+**Accounts, in a file.** Point celld at a SQLite file and it grows people:
+invitations, email logins, and a principal per human — each with their own
+ownership, uid and runtime.
+
+```sh
+--set accounts.db=/var/lib/agentcell/agentcell.db \
+--set accounts.bootstrapAdmin=you@example.com   # with AGENTCELL_BOOTSTRAP_PASSWORD
+```
+
+There is no self-registration: an account here comes with a shell inside the
+cluster, so somebody already inside hands it over deliberately. The invite
+link is one-time, expires on its own, and is stored only as a hash.
+
+**OIDC.** Point it at a provider and identity comes from there instead:
 
 ```sh
 helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \

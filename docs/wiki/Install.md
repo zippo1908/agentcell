@@ -47,7 +47,7 @@ helm upgrade ... --set celld.replicas=2 --set previewKeySecret=celld-preview-key
 [ ] OIDC + 一个 break-glass token
 [ ] git 凭据(绑定到它的仓库)
 [ ] 每人一把模型 key,标上属主
-[ ] 第一个团队,第一个项目
+[ ] 第一个项目
 [ ] 一次真的派工:到得了模型,清算推得上 forge
 ```
 

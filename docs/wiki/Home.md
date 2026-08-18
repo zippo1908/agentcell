@@ -66,7 +66,7 @@ does it become a pull request.
 
 1. **Make a project** — point it at a repo, pick an agent and a model from a
    list. It comes up in about a minute.
-2. **Ask for something** — on the team board: `@shop make the product cards
+2. **Ask for something** — on the project board: `make the product cards
    two columns`.
 3. **Watch, or don't** — it answers when it takes the job and when it
    finishes. Open its terminal if you want to see.

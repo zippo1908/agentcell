@@ -13,7 +13,7 @@ xterm.js 经 WebSocket 接到 **agent 正在敲字的那个窗口**,而且**可�
 
 - **只有会话的 owner 能开终端**,项目的 maintainer 也不行。socket 在用户私有目录
   里,它本身就是权限;能看项目 ≠ 能拿别人的键盘。
-  - **例外**:黑板那条团队会话,团队成员都能驱动——那段对话是团队的。
+  - **例外**:黑板那条会话,项目成员都能驱动——那段对话属于这个项目。
 - **Origin 必须同源。** 终端是这里最值钱的可劫持目标。
 
 ## 休眠:空闲是睡着,不是结束
@@ -52,8 +52,8 @@ from outside "working" and "stuck" look identical. Your session already runs
 in a terminal for the agent tool's own sake; the browser just attaches to the
 same one — and you can type into it.
 
-Two boundaries: only the session's owner may attach (the team's board session
-excepted, because that conversation is the team's), and the page must be
+Two boundaries: only the session's owner may attach (the board session
+excepted, because that conversation belongs to the project), and the page must be
 same-origin — a terminal is the most valuable thing here to hijack.
 
 **Dormancy.** No agent running and nobody watching for ~15 minutes, and the

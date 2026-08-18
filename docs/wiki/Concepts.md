@@ -7,8 +7,7 @@
 |---|---|---|
 | **项目**(Cell) | 一个仓库,配好环境并一直开着 | 其他一切都挂在它上面 |
 | **会话**(Session) | 你在这个项目里的工作副本和终端 | 每人一条;你就是在这儿跟 agent 说话 |
-| **团队**(Team) | 一份名单,写清谁能做什么 | 加一次,不用每个项目加一遍 |
-| **黑板**(Board) | 团队的消息流 | 在这儿交代活,也在这儿被告知做完了 |
+| **黑板**(Board) | 这个项目的消息流 | 在这儿交代活,也在这儿被告知做完了 |
 | **槽位**(Slot) | 在一个项目里占用机器的许可 | 限的是同时**几个人**在干活,不是几个任务 |
 | **机器池**(PlacementClass) | 管理员**提供**的一类机器 | 这个项目跑在哪台服务器上 |
 | **运行时**(Runtime) | 你在这个项目里的那份私有环境 | 别人看不进来,你也看不进别人的 |
@@ -20,7 +19,6 @@
 
 ```mermaid
 flowchart TB
-    TEAM["团队<br/>谁能做什么"]
     subgraph CELL["一个项目 —— 住在一台机器上"]
         OBJ[("代码<br/>共享,对会话只读")]
         ANCHOR["常驻的那部分<br/>守着检出和预览"]
@@ -30,17 +28,16 @@ flowchart TB
         subgraph UB["Bob 的私有区"]
             WB["他的会话"]
         end
-        subgraph UT["团队自己的区"]
+        subgraph UT["项目自己的区"]
             WT["黑板的会话<br/>回答 @项目 的交代"]
         end
     end
-    TEAM -.->|"给每个人角色"| CELL
     WA & WB & WT -.->|"读"| OBJ
     WA & WB & WT -->|"交活 —— 唯一的出口"| BR["一条分支 → 有人看过 → PR → 发布"]
 ```
 
 这张图该这样读:**项目才是长期存在的那个东西。** 它里面每个人有自己的一角——
-自己的文件副本、自己的终端,彼此看不见。团队也有一角,黑板上的交代就由它来答。
+自己的文件副本、自己的终端,彼此看不见。项目自己也有一角,黑板上的交代就由它来答。
 东西离开这里只有一条路:交活;而且必须有人看过才算数。
 
 <details>
@@ -48,7 +45,6 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    TEAM["Team<br/>who is allowed to do what"]
     subgraph CELL["A project — lives on one machine"]
         OBJ[("The code<br/>shared, read-only to sessions")]
         ANCHOR["Always-on part<br/>keeps the checkout and the preview"]
@@ -58,11 +54,10 @@ flowchart TB
         subgraph UB["Bob's private area"]
             WB["his session"]
         end
-        subgraph UT["The team's own area"]
+        subgraph UT["The project's own area"]
             WT["the board's session<br/>answers @project asks"]
         end
     end
-    TEAM -.->|"gives people their roles"| CELL
     WA & WB & WT -.->|"read"| OBJ
     WA & WB & WT -->|"hand it in — the only way out"| BR["a branch → someone reads it → PR → released"]
 ```
@@ -107,8 +102,7 @@ flowchart TB
 |---|---|---|
 | **Project** (Cell) | one repository, set up and kept running | everything else hangs off it |
 | **Session** | your working copy and terminal in a project | one per person; where you talk to the agent |
-| **Team** | a list of people and what they may do | join once, not once per project |
-| **Board** | the team's message stream | ask for work here; hear back here |
+| **Board** | the project's message stream | ask for work here; hear back here |
 | **Slot** | permission to use the machine in a project | limits how many **people** work there at once |
 | **Machine pool** (PlacementClass) | a class of machine an admin offers | which server a project runs on |
 | **Runtime** | your private environment inside a project | nobody can see into yours, you cannot see into theirs |
