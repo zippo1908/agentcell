@@ -648,6 +648,17 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		var wErr error
 		alive, working, attached, wErr = r.windowState(ctx, sess, ns, id)
 		err = wErr
+		// While this session is alive it is the one holding the account's
+		// live credential, because the CLI refreshes on its own schedule
+		// and the provider rotates the refresh token when it does. Read it
+		// back each time round so the stored copy stays the current one —
+		// otherwise the NEXT session starts with a token that was already
+		// rotated away and the person is told to log in again.
+		if alive {
+			if uid, uerr := r.ownerUID(ctx, sess); uerr == nil {
+				r.syncAccountCredential(ctx, sess, ns, id, uid)
+			}
+		}
 		// A deadline somebody SET is still a deadline. Only an explicit
 		// TTLSeconds ends a resident session: the default here is an idle
 		// value, and treating it as an absolute lifetime would put a
