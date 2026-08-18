@@ -31,10 +31,15 @@ export function Terminal({ session }: { session: string }) {
       // every Chinese character, including the agent's own output, as an
       // underscore. Consolas/DejaVu keep the ASCII shape somebody expects;
       // the CJK families are what make the rest legible at all.
+      // The console's own Chinese face comes first. It is restricted by
+      // unicode-range to CJK, so ASCII still resolves to whatever monospace
+      // the machine prefers — but Chinese no longer depends on the machine
+      // having a font for it, which is what turned the agent's replies into
+      // rows of underscores.
       fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", ' +
-        '"Microsoft YaHei Mono", "Microsoft YaHei", "Noto Sans Mono CJK SC", ' +
-        '"Source Han Mono SC", "PingFang SC", monospace',
+        '"AgentCell CJK Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, ' +
+        '"DejaVu Sans Mono", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", ' +
+        '"PingFang SC", monospace',
       cursorBlink: true,
       // Enough to scroll back through a long build without holding a
       // session's entire life in memory.
