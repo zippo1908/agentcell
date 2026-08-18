@@ -498,8 +498,19 @@ func runAttach(args []string) error {
 	if out, err := tmux(sock, "select-window", "-t", view+":"+window); err != nil {
 		return fmt.Errorf("attach: this session has no window open (%s)", strings.TrimSpace(out))
 	}
-	// Replace this process so the terminal is tmux's, not ours.
-	return syscall.Exec(tmuxBin, []string{"tmux", "-S", sock, "attach", "-t", view}, os.Environ())
+	// -u, and a UTF-8 locale in the environment tmux inherits.
+	//
+	// This is what turned every Chinese character in the browser into an
+	// underscore. tmux decides whether its CLIENT can render UTF-8 from that
+	// client's locale, and an exec into a pod inherits an environment with
+	// no LANG at all — so tmux concluded the viewer was a plain ASCII
+	// terminal and helpfully substituted "_" for every wide character. The
+	// bytes were correct at every other point: correct in the pane, correct
+	// on the wire, correct in the DOM — as underscores, because tmux had
+	// already replaced them here. No font could have fixed that.
+	env := append(os.Environ(), "LANG=C.UTF-8", "LC_ALL=C.UTF-8")
+	return syscall.Exec(tmuxBin,
+		[]string{"tmux", "-u", "-S", sock, "attach", "-t", view}, env)
 }
 
 // runDetach tears down a viewer's grouped session.
