@@ -37,17 +37,29 @@ import (
 // session's owner, membership in the Cell notwithstanding. A maintainer can
 // see a project; nobody gets somebody else's keyboard.
 
-var upgrader = websocket.Upgrader{
-	// Same-origin only. The console is served from this origin; a terminal is
-	// the most valuable thing here to hijack, so an unchecked Origin would be
-	// handing any page on the internet a shell in the user's runtime.
-	CheckOrigin: func(r *http.Request) bool {
-		o := r.Header.Get("Origin")
-		if o == "" {
-			return false
-		}
-		return sameOrigin(o, r)
-	},
+// upgrader is per-Handler because the origin check has to agree with the
+// rest of the console about what this server's own origin IS — including
+// whether a reverse proxy's word for it may be trusted at all.
+func (h *Handler) upgrader() *websocket.Upgrader {
+	return &websocket.Upgrader{
+		// Same-origin only. The console is served from this origin; a
+		// terminal is the most valuable thing here to hijack, so an
+		// unchecked Origin would be handing any page on the internet a
+		// shell in the user's runtime.
+		CheckOrigin: func(r *http.Request) bool {
+			o := r.Header.Get("Origin")
+			if o == "" {
+				return false
+			}
+			// h.Auth decides this, not us. It applies the operator's
+			// --trust-forwarded choice; the copy that used to live here
+			// read X-Forwarded-* unconditionally, so a deployment that had
+			// deliberately said "do not trust proxy headers" still did —
+			// only for terminals, the one endpoint where being wrong hands
+			// over a keyboard.
+			return strings.EqualFold(o, h.Auth.requestOrigin(r))
+		},
+	}
 }
 
 // termMessage is what the browser sends up: either keystrokes or a resize.
@@ -111,7 +123,7 @@ func (h *Handler) sessionTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader().Upgrade(w, r, nil)
 	if err != nil {
 		return // Upgrade already wrote the response.
 	}
@@ -283,24 +295,4 @@ func (t *wsTerminal) Next() *remotecommand.TerminalSize {
 		return nil
 	}
 	return &s
-}
-
-// sameOrigin compares a websocket Origin header against the request's own
-// host, taking the forwarded headers into account the same way the CSRF
-// check does — celld normally sits behind a TLS-terminating proxy, so its
-// own idea of scheme and host is not the browser's.
-func sameOrigin(origin string, r *http.Request) bool {
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
-	}
-	scheme := r.Header.Get("X-Forwarded-Proto")
-	if scheme == "" {
-		if r.TLS != nil {
-			scheme = "https"
-		} else {
-			scheme = "http"
-		}
-	}
-	return strings.EqualFold(origin, scheme+"://"+host)
 }

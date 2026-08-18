@@ -206,13 +206,39 @@ func (a *Authenticator) requestOrigin(r *http.Request) string { //nolint:revive 
 		scheme = "https"
 	}
 	if p := a.forwarded(r, "X-Forwarded-Proto"); p != "" {
-		scheme = p
+		scheme = normalizeScheme(p)
 	}
 	host := r.Host
 	if h := a.forwarded(r, "X-Forwarded-Host"); h != "" {
 		host = h
 	}
 	return scheme + "://" + host
+}
+
+// normalizeScheme turns what a proxy reports into what a BROWSER would put
+// in an Origin header.
+//
+// Traefik sets X-Forwarded-Proto to "ws"/"wss" on an upgrade request — a
+// reasonable description of the connection, and the reason terminals worked
+// on a port-forward and failed behind the ingress: we reconstructed our own
+// origin as "ws://console…" and compared it against the browser's
+// "http://console…", which can never match. A browser's Origin is always
+// http or https, whatever protocol the connection later becomes.
+//
+// A comma-separated list is a chain of proxies; the first entry is what the
+// browser actually spoke to.
+func normalizeScheme(s string) string {
+	if i := strings.IndexByte(s, ','); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "ws":
+		return "http"
+	case "wss":
+		return "https"
+	}
+	return s
 }
 
 // secureRequest reports whether the browser reached us over TLS.
