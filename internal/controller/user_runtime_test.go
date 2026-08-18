@@ -800,13 +800,16 @@ func TestResidentSessionIdlesOutRatherThanAgesOut(t *testing.T) {
 			c := newFake(t, testCell(), credSecret("bailian-key"), s)
 			r := sessionReconciler(t, c)
 			r.UIDs = &useruid.Allocator{Client: c, Namespace: controlNS}
-			exit := "0"
+			// An interactive agent never exits, so "working" is expressed
+			// the way the runtime actually reports it: how long the window
+			// has been quiet.
+			exit, quiet := "0", "3600"
 			if tc.working {
-				exit = "-"
+				exit, quiet = "-", "2"
 			}
 			r.Exec = func(_ context.Context, _, _ string, argv []string, _ io.Reader) (string, error) {
 				if len(argv) > 1 && argv[1] == "window-status" {
-					return "alive=true exit=" + exit + "\n", nil
+					return "alive=true exit=" + exit + " quiet=" + quiet + "\n", nil
 				}
 				return "", nil
 			}
@@ -879,14 +882,22 @@ func TestOpeningWithNoTaskStartsNoAgent(t *testing.T) {
 		}
 		opened = true
 		joined := strings.Join(call.argv, " ")
-		if !strings.Contains(joined, "-restore") {
-			t.Errorf("window opened without -restore: %v", call.argv)
+		// The interactive form, and nothing that looks like a prompt: an
+		// empty -p is the exact shape this test exists to keep out.
+		if !strings.Contains(joined, "claude") {
+			t.Errorf("the agent was not started at all: %v", call.argv)
 		}
-		if strings.Contains(joined, "kimi") {
-			t.Errorf("an agent was started for a session with no task: %v", call.argv)
+		if strings.Contains(joined, " -p") {
+			t.Errorf("a session with no task was started in print mode: %v", call.argv)
 		}
 	}
 	if !opened {
 		t.Fatalf("no window was opened at all: %v", rec.calls)
+	}
+	// And nothing was typed at it — there was nothing to say.
+	for _, call := range rec.calls {
+		if len(call.argv) > 2 && call.argv[1] == "tell" {
+			t.Errorf("something was said to an agent nobody spoke to: %v", call.argv)
+		}
 	}
 }

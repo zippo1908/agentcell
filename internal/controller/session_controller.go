@@ -1170,17 +1170,26 @@ func (r *SessionReconciler) deliverPending(ctx context.Context, sess *acv1.Sessi
 	if r.Exec == nil {
 		return fmt.Errorf("no exec channel")
 	}
-	argv, err := access.ResumeArgvFor(sess.Spec.Runner, sess.Spec.PendingTask, sess.Status.RunnerSessionID)
-	if err != nil {
-		// A runner that cannot resume starts fresh in the same worktree,
-		// which is honest and visible — the alternative is silently dropping
-		// what somebody asked for.
-		argv, err = access.HeadlessArgv(sess.Spec.Runner, sess.Spec.PendingTask)
+	// With an interactive agent in the window, a follow-up is typed at it —
+	// the same thing the person would do. Starting another one-shot process
+	// would either be read as text by the agent already there, or launch a
+	// second agent inside the first.
+	var cmd []string
+	if len(access.InteractiveArgvFor(sess.Spec.Runner)) > 0 {
+		cmd = []string{runtimeapi.RuntimeBin, "tell", id, "-say", sess.Spec.PendingTask}
+	} else {
+		argv, err := access.ResumeArgvFor(sess.Spec.Runner, sess.Spec.PendingTask, sess.Status.RunnerSessionID)
 		if err != nil {
-			return err
+			// A runner that cannot resume starts fresh in the same worktree,
+			// which is honest and visible — the alternative is silently
+			// dropping what somebody asked for.
+			argv, err = access.HeadlessArgv(sess.Spec.Runner, sess.Spec.PendingTask)
+			if err != nil {
+				return err
+			}
 		}
+		cmd = append([]string{runtimeapi.RuntimeBin, "tell", id}, argv...)
 	}
-	cmd := append([]string{runtimeapi.RuntimeBin, "tell", id}, argv...)
 	if _, err := r.Exec(ctx, ns, sess.Status.PodName, cmd, nil); err != nil {
 		return err
 	}

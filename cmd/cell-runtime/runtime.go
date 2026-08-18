@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -169,6 +170,10 @@ func runWindowOpen(args []string) error {
 	if err := writeEnvFile(envFile, env); err != nil {
 		return err
 	}
+	// The agent CLIs read modified Enter (Shift-Enter for a newline in a
+	// prompt) and say so out loud when it is off. Set on the server, once,
+	// so every window has it.
+	_, _ = tmux(sock, "set", "-g", "extended-keys", "on")
 	if out, err := tmux(sock, "new-window", "-d", "-t", ids.TmuxHolder, "-n", window, "-c", wt); err != nil {
 		_ = os.Remove(envFile)
 		return fmt.Errorf("tmux new-window: %v: %s", err, out)
@@ -185,8 +190,44 @@ func runWindowOpen(args []string) error {
 	if err := sendCommand(sock, window, argv, true, id, envFile); err != nil {
 		return err
 	}
+	answerFirstRunPrompts(sock, window)
 	fmt.Printf("window %s opened in %s\n", window, wt)
 	return nil
+}
+
+// answerFirstRunPrompts clears the gates a CLI puts in front of a person on
+// its first run in a directory.
+//
+// Kimi asks "Trust this folder?" before it will start, and every session
+// gets a fresh state directory, so it asks EVERY time. Left alone, each new
+// session sits on a menu waiting for a keypress — and the first thing the
+// person says gets eaten by that menu instead of reaching the agent.
+//
+// Answered by looking, not blindly: sending keys into a terminal that is
+// not showing the dialog would type into the agent's input box. So this
+// reads the screen, acts only on what it finds, and gives up quietly.
+func answerFirstRunPrompts(sock, window string) {
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Second)
+		out, err := tmux(sock, "capture-pane", "-p", "-t", window)
+		if err != nil {
+			continue
+		}
+		if !strings.Contains(out, "Trust this folder") {
+			continue
+		}
+		// The cursor starts on "Don't trust"; trusting is one line up.
+		// Trusting is right here: this directory is a worktree the platform
+		// just created from the project's own repository, in a container
+		// that exists to run that project's code.
+		if _, err := tmux(sock, "send-keys", "-t", window, "Up"); err != nil {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		_, _ = tmux(sock, "send-keys", "-t", window, "Enter")
+		return
+	}
 }
 
 // writeEnvFile lays down the window's environment, readable only by its
@@ -257,12 +298,33 @@ func runWindowStatus(args []string) error {
 			}
 		}
 	}
+	// How long since this window last produced anything.
+	//
+	// The exit marker answers "did the one-shot command finish", which an
+	// INTERACTIVE agent never does — it sits at its own prompt forever. For
+	// those, the honest question is whether anything is happening, and tmux
+	// already timestamps the last output per window. Without this an
+	// interactive session either looks permanently busy (and never sleeps)
+	// or permanently idle (and gets slept mid-answer).
+	quiet := "-"
+	if out, err := tmux(sock, "list-windows", "-a", "-F",
+		"#{window_name} #{window_activity}"); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			name, ts, ok := strings.Cut(strings.TrimSpace(line), " ")
+			if !ok || name != ids.TmuxWindow(id) {
+				continue
+			}
+			if unix, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64); err == nil && unix > 0 {
+				quiet = strconv.FormatInt(int64(time.Since(time.Unix(unix, 0)).Seconds()), 10)
+			}
+		}
+	}
 	// One line, parsed by the control plane: alive=<bool> exit=<code|->
 	code := exit
 	if code == "" {
 		code = "-"
 	}
-	fmt.Printf("alive=%t exit=%s attached=%t\n", alive, code, attached)
+	fmt.Printf("alive=%t exit=%s attached=%t quiet=%s\n", alive, code, attached, quiet)
 	if !alive {
 		// Non-zero so a caller can branch on the exit status alone.
 		os.Exit(3)

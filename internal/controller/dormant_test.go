@@ -46,7 +46,8 @@ func TestIdleResidentSessionGoesDormantInsteadOfSettling(t *testing.T) {
 	c := newFake(t, cell, sess, runtimePod(cell), credSecret("bailian-key"))
 	r := sessionReconciler(t, c)
 	r.Exec = func(context.Context, string, string, []string, io.Reader) (string, error) {
-		return "alive=true exit=0 attached=false\n", nil
+		// quiet: nothing has come out of the window for an hour.
+		return "alive=true exit=0 attached=false quiet=3600\n", nil
 	}
 
 	reconcileSession(t, r, sess.Name, 1)
@@ -93,7 +94,8 @@ func TestWorkingSessionIsNeverPutToSleep(t *testing.T) {
 	c := newFake(t, cell, sess, runtimePod(cell), credSecret("bailian-key"))
 	r := sessionReconciler(t, c)
 	r.Exec = func(context.Context, string, string, []string, io.Reader) (string, error) {
-		return "alive=true exit=- attached=false\n", nil
+		// quiet=2: the agent is producing output right now.
+		return "alive=true exit=- attached=false quiet=2\n", nil
 	}
 	reconcileSession(t, r, sess.Name, 1)
 	var got acv1.Session
@@ -119,7 +121,7 @@ func TestAttachedSessionIsNeverPutToSleep(t *testing.T) {
 	c := newFake(t, cell, sess, runtimePod(cell), credSecret("bailian-key"))
 	r := sessionReconciler(t, c)
 	r.Exec = func(context.Context, string, string, []string, io.Reader) (string, error) {
-		return "alive=true exit=0 attached=true\n", nil
+		return "alive=true exit=0 attached=true quiet=3600\n", nil
 	}
 	reconcileSession(t, r, sess.Name, 1)
 	var got acv1.Session

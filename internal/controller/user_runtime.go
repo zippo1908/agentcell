@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,10 +137,50 @@ func (r *SessionReconciler) openWindow(ctx context.Context, sess *acv1.Session, 
 	// began, spends the person's quota on it, and leaves a transcript whose
 	// first turn is blank. The window still gets its full environment, so
 	// the first thing they say runs exactly as it would have.
+	// A resident session runs the CLI the way a person would: its own
+	// interface, its own welcome screen, its own slash commands.
+	//
+	// It used to run the one-shot form once per message, which is why the
+	// terminal never showed any of that — print mode answers and exits by
+	// design, so what a person attached to was the tail of a process that
+	// had already gone. Every message also paid to start a fresh one.
+	if ia := access.InteractiveArgvFor(sess.Spec.Runner); len(ia) > 0 {
+		if err := r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, ia, false); err != nil {
+			return err
+		}
+		// Whatever they opened with is then TYPED at it, exactly as if they
+		// had sat down and written it.
+		if t := strings.TrimSpace(sess.Spec.Task); t != "" {
+			// The pod this window is in, not Status.PodName: status is
+			// written later in the reconcile, and addressing "" here sent
+			// the instruction nowhere.
+			return r.sayToWindow(ctx, ns, ids.UserRuntimePod(uid), id, t)
+		}
+		return nil
+	}
 	if strings.TrimSpace(sess.Spec.Task) == "" {
 		return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, nil, true)
 	}
 	return r.openWindowMode(ctx, sess, cell, ns, id, uid, binding, argv, false)
+}
+
+// sayToWindow types a sentence at the agent already running in the window.
+//
+// Deliberately best-effort on timing: the CLI may still be drawing its first
+// screen. Retried a few times rather than delivered once into a terminal
+// that was not ready, because a lost instruction looks to the person like
+// the platform ignored them.
+func (r *SessionReconciler) sayToWindow(ctx context.Context, ns, pod, id, text string) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+		_, err = r.Exec(ctx, ns, pod,
+			[]string{runtimeapi.RuntimeBin, "tell", id, "-say", text}, nil)
+		if err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // restoreWindow rebuilds the terminal for an existing session without
@@ -383,7 +424,40 @@ func (r *SessionReconciler) windowState(ctx context.Context, sess *acv1.Session,
 	// exit=- means the agent has not finished, i.e. it is still working.
 	working = alive && strings.Contains(out, "exit=-")
 	attached = strings.Contains(out, "attached=true")
+	// An INTERACTIVE agent never exits, so the exit marker says nothing
+	// about it. Taken at face value it reports permanently working and the
+	// session never sleeps; ignored outright, the session gets slept in the
+	// middle of an answer. Neither is acceptable, so "busy" becomes what it
+	// actually means for a terminal: something came out of it recently.
+	if len(access.InteractiveArgvFor(sess.Spec.Runner)) > 0 {
+		working = alive && recentlyNoisy(out)
+	}
 	return alive, working, attached, nil
+}
+
+// quietGrace is how long a window must produce nothing before the session
+// counts as idle rather than mid-answer. Longer than an agent's thinking
+// pause, far shorter than the idle timeout it feeds.
+const quietGrace = 90 * time.Second
+
+// recentlyNoisy reads the quiet= field of a window-status line.
+//
+// A missing or unparsable value counts as BUSY. The failure that matters
+// here is sleeping a session while its agent is working, so an unreadable
+// answer must not be read as "nothing is happening".
+func recentlyNoisy(status string) bool {
+	for _, f := range strings.Fields(status) {
+		v, ok := strings.CutPrefix(f, "quiet=")
+		if !ok {
+			continue
+		}
+		secs, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return true
+		}
+		return time.Duration(secs)*time.Second < quietGrace
+	}
+	return true
 }
 
 // runtimeResources sizes a user's runtime for the sessions it can hold.

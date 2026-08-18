@@ -147,6 +147,10 @@ type Runner struct {
 	// ConfigPath and ConfigTemplate describe a file this CLI must find in
 	// its state directory to honour the endpoint AgentCell chose. Empty for
 	// CLIs that take it from the environment.
+	// InteractiveArgv starts the CLI the way a person would, in its own
+	// interface. Empty for a runner that only has a one-shot mode.
+	InteractiveArgv []string
+
 	ConfigPath     string
 	ConfigTemplate string
 	// AccountConfigPath and AccountConfigTemplate are used instead when the
@@ -154,6 +158,21 @@ type Runner struct {
 	// only knows how to be given a key.
 	AccountConfigPath     string
 	AccountConfigTemplate string
+}
+
+// InteractiveArgvFor returns how to start this runner as a person would —
+// its own screen, its own slash commands, its own idea of a conversation.
+//
+// This is what a resident session should run. The one-shot form answers a
+// question and exits, so a terminal attached to it shows a welcome banner
+// and a transcript of a process that is already gone; the whole point of
+// keeping the session alive is that there is something in it to talk to.
+func InteractiveArgvFor(runner string) []string {
+	r, ok := runners[runner]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), r.InteractiveArgv...)
 }
 
 // SessionConfig renders the config file a runner needs, or ok=false if it

@@ -45,6 +45,12 @@ type runnerPreset struct {
 	// for CLIs that read their endpoint from a file rather than from the
 	// environment. Same reasoning as argv: this is the shape of somebody
 	// else's tool, so it is data an operator can correct, not code.
+	// Interactive is how this CLI is started as a PERSON would start it:
+	// its own full-screen interface, its own welcome screen, its own slash
+	// commands. Empty means the runner has no interactive mode and can only
+	// be given one instruction at a time.
+	Interactive []string `yaml:"interactive"`
+
 	ConfigFile *configFilePreset `yaml:"config_file"`
 	// AccountConfigFile is the same file for a CLI authenticated by a
 	// CONNECTED ACCOUNT rather than a key. It is a separate template
@@ -136,6 +142,9 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 		Protocols:      p.Protocols,
 		SessionHomeEnv: p.SessionHomeEnv,
 		HeadlessArgv:   func(task string) []string { return render(p.Headless, task, "") },
+	}
+	if len(p.Interactive) > 0 {
+		r.InteractiveArgv = append([]string(nil), p.Interactive...)
 	}
 	if p.ConfigFile != nil {
 		r.ConfigPath, r.ConfigTemplate = p.ConfigFile.Path, p.ConfigFile.Template

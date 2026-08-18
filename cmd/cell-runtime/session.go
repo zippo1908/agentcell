@@ -404,10 +404,41 @@ func ensureSharedParent(dir string) error {
 // the start of another command.
 func runTell(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("tell: need <session-id> <argv...>")
+		return fmt.Errorf("tell: need <session-id> [-say] <argv...>")
 	}
 	id, args := args[0], args[1:]
 	sock := ids.TmuxSocket(int64(os.Getuid()))
+
+	// -say means the window already holds a running agent, so this is
+	// something to TYPE AT IT — not a command to run.
+	//
+	// The difference is the whole conversation. Sending `kimi -p "…"` to a
+	// window that has Kimi open in it would either queue as keystrokes the
+	// agent reads as text, or start a second agent inside the first. What a
+	// person does here is type a sentence and press Enter, and that is
+	// exactly what this does.
+	if args[0] == "-say" {
+		if len(args) < 2 {
+			return fmt.Errorf("tell -say: need the text")
+		}
+		text := strings.Join(args[1:], " ")
+		w := ids.TmuxWindow(id)
+		// -l: literal. The text is somebody's sentence; a leading dash or a
+		// word tmux would read as a key name must stay a word.
+		if out, err := tmux(sock, "send-keys", "-t", w, "-l", text); err != nil {
+			return fmt.Errorf("tmux send-keys: %v: %s", err, out)
+		}
+		// Enter separately, after a beat: some CLIs read the line the
+		// instant they see a newline, and a full-screen editor that has not
+		// finished processing the paste would submit half a sentence.
+		time.Sleep(150 * time.Millisecond)
+		if out, err := tmux(sock, "send-keys", "-t", w, "Enter"); err != nil {
+			return fmt.Errorf("tmux send-keys Enter: %v: %s", err, out)
+		}
+		fmt.Println("said")
+		return nil
+	}
+
 	if err := sendCommand(sock, ids.TmuxWindow(id), args, true, id, ""); err != nil {
 		return err
 	}
