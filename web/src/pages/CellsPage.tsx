@@ -34,7 +34,7 @@ export function CellsPage() {
         ) : (cells ?? []).length === 0 ? (
           <EmptyState
             title="还没有工作区"
-            hint="一个工作区是一个项目:常驻的代码检出、一个预览,和一组会话槽位。建好之后就可以派工了。"
+            hint="一个工作区是一个项目:常驻的代码检出、一个预览,和一组会话槽位。建好之后打开它就能干活。"
             action={
               <Link to="/cells/new" style={{ borderBottom: 'none' }}>
                 <button className="primary small">新建工作区</button>

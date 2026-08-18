@@ -541,8 +541,26 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 		var wErr error
 		alive, working, attached, wErr = r.windowState(ctx, sess, ns, id)
 		err = wErr
+		// A deadline somebody SET is still a deadline. Only an explicit
+		// TTLSeconds ends a resident session: the default here is an idle
+		// value, and treating it as an absolute lifetime would put a
+		// stopwatch on every project. Checked before the window, because
+		// rebuilding the window of something whose deadline has passed
+		// would resurrect exactly what the deadline was set to end.
+		if sess.Spec.TTLSeconds > 0 && sess.Status.StartTime != nil &&
+			time.Since(sess.Status.StartTime.Time) > time.Duration(sess.Spec.TTLSeconds)*time.Second {
+			return r.startSettle(ctx, sess, cell, ns, id, "TTL exceeded")
+		}
 		if err == nil && !alive {
-			return r.startSettle(ctx, sess, cell, ns, id, "session window closed")
+			// Rebuild it. The window is where the agent lives, not what the
+			// work IS: the worktree is on the volume and the CLI's own
+			// conversation is in the private home, so a lost window is a
+			// lost terminal and nothing else. Settling here was the single
+			// biggest reason a project seemed to end by itself — a tmux
+			// window can go away because a CLI exited, because somebody
+			// typed exit, or because the runtime was replaced, and none of
+			// those is a person saying "I am done with this project".
+			return r.recoverResident(ctx, sess, cell, ns, id)
 		}
 		// A follow-up written while the session was asleep is delivered now
 		// that its terminal is back. Same path whether it was awake or not,
@@ -683,9 +701,11 @@ func (r *SessionReconciler) observeDormant(ctx context.Context, sess *acv1.Sessi
 	}
 	if since := sess.Status.DormantSince; since != nil &&
 		time.Since(since.Time) > time.Duration(ttl)*time.Second {
-		// Publish rather than delete. Nobody came back, but that is not
-		// consent to throw the work away.
-		return r.startSettle(ctx, sess, cell, ns, id, "dormant past its TTL")
+		// Stay parked. A dormant session holds no compute — only a worktree
+		// on a volume — so there is nothing to reclaim by ending it, and
+		// "you did not open this project for a week" is not a decision to
+		// deliver its work. Ending a project is something a person does.
+		_ = ttl
 	}
 	// Nothing is running, so this is a cheap, rare check.
 	return ctrl.Result{RequeueAfter: time.Minute}, nil

@@ -40,7 +40,7 @@ export function ReviewsPage() {
   })
 
   function reject(session: string) {
-    const note = prompt('驳回原因(会作为后续派工的素材):')
+    const note = prompt('驳回原因(会带给 agent 作为下一步的素材):')
     if (note === null) return // cancelled — don't call the API
     if (!note.trim()) {
       alert('驳回必须写明原因。')

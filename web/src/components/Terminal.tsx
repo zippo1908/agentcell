@@ -127,7 +127,7 @@ export function Terminal({ session }: { session: string }) {
             if (st.phase === 'Running' && attempt > 8) {
               setState('closed')
               term.write(
-                '\r\n\x1b[90m—— 会话在运行,但终端连不上;打开它的日志或重新派工 ——\x1b[0m\r\n',
+                '\r\n\x1b[90m—— 会话在运行,但终端连不上;打开它的日志,或者点重启 ——\x1b[0m\r\n',
               )
               return
             }

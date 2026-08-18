@@ -346,7 +346,7 @@ export function CellPage() {
           <h3>访问</h3>
           {cell.access === 'open' ? (
             <div className="note">
-              这个工作区<b>对所有登录用户开放</b>——任何人都能派工、批阅、发布到正式区。
+              这个工作区<b>对所有登录用户开放</b>——任何人都能在里面干活、批阅、发布到正式区。
               添加第一个成员就会切换为按成员授权。
             </div>
           ) : (
@@ -408,7 +408,7 @@ export function CellPage() {
         <div className="card">
           <h3>产品描述</h3>
           <p className="hint" style={{ marginTop: 0 }}>
-            每次派工都会带给 agent。这是你「边看预览边校准」的地方。
+            每次跟 agent 说话都会带上。这是你「边看预览边校准」的地方。
           </p>
           <textarea
             rows={5}

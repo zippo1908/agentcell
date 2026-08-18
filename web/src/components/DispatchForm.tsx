@@ -95,7 +95,7 @@ export function DispatchForm({ cell, description }: { cell: string; description:
 
   return (
     <div className="card">
-      <h3>派工</h3>
+      <h3>跟 agent 说</h3>
       <textarea
         rows={3}
         value={task}
@@ -218,7 +218,7 @@ export function DispatchForm({ cell, description }: { cell: string; description:
           onClick={() => dispatch.mutate()}
           disabled={!task.trim() || !provider || !cred || dispatch.isPending}
         >
-          {dispatch.isPending ? '派工中…' : '派工'}
+          {dispatch.isPending ? '发送中…' : '发送'}
         </button>
       </div>
       {dispatch.error && <div className="err">{(dispatch.error as Error).message}</div>}

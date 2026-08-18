@@ -53,7 +53,7 @@ export function CredentialsPage() {
         {(creds ?? []).length === 0 ? (
           <EmptyState
             title="还没有凭据"
-            hint="加一把模型 API key,派工时选它。key 只进不出——存进去之后谁也读不回来,包括你自己。"
+            hint="加一把模型 API key,跟 agent 说话时就用它。key 只进不出——存进去之后谁也读不回来,包括你自己。"
           />
         ) : (
           <div className="table-wrap">

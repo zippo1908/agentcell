@@ -141,6 +141,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{session}/terminal", h.sessionTerminal)
 	mux.HandleFunc("PUT /api/cells/{cell}/placement", h.putPlacement)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)
+	mux.HandleFunc("POST /api/cells/{cell}/open", h.openCell)
 	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
 	mux.HandleFunc("PUT /api/cells/{cell}/members", h.putMember)
 	mux.HandleFunc("DELETE /api/cells/{cell}/members/{user}", h.deleteMember)
@@ -508,14 +509,30 @@ type dispatchRequest struct {
 	IdleSeconds int64 `json:"idleSeconds"`
 }
 
+// openCell gives the caller their terminal in this project, task or no task.
+//
+// A project IS a runtime somebody works in — not a queue you have to put a
+// task into before anything exists. Requiring a first instruction meant the
+// workspace opened onto nothing at all, and "打开项目" had no meaning until
+// you had already decided what to ask for. Opening is now its own verb, and
+// the session it lands you in is the same one every later instruction goes
+// to.
+func (h *Handler) openCell(w http.ResponseWriter, r *http.Request) {
+	h.dispatchInto(w, r, true)
+}
+
 func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
+	h.dispatchInto(w, r, false)
+}
+
+func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptional bool) {
 	cellName := r.PathValue("cell")
 	var req dispatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !taskOptional {
 		writeErr(w, 400, err)
 		return
 	}
-	if strings.TrimSpace(req.Task) == "" {
+	if strings.TrimSpace(req.Task) == "" && !taskOptional {
 		writeErr(w, 400, fmt.Errorf("task is empty"))
 		return
 	}
@@ -572,6 +589,16 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request) {
 	// only bought a way to lock somebody out of their own work.
 	p := identity.FromContext(r.Context())
 	if live, err := liveSessionFor(r.Context(), h.Client, h.Namespace, cellName, p.ID()); err == nil && live != nil {
+		if strings.TrimSpace(req.Task) == "" {
+			// Opening something already open is just going there. Waking it
+			// if it was parked is the whole point of asking.
+			if _, err := h.wakeIfDormant(r, live); err != nil {
+				writeErr(w, 500, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"session": live.Name, "continued": true})
+			return
+		}
 		if err := h.queueFollowUp(r.Context(), live, req.Task); err != nil {
 			writeErr(w, 500, err)
 			return

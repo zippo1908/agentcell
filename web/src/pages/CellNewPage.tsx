@@ -245,7 +245,7 @@ export function CellNewPage() {
         <div className="form-section-title">说明</div>
         <label className="field">
           <span className="lbl">产品描述</span>
-          <textarea rows={3} value={f.description} onChange={set('description')} placeholder="这个产品是做什么的 —— 每次派工都会带给 agent,可以随预览持续校准。" />
+          <textarea rows={3} value={f.description} onChange={set('description')} placeholder="这个产品是做什么的 —— 每次跟 agent 说话都会带上,可以随预览持续校准。" />
         </label>
 
         <details className="advanced">

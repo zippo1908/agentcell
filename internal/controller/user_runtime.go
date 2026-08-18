@@ -287,8 +287,22 @@ func (r *SessionReconciler) recoverResident(ctx context.Context, sess *acv1.Sess
 		}
 	}
 	if sess.Status.Recoveries >= maxRecoveries {
-		return r.startSettle(ctx, sess, cell, ns, id,
-			fmt.Sprintf("runtime lost %d times; settling rather than rebuilding again", sess.Status.Recoveries))
+		// Stop rebuilding, but do NOT end the project. A runtime that keeps
+		// dying is a problem to look at, not a decision to deliver: the
+		// worktree and the conversation are on the volume either way, and
+		// the owner can press 重启 once they know why. Flapping is what the
+		// budget exists to stop, and parking stops it just as well as
+		// settling did — without spending somebody's work to do it.
+		sess.Spec.DesiredState = acv1.SessionDesiredDormant
+		if err := r.Update(ctx, sess); err != nil {
+			return ctrl.Result{}, err
+		}
+		sess.Status.Message = fmt.Sprintf(
+			"运行时连续 %d 次没起来,已经先停下——看一眼原因,然后点重启", sess.Status.Recoveries)
+		if err := r.Status().Update(ctx, sess); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	uid, err := r.ownerUID(ctx, sess)
 	if err != nil {

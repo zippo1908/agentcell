@@ -373,11 +373,22 @@ func TestRepeatedRuntimeLossEventuallySettles(t *testing.T) {
 	}
 	var got acv1.Session
 	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
-	if got.Status.Phase != acv1.SessionSettling {
-		t.Errorf("phase = %s, want the work settled after %d losses", got.Status.Phase, maxRecoveries)
+	// Parked, not published. A runtime that keeps dying is something to
+	// look at; it is not the owner deciding their project is finished, and
+	// spending their work to stop a rebuild loop is too high a price for
+	// stopping a rebuild loop.
+	if got.Spec.DesiredState != acv1.SessionDesiredDormant {
+		t.Errorf("desiredState = %q, want the session parked after %d losses",
+			got.Spec.DesiredState, maxRecoveries)
+	}
+	if got.Status.Phase == acv1.SessionSettling {
+		t.Error("a flapping runtime ended the project instead of stopping it")
 	}
 }
 
+// A runtime that will not stay up must stop being rebuilt — but stopping is
+// where it ends. See the assertions below for what replaced settling.
+//
 // One session's TTL must not take its owner's other sessions with it. The
 // pod behind a resident session is the SHARED runtime, so deleting it on
 // timeout killed every window that user had open — their unpublished work
@@ -486,8 +497,12 @@ func TestClosedWindowSettlesTheSession(t *testing.T) {
 	}
 	var got acv1.Session
 	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
-	if got.Status.Phase != acv1.SessionSettling {
-		t.Errorf("phase = %s; a closed window left the session reported as running", got.Status.Phase)
+	// The window comes back. A tmux window can vanish because the CLI
+	// exited, because somebody typed exit, or because the runtime was
+	// replaced — none of which is the owner saying they are done with the
+	// project, and all of which used to end it.
+	if got.Status.Phase == acv1.SessionSettling {
+		t.Error("a closed window ended the project instead of rebuilding the terminal")
 	}
 }
 
@@ -747,8 +762,8 @@ func TestClosedWindowInTheSameContainerStillSettles(t *testing.T) {
 	}
 	var got acv1.Session
 	_ = c.Get(ctx, types.NamespacedName{Namespace: controlNS, Name: "sess-a"}, &got)
-	if got.Status.Phase != acv1.SessionSettling {
-		t.Errorf("phase = %s; a window the owner closed should settle", got.Status.Phase)
+	if got.Status.Phase == acv1.SessionSettling {
+		t.Error("a closed window ended the project; it should have got its terminal back")
 	}
 }
 

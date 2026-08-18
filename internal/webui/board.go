@@ -282,7 +282,7 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		return
 	}
 	if !can(p, &c, h.teamByName(ctx, c.Spec.Team), ActionDispatch) {
-		h.systemPost(ctx, team, "你在 "+cell+" 里没有派工的权限。", cell)
+		h.systemPost(ctx, team, "你在 "+cell+" 里没有动手的权限。", cell)
 		return
 	}
 	cred, err := h.soleCredential(ctx, p)

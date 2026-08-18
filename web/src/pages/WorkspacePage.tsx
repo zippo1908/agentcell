@@ -135,6 +135,23 @@ function CellWork({ cell }: { cell: string }) {
     (s) => s.phase === 'Running' || s.phase === 'Queued' || s.phase === 'Dormant',
   )
 
+  // Opening a project means going to your terminal in it. Waiting for
+  // somebody to think of a first instruction before anything exists is what
+  // made this screen open onto nothing.
+  const opening = useRef('')
+  useEffect(() => {
+    if (!cell || live || detail.isLoading || opening.current === cell) return
+    opening.current = cell
+    api
+      .openCell(cell)
+      .then(() => qc.invalidateQueries({ queryKey: ['cell', cell] }))
+      .catch(() => {
+        // Leave the empty state in place; it says what to do next, and the
+        // reason is usually one the person has to act on (no key yet).
+        opening.current = ''
+      })
+  }, [cell, live, detail.isLoading, qc])
+
   // Say a thing. The server fills in the runner, the provider and the key
   // from what the project already decided — none of that is new information
   // at the moment somebody says what they want.
@@ -177,8 +194,8 @@ function CellWork({ cell }: { cell: string }) {
           <TerminalDeck session={live.name} />
         ) : (
           <div className="ws-empty">
-            <p>这个项目还没有你的会话。</p>
-            <p className="hint">在下面说一句要做什么,就会开一条——之后一直在这条里继续。</p>
+            <p>正在给你开这个项目的终端……</p>
+            <p className="hint">开好之后就一直在,说话都进同一条。开不出来的话,多半是还没配模型 key。</p>
           </div>
         )}
       </div>

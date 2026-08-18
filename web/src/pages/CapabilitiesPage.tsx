@@ -121,7 +121,7 @@ export function CapabilitiesPage() {
           </div>
         )}
         <div className="hint" style={{ marginTop: 12 }}>
-          模型清单只是起点:厂商上新的速度远快于这张表,派工时可以直接填一个不在清单里的。
+          模型清单只是起点:厂商上新的速度远快于这张表,可以直接填一个不在清单里的。
         </div>
       </div>
     </>

@@ -63,7 +63,7 @@ export function BoardPage() {
         <div className="card">
           <p className="hint" style={{ margin: 0 }}>
             黑板挂在团队上。先<Link to="/teams"> 建一个团队 </Link>
-            并把工作区归到它名下,之后就能在这里 <code className="mono">@工作区</code> 直接派工。
+            并把工作区归到它名下,之后就能在这里 <code className="mono">@工作区</code> 直接说话。
           </p>
         </div>
       </div>

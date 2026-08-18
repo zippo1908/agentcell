@@ -73,6 +73,10 @@ export const api = {
     req<{ session: string; continued?: boolean; message?: string }>(
       `/api/cells/${cell}/dispatch`, { method: 'POST', body: JSON.stringify({ task }) }),
 
+  /** Go to my terminal in this project — no task needed. */
+  openCell: (cell: string) =>
+    req<{ session: string; continued?: boolean }>(`/api/cells/${cell}/open`, { method: 'POST' }),
+
   branches: (cell: string) => req<Branch[]>(`/api/cells/${cell}/branches`),
 
   newProjectOptions: () => req<NewProjectOptions>('/api/new-project-options'),
