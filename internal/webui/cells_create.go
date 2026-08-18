@@ -99,7 +99,15 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 	// which is not what someone who just created one expects.
 	creator := identity.FromContext(r.Context())
 	var members []acv1.Member
-	if creator.Kind == identity.KindOIDC {
+	// Any real person becomes the project's maintainer. This used to name
+	// OIDC users only, so once accounts existed, somebody could create a
+	// project and not be recorded as being on it — and the first person
+	// added afterwards would close it in their face.
+	//
+	// A static token is deliberately NOT recorded: it is one shared
+	// identity, so naming it would put "everyone with the token" on the
+	// list and mean nothing.
+	if creator.Kind == identity.KindOIDC || creator.Kind == identity.KindUser {
 		members = []acv1.Member{{UserID: creator.ID(), Role: acv1.RoleMaintainer}}
 	}
 	if req.PlacementClass != "" {

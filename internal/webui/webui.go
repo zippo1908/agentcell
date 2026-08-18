@@ -145,6 +145,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/whoami", h.whoami)
 	mux.HandleFunc("GET /api/people", h.listPeople)
 	mux.HandleFunc("POST /api/invites", h.createInvite)
+	mux.HandleFunc("GET /api/cells/{cell}/members", h.listMembers)
 	mux.HandleFunc("POST /api/password", h.changePassword)
 	mux.HandleFunc("POST /api/cells/{cell}/release", h.release)
 	mux.HandleFunc("PUT /api/cells/{cell}/members", h.putMember)
@@ -559,6 +560,27 @@ func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptio
 		if req.Model == "" {
 			req.Model = cellForDefaults.Spec.Defaults.Model
 		}
+	}
+	// Then the platform's own defaults. A project created before anybody
+	// chose a pairing — or created by a script — has none, and "打开项目"
+	// then failed with `unknown runner ""`, which reads like a bug in the
+	// request rather than a setting nobody ever made.
+	if req.Runner == "" {
+		req.Runner = h.DefaultRunner
+	}
+	if req.Provider == "" {
+		req.Provider = h.DefaultProvider
+	}
+	if req.Model == "" && req.Provider != "" {
+		if pr, ok := h.Registry.Provider(req.Provider); ok && len(pr.Models) > 0 {
+			// The provider's own first model. Naming one here beats making
+			// somebody pick from a list before they have said anything.
+			req.Model = pr.Models[0]
+		}
+	}
+	if req.Runner == "" || req.Provider == "" {
+		writeErr(w, 400, fmt.Errorf("这个部署还没设默认的 runner/供应商,先在项目里选一个"))
+		return
 	}
 	if req.CredentialSecret == "" {
 		// A connected account IS the credential. Demanding a model key on
