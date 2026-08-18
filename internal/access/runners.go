@@ -46,6 +46,13 @@ type runnerPreset struct {
 	// environment. Same reasoning as argv: this is the shape of somebody
 	// else's tool, so it is data an operator can correct, not code.
 	ConfigFile *configFilePreset `yaml:"config_file"`
+	// AccountConfigFile is the same file for a CLI authenticated by a
+	// CONNECTED ACCOUNT rather than a key. It is a separate template
+	// because the two are not a substitution away from each other: a key
+	// goes in the file, while an account is a reference to a credential
+	// the CLI stores itself, and writing a key field at all is what makes
+	// the CLI ignore the account.
+	AccountConfigFile *configFilePreset `yaml:"account_config_file"`
 }
 
 // configFilePreset renders {{model}} and {{base_url}} — never the key, which
@@ -105,6 +112,10 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 	if usesSession(p.Resume) && p.SessionID == "" {
 		return Runner{}, fmt.Errorf("runner %q resumes by id but declares no session_id shape", name)
 	}
+	if p.AccountConfigFile != nil &&
+		(p.AccountConfigFile.Path == "" || p.AccountConfigFile.Template == "") {
+		return Runner{}, fmt.Errorf("runner %q: account_config_file needs both path and template", name)
+	}
 	if p.ConfigFile != nil {
 		if p.ConfigFile.Path == "" || p.ConfigFile.Template == "" {
 			return Runner{}, fmt.Errorf("runner %q: config_file needs both path and template", name)
@@ -128,6 +139,10 @@ func (p runnerPreset) compile(name string) (Runner, error) {
 	}
 	if p.ConfigFile != nil {
 		r.ConfigPath, r.ConfigTemplate = p.ConfigFile.Path, p.ConfigFile.Template
+	}
+	if p.AccountConfigFile != nil {
+		r.AccountConfigPath = p.AccountConfigFile.Path
+		r.AccountConfigTemplate = p.AccountConfigFile.Template
 	}
 	switch p.SessionID {
 	case "":

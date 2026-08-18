@@ -15,7 +15,7 @@ func TestSessionConfigCarriesTheChosenEndpoint(t *testing.T) {
 	path, content, ok := SessionConfig("codex", Binding{
 		Provider: "deepseek", Model: "deepseek-chat",
 		BaseURL: "https://api.deepseek.com", Protocol: ProtoOpenAI,
-	})
+	}, false)
 	if !ok {
 		t.Fatal("codex declares no config file; the provider choice cannot reach it")
 	}
@@ -39,7 +39,7 @@ func TestSessionConfigNeverContainsTheKey(t *testing.T) {
 	_, content, _ := SessionConfig("codex", Binding{
 		Provider: "deepseek", Model: "deepseek-chat",
 		BaseURL: "https://api.deepseek.com", Protocol: ProtoOpenAI,
-	})
+	}, false)
 	if !strings.Contains(content, `env_key = "OPENAI_API_KEY"`) {
 		t.Error("config should reference the key by variable name")
 	}
@@ -56,7 +56,7 @@ func TestSessionConfigEscapesUntrustedValues(t *testing.T) {
 		Provider: "deepseek", Model: `evil"
 model_provider = "openai`,
 		BaseURL: "https://api.deepseek.com", Protocol: ProtoOpenAI,
-	})
+	}, false)
 	if strings.Contains(content, "\nmodel_provider = \"openai\"") {
 		t.Errorf("a model name broke out of its string:\n%s", content)
 	}
@@ -69,11 +69,11 @@ model_provider = "openai`,
 // they never asked for.
 func TestSessionConfigAbsentForEnvironmentRunners(t *testing.T) {
 	for _, r := range []string{"claude", "pi"} {
-		if _, _, ok := SessionConfig(r, Binding{Model: "m", BaseURL: "u"}); ok {
+		if _, _, ok := SessionConfig(r, Binding{Model: "m", BaseURL: "u"}, false); ok {
 			t.Errorf("runner %q unexpectedly declares a config file", r)
 		}
 	}
-	if _, _, ok := SessionConfig("no-such-runner", Binding{}); ok {
+	if _, _, ok := SessionConfig("no-such-runner", Binding{}, false); ok {
 		t.Error("unknown runner returned a config file")
 	}
 }
@@ -123,7 +123,7 @@ func TestKimiDeclaresAConfigWithCredentials(t *testing.T) {
 	path, content, ok := SessionConfig("kimi", Binding{
 		Provider: "kimi-code", Model: "k3",
 		BaseURL: "https://api.kimi.com/coding/v1", Protocol: ProtoOpenAI,
-	})
+	}, false)
 	if !ok {
 		t.Fatal("kimi declares no config file; it would fail at startup with missing credentials")
 	}
@@ -148,7 +148,7 @@ func TestKimiDeclaresAConfigWithCredentials(t *testing.T) {
 func TestTheKeyIsAMarkerNotTheKey(t *testing.T) {
 	_, content, _ := SessionConfig("kimi", Binding{
 		Provider: "kimi-code", Model: "k3", BaseURL: "https://x", Protocol: ProtoOpenAI,
-	})
+	}, false)
 	if !strings.Contains(content, "${"+APIKeyMarker+"}") {
 		t.Errorf("the key placeholder is gone, so either the key is inline or the config is broken:\n%s", content)
 	}
@@ -156,5 +156,43 @@ func TestTheKeyIsAMarkerNotTheKey(t *testing.T) {
 		if strings.Contains(content, leak) {
 			t.Errorf("a literal key reached the control plane's rendering: %s", content)
 		}
+	}
+}
+
+// A connected account and a pasted key are different credentials, and the
+// config file is where the CLI learns which one it has.
+//
+// This is not cosmetic: with an api_key field present, Kimi authenticates
+// with that key and ignores the account entirely — which is how a session
+// belonging to somebody with a perfectly good connected account spent its
+// life sending a DeepSeek key to api.kimi.com and getting 401 back.
+func TestAccountConfigDoesNotCarryAKey(t *testing.T) {
+	// The runner table is filled in when a registry is built, so a test
+	// that only calls SessionConfig sees an empty table unless it says so.
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	b := Binding{Runner: "kimi", Provider: "kimi-code", Model: "kimi-for-coding",
+		BaseURL: "https://api.kimi.com/coding/v1", ContextTokens: 262144}
+
+	_, withKey, ok := SessionConfig("kimi", b, false)
+	if !ok {
+		t.Fatal("kimi has no config file")
+	}
+	if !strings.Contains(withKey, "api_key") {
+		t.Error("the key form stopped carrying a key")
+	}
+
+	_, withAccount, ok := SessionConfig("kimi", b, true)
+	if !ok {
+		t.Fatal("kimi has no account config file")
+	}
+	if strings.Contains(withAccount, "api_key") {
+		t.Errorf("the account form still writes a key, so the account is ignored:\n%s", withAccount)
+	}
+	// The oauth reference is what sends the CLI to the credential it stored
+	// at login; without it the run fails with "has no credential configured".
+	if !strings.Contains(withAccount, "oauth") {
+		t.Errorf("the account form has no oauth reference:\n%s", withAccount)
 	}
 }

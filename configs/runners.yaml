@@ -110,3 +110,28 @@ runners:
         provider = "agentcell"
         model = "{{model}}"
         max_context_size = {{context_tokens}}
+    # Used instead when the person has connected their Kimi account.
+    #
+    # NOT the same file with the key left out: the CLI decides how to
+    # authenticate by what the provider block contains. With an api_key it
+    # uses the key; with an `oauth` reference it looks up the credential it
+    # stored at login; with neither it refuses ("provider … has no
+    # credential configured"). The provider is named kimi-code because that
+    # name is the lookup key for the stored credential — the login writes
+    # credentials/<provider>.json.
+    account_config_file:
+      path: config.toml
+      template: |
+        default_model = "{{model}}"
+
+        [providers.kimi-code]
+        type = "kimi"
+
+        [providers.kimi-code.oauth]
+        storage = "file"
+        key = "kimi-code"
+
+        [models."{{model}}"]
+        provider = "kimi-code"
+        model = "{{model}}"
+        max_context_size = {{context_tokens}}

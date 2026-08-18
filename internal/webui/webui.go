@@ -557,12 +557,20 @@ func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptio
 		}
 	}
 	if req.CredentialSecret == "" {
-		cred, err := h.soleCredential(r.Context(), identity.FromContext(r.Context()))
-		if err != nil {
-			writeErr(w, 400, err)
-			return
+		// A connected account IS the credential. Demanding a model key on
+		// top of it was the old shape showing through: "连一次账号,之后所有
+		// 会话都用它" cannot be true if you still cannot start without
+		// pasting a key.
+		if h.runnerUsesAccount(r.Context(), req.Runner, identity.FromContext(r.Context()).ID()) {
+			req.CredentialSecret = ""
+		} else {
+			cred, err := h.soleCredential(r.Context(), identity.FromContext(r.Context()))
+			if err != nil {
+				writeErr(w, 400, err)
+				return
+			}
+			req.CredentialSecret = cred
 		}
-		req.CredentialSecret = cred
 	}
 	// Fail fast on an invalid binding before creating anything.
 	binding, err := h.Registry.Resolve(req.Runner, req.Provider, req.Model)

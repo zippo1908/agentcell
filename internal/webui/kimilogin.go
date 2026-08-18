@@ -141,9 +141,15 @@ func (h *Handler) pollKimiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// The credential directory appearing IS the completion signal — more
 	// reliable than matching a success sentence the CLI is free to reword.
+	// device_id travels WITH the credential, not just the credentials
+	// directory. The CLI's oauth package builds a device identity header
+	// from that file, and a token presented from a different device is
+	// refused — "401 Invalid Authentication", which reads exactly like a
+	// bad token and is not. Capturing only credentials/ produced a
+	// credential that could never work anywhere but the pod that made it.
 	tar, terr := h.execInPod(r.Context(), h.Namespace, name, []string{"sh", "-c",
 		`[ -d /tmp/kh/credentials ] && [ -n "$(ls -A /tmp/kh/credentials 2>/dev/null)" ] && ` +
-			`tar czf - -C /tmp/kh credentials | base64 -w0`})
+			`tar czf - -C /tmp/kh credentials $([ -f /tmp/kh/device_id ] && echo device_id) | base64 -w0`})
 	if terr == nil && strings.TrimSpace(tar) != "" {
 		if err := h.storeKimiCredential(r.Context(), p.ID(), strings.TrimSpace(tar)); err != nil {
 			writeErr(w, 500, err)
@@ -164,6 +170,13 @@ func (h *Handler) pollKimiLogin(w http.ResponseWriter, r *http.Request) {
 		st.Status, st.Message = "expired", "设备码过期了,重新开始一次"
 	}
 	writeJSON(w, 200, st)
+}
+
+// runnerUsesAccount reports whether this runner can be authenticated by an
+// account this person has already connected — in which case no model key is
+// needed and none should be demanded.
+func (h *Handler) runnerUsesAccount(ctx context.Context, runner, user string) bool {
+	return runner == "kimi" && user != "" && h.hasKimiCredential(ctx, user)
 }
 
 // hasKimiCredential reports whether this person has a connected account.

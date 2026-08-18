@@ -397,7 +397,8 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 	if v := access.SessionHomeVar(sess.Spec.Runner); v != "" {
 		env = append(env, corev1.EnvVar{Name: v, Value: stateDir})
 	}
-	if path, content, ok := access.SessionConfig(sess.Spec.Runner, binding); ok {
+	if path, content, ok := access.SessionConfig(sess.Spec.Runner, binding,
+		r.accountCredential(ctx, sess) != ""); ok {
 		cfgJSON, err := json.Marshal(runtimeapi.AgentConfig{
 			Path: filepath.Join(stateDir, path), Content: content,
 		})

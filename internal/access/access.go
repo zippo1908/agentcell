@@ -149,6 +149,11 @@ type Runner struct {
 	// CLIs that take it from the environment.
 	ConfigPath     string
 	ConfigTemplate string
+	// AccountConfigPath and AccountConfigTemplate are used instead when the
+	// person has CONNECTED AN ACCOUNT for this CLI. Empty means the runner
+	// only knows how to be given a key.
+	AccountConfigPath     string
+	AccountConfigTemplate string
 }
 
 // SessionConfig renders the config file a runner needs, or ok=false if it
@@ -166,9 +171,20 @@ type Runner struct {
 // its own environment when it writes the file. The literal key therefore
 // exists only inside the pod, in a 0600 file under the user's 0700 tree,
 // which is the same boundary the environment would have given (ADR-0010).
-func SessionConfig(runner string, b Binding) (path, content string, ok bool) {
+func SessionConfig(runner string, b Binding, withAccount bool) (path, content string, ok bool) {
 	r, found := runners[runner]
-	if !found || r.ConfigTemplate == "" {
+	if !found {
+		return "", "", false
+	}
+	// A connected account and a pasted key are different credentials, and
+	// the file says which one to use. Writing an api_key field at all is
+	// what makes the CLI ignore the account it already has, so the account
+	// form is a different template rather than the same one with a blank.
+	tmplPath, tmpl := r.ConfigPath, r.ConfigTemplate
+	if withAccount && r.AccountConfigTemplate != "" {
+		tmplPath, tmpl = r.AccountConfigPath, r.AccountConfigTemplate
+	}
+	if tmpl == "" {
 		return "", "", false
 	}
 	rep := strings.NewReplacer(
@@ -187,7 +203,7 @@ func SessionConfig(runner string, b Binding) (path, content string, ok bool) {
 		// inside the pod, in a 0600 file under the private tree.
 		"{{api_key}}", "${"+APIKeyMarker+"}",
 	)
-	return r.ConfigPath, rep.Replace(r.ConfigTemplate), true
+	return tmplPath, rep.Replace(tmpl), true
 }
 
 // tomlString escapes a value for a TOML basic string. A model name arrives

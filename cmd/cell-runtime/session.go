@@ -172,6 +172,12 @@ func writeAccountCredential() error {
 	if err := tighten(filepath.Join(home, "credentials")); err != nil {
 		return err
 	}
+	// The device identity is part of the credential; it is read back on
+	// every request, so it has to be as private as the token it
+	// accompanies.
+	if err := os.Chmod(filepath.Join(home, "device_id"), 0o600); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	fmt.Println("session: connected account credential installed")
 	return nil
 }

@@ -172,7 +172,7 @@ func (r *SessionReconciler) openWindowMode(ctx context.Context, sess *acv1.Sessi
 	// so the window has to carry the file too — otherwise a resident session
 	// would quietly use the CLI's own default provider while a one-shot
 	// session of the same runner used the one that was asked for.
-	if path, content, ok := access.SessionConfig(sess.Spec.Runner, binding); ok {
+	if path, content, ok := access.SessionConfig(sess.Spec.Runner, binding, r.accountCredential(ctx, sess) != ""); ok {
 		cfgJSON, err := json.Marshal(runtimeapi.AgentConfig{
 			Path: filepath.Join(stateDir, path), Content: content,
 		})
