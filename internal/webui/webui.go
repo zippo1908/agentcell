@@ -432,6 +432,13 @@ type sessionView struct {
 	Produced bool   `json:"produced"`
 	Message  string `json:"message"`
 	Started  string `json:"started"`
+	// FundedBy names the person whose credential pays for this session, and
+	// Shared says whether anybody else may drive it. Both are shown rather
+	// than inferred: a shared session that silently spends one person's
+	// quota is a surprise waiting to land on them.
+	FundedBy string `json:"fundedBy,omitempty"`
+	Mine     bool   `json:"mine,omitempty"`
+	Shared   bool   `json:"shared,omitempty"`
 }
 
 func (h *Handler) getCell(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +469,10 @@ func (h *Handler) getCell(w http.ResponseWriter, r *http.Request) {
 		sv := sessionView{
 			Name: s.Name, Task: s.Spec.Task, Runner: s.Spec.Runner, Provider: s.Spec.Provider,
 			Phase: string(s.Status.Phase), Branch: s.Status.Branch, Produced: s.Status.Produced,
-			Message: s.Status.Message,
+			Message:  s.Status.Message,
+			FundedBy: h.displayOwner(r.Context(), s.Spec.OwnerUserID),
+			Mine:     identity.FromContext(r.Context()).Owns(s.Spec.OwnerUserID),
+			Shared:   s.Spec.Board != "" || strings.HasPrefix(s.Spec.OwnerUserID, LegacyTeamOwnerPrefix),
 		}
 		if s.Status.StartTime != nil {
 			sv.Started = s.Status.StartTime.UTC().Format("2006-01-02 15:04:05Z")

@@ -288,27 +288,31 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		h.systemPost(ctx, team, "你在 "+cell+" 里没有动手的权限。", cell)
 		return
 	}
-	cred, err := h.soleCredential(ctx, p)
-	if err != nil {
-		h.systemPost(ctx, team, err.Error(), cell)
-		return
-	}
 
-	// Same rule as the Cell page: one live session per person per project.
-	// A board ask continues the conversation they already have there.
-	// The board's conversation with a project belongs to the TEAM, not to
-	// whoever happened to ask. Otherwise the first person to type would lend
-	// out their private terminal, and the second would be answered inside
-	// somebody else's session.
-	owner := TeamOwnerPrefix + team
-	if live, err := liveSessionFor(ctx, h.Client, h.Namespace, cell, owner); err == nil && live != nil {
+	// One shared conversation per project, and the FIRST person to open it
+	// is its owner.
+	//
+	// A board ask must not land in the asker's own private terminal, and it
+	// must not be owned by a synthetic principal either: something has to
+	// pay for the model, and only a real account can. So the first speaker
+	// sponsors the conversation, everyone else who may dispatch here can
+	// drive it, and the ack says whose budget is funding it — sharing a
+	// keyboard and sharing a bill are different decisions.
+	if live, err := h.liveBoardSession(ctx, cell); err == nil && live != nil {
 		if err := h.queueFollowUp(ctx, live, task); err != nil {
 			h.systemPost(ctx, team, "接不上你在 "+cell+" 的会话:"+err.Error(), cell)
 			return
 		}
+		body := "接着这个项目的会话说:" + task
+		if !p.Owns(live.Spec.OwnerUserID) {
+			// Say who is paying, every time somebody else drives it. A
+			// shared session that silently spends one person's quota is a
+			// surprise waiting to land on them.
+			body += "(这条会话由 " + h.displayOwner(ctx, live.Spec.OwnerUserID) + " 的额度承担)"
+		}
 		ack := acv1.Post{
 			Kind: acv1.PostAgent, Author: cell, Cell: cell, Session: live.Name,
-			Body: "接着你在 " + cell + " 的会话说:" + task,
+			Body: body,
 		}
 		_ = h.appendPost(ctx, team, &ack)
 		return
@@ -331,8 +335,16 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		}
 	}
 	sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model = runner, provider, model
+	cred, err := h.credentialFor(ctx, p, runner)
+	if err != nil {
+		h.systemPost(ctx, team, err.Error(), cell)
+		return
+	}
 	sess.Spec.CredentialSecret = cred
-	sess.Spec.OwnerUserID = owner
+	// The real person who asked. They fund it; everyone else who may
+	// dispatch here can drive it.
+	sess.Spec.OwnerUserID = p.ID()
+	sess.Spec.Board = cell
 	sess.Spec.Board = team
 	if err := h.Client.Create(ctx, sess); err != nil {
 		h.systemPost(ctx, team, "派不出去:"+err.Error(), cell)
@@ -404,4 +416,68 @@ func (h *Handler) providerFor(ctx context.Context, cell string) (runner, provide
 			"这个工作区还没派过工,黑板不替你挑 runner 和模型——先在工作区里派一单,之后 @ 它就会沿用那次的选择。")
 	}
 	return newest.Spec.Runner, newest.Spec.Provider, newest.Spec.Model, nil
+}
+
+// liveBoardSession finds the project's shared conversation, whoever opened
+// it.
+//
+// Keyed on the PROJECT, not on the asker: the board holds one conversation
+// per project, so the second person to speak continues the first person's
+// thread instead of opening a rival one beside it.
+func (h *Handler) liveBoardSession(ctx context.Context, cell string) (*acv1.Session, error) {
+	var list acv1.SessionList
+	if err := h.Client.List(ctx, &list, client.InNamespace(h.Namespace)); err != nil {
+		return nil, err
+	}
+	for i := range list.Items {
+		s := &list.Items[i]
+		if s.Spec.Cell != cell || !s.DeletionTimestamp.IsZero() {
+			continue
+		}
+		// Legacy synthetic owners count as board sessions too, so an
+		// upgrade does not strand the conversation that was already there.
+		if s.Spec.Board == "" && !strings.HasPrefix(s.Spec.OwnerUserID, LegacyTeamOwnerPrefix) {
+			continue
+		}
+		switch s.Status.Phase {
+		case acv1.SessionRunning, acv1.SessionQueued, acv1.SessionDormant, "":
+			return s, nil
+		}
+	}
+	return nil, nil
+}
+
+// credentialFor picks what will fund a session for THIS person.
+//
+// A connected account counts. Asking only for a model-key Secret is what
+// made the board refuse people who had done exactly what the console told
+// them to do — connect their Kimi account — and left them reading "你还没有
+// 配模型 key" with an account plainly connected on the credentials page.
+func (h *Handler) credentialFor(ctx context.Context, p identity.Principal, runner string) (string, error) {
+	if h.runnerUsesAccount(ctx, runner, p.ID()) {
+		return "", nil
+	}
+	return h.soleCredential(ctx, p)
+}
+
+// displayOwner names the person funding a session, for a line somebody
+// reads. Falls back to the opaque id rather than to silence: "somebody" is
+// not an answer to "who is paying".
+func (h *Handler) displayOwner(ctx context.Context, id string) string {
+	if h.Auth == nil || h.Auth.Accounts == nil || id == "" {
+		return id
+	}
+	users, err := h.Auth.Accounts.DB.Users(ctx)
+	if err != nil {
+		return id
+	}
+	for _, u := range users {
+		if (identity.Principal{Subject: identity.UserSubject(u.Email)}).ID() == id {
+			if u.Name != "" {
+				return u.Name
+			}
+			return u.Email
+		}
+	}
+	return id
 }

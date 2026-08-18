@@ -963,3 +963,37 @@ func TestRestoringBringsTheAgentBackOnTheSameConversation(t *testing.T) {
 		t.Fatalf("no window was opened: %v", rec.calls)
 	}
 }
+
+// The project's quota counts SESSIONS, not people.
+//
+// It was documented as a headcount — "a slot is a person" — which held only
+// because a separate routing rule gave each person one live session per
+// project. That rule is a routing choice; the quota is a resource limit, and
+// defining one by the other means a change to routing silently changes what
+// a project is allowed to run. It also made shared sessions unaccountable:
+// one board conversation is one slot whether two people type into it or ten.
+func TestQuotaCountsSessionsNotPeople(t *testing.T) {
+	cell := testCell()
+	cell.Spec.MaxSessions = 1
+
+	// One session already holds the only slot.
+	cell.Status.SlotLeases = []string{"already-running"}
+
+	c := newFake(t, cell, credSecret("bailian-key"))
+	r := sessionReconciler(t, c)
+
+	// A SECOND session — same owner or not, shared or not — cannot claim it.
+	for _, owner := range []string{"u-aaaa1111", "u-bbbb2222"} {
+		s := residentSession("sess-"+owner, owner, "work")
+		if err := c.Create(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := r.claimSlot(context.Background(), s, "sess-"+owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claimed {
+			t.Errorf("owner %s claimed a slot in a project whose quota was already full", owner)
+		}
+	}
+}

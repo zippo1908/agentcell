@@ -43,9 +43,15 @@ spec:
             properties:
               board:
                 description: |-
-                  Board names the team board that asked for this work, so the agent can
-                  answer where the question was asked instead of somewhere else.
-                maxLength: 63
+                  Board names the project board this work was asked for on, and marks
+                  the session as SHARED: everyone who may dispatch in the project can
+                  drive it, because the conversation is the project's rather than one
+                  person's.
+
+                  It does not change who PAYS. OwnerUserID stays whoever first asked,
+                  and their credential funds every turn — including turns a colleague
+                  types. Sharing the keyboard and sharing the bill are different
+                  decisions, and only one of them was made here.
                 type: string
               cell:
                 description: Cell names the Cell CR (same namespace as this Session
@@ -102,11 +108,20 @@ spec:
                   the property ADR-0008 rests on, and a hand-maintained CRD is exactly
                   where it would be lost the next time the file was regenerated.
 
-                  A Session is a user-private execution and memory boundary: transcript,
-                  checkpoint and worktree belong to this user alone. Sessions created
-                  before ownership existed have an empty value and are visible only to
-                  the static-token principal; guessing an owner that was never recorded
-                  would hand one user another user's work.
+                  This is the person the session's model spend is charged to. Always a
+                  real user — never a synthetic principal standing in for a group.
+
+                  Written once, at creation, and never changed. An operator typing into
+                  a shared session must not quietly become the one paying for it, and
+                  the credential must not be swapped out from under whoever lent it.
+
+                  Who may OPERATE the session is a different question, answered by the
+                  project's member list (see Board) rather than stored here: a second
+                  copy of membership is a second thing that can disagree with the first.
+
+                  Sessions created before ownership existed have an empty value and are
+                  visible only to the static-token principal; guessing an owner that was
+                  never recorded would hand one user another user's work.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:

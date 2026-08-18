@@ -109,14 +109,16 @@ spec:
                 type: string
               maxSessions:
                 description: |-
-                  MaxSessions bounds how many PEOPLE can be working in this Cell at
-                  once — each of them has exactly one live session here, so a slot is a
-                  person, not a task. Defaults to 2.
+                  MaxSessions is this project's concurrency budget: how many sessions
+                  may hold a slot here at once. Defaults to 2.
 
-                  It used to bound sessions, which let one person fill a Cell with their
-                  own work and then be unable to reopen the oldest of it. The project is
-                  the atom; a second session for the same person was a copy of something
-                  the agent CLIs already do better.
+                  It counts SESSIONS, not people. It used to be described as a headcount
+                  — "a slot is a person" — which was true only as long as a separate
+                  routing rule gave each person exactly one live session per project.
+                  That rule is a routing choice and may change; the quota is a resource
+                  limit and must not be defined by it. Reading the field as a headcount
+                  also made shared sessions unaccountable: one board conversation is one
+                  slot whether two people type into it or ten.
                 format: int32
                 type: integer
               members:

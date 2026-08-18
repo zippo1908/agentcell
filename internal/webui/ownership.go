@@ -37,15 +37,15 @@ func (h *Handler) ownedSession(r *http.Request, name string) (*acv1.Session, err
 	return &sess, nil
 }
 
-// TeamOwnerPrefix marks a session that belongs to a TEAM rather than to one
-// person: the conversation a board holds with a project.
+// LegacyTeamOwnerPrefix is what board sessions used to be owned by: a
+// synthetic principal, "t-<team>", standing in for a group.
 //
-// A board ask must not land in the asker's own terminal. The board is the
-// team's place, its answers are the team's to read, and somebody who asks a
-// question there is not thereby handing over their private session — nor
-// borrowing it from whoever asked last. So a board conversation is its own
-// session, owned by the team, with its own worktree and its own uid.
-const TeamOwnerPrefix = "t-"
+// It is kept only to recognise sessions written before that changed. A
+// synthetic owner cannot pay for anything — there is no account behind it,
+// so "whose budget funded this" had no answer — and it made the person who
+// asked first invisible. Board sessions now belong to the real user who
+// opened them and are marked shared instead.
+const LegacyTeamOwnerPrefix = "t-"
 
 // maySession decides who may drive a session's terminal and follow-ups.
 //
@@ -60,12 +60,21 @@ func (h *Handler) maySession(r *http.Request, sess *acv1.Session) bool {
 	if p.Owns(owner) {
 		return true
 	}
-	// A session the PROJECT owns rather than a person — the board's own
-	// conversation with it — belongs to whoever may work on that project.
-	if cellName, ok := strings.CutPrefix(owner, TeamOwnerPrefix); ok {
+	// A SHARED session — the board's conversation with a project — may be
+	// driven by anyone who may dispatch in that project. That is what makes
+	// it shared: a conversation only one person can answer in is not a
+	// conversation the project is having.
+	//
+	// Operating it does not transfer it. The owner still pays, and nothing
+	// here rewrites the session.
+	if sess.Spec.Board != "" || strings.HasPrefix(owner, LegacyTeamOwnerPrefix) {
+		name := sess.Spec.Cell
+		if name == "" {
+			name = strings.TrimPrefix(owner, LegacyTeamOwnerPrefix)
+		}
 		var c acv1.Cell
 		if err := h.Client.Get(r.Context(),
-			types.NamespacedName{Namespace: h.Namespace, Name: cellName}, &c); err == nil {
+			types.NamespacedName{Namespace: h.Namespace, Name: name}, &c); err == nil {
 			return can(p, &c, ActionDispatch)
 		}
 	}

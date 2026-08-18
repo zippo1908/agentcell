@@ -28,11 +28,20 @@ type SessionSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="ownerUserID is immutable once set"
 	//
-	// A Session is a user-private execution and memory boundary: transcript,
-	// checkpoint and worktree belong to this user alone. Sessions created
-	// before ownership existed have an empty value and are visible only to
-	// the static-token principal; guessing an owner that was never recorded
-	// would hand one user another user's work.
+	// This is the person the session's model spend is charged to. Always a
+	// real user — never a synthetic principal standing in for a group.
+	//
+	// Written once, at creation, and never changed. An operator typing into
+	// a shared session must not quietly become the one paying for it, and
+	// the credential must not be swapped out from under whoever lent it.
+	//
+	// Who may OPERATE the session is a different question, answered by the
+	// project's member list (see Board) rather than stored here: a second
+	// copy of membership is a second thing that can disagree with the first.
+	//
+	// Sessions created before ownership existed have an empty value and are
+	// visible only to the static-token principal; guessing an owner that was
+	// never recorded would hand one user another user's work.
 	OwnerUserID string `json:"ownerUserID,omitempty"`
 	// Task is the work order handed to the agent.
 	Task string `json:"task"`
@@ -98,9 +107,15 @@ type SessionSpec struct {
 	// caller while a pod is scheduled, or to write it down and deliver it on
 	// waking. Only the third is both quick and lossless.
 	PendingTask string `json:"pendingTask,omitempty"`
-	// Board names the team board that asked for this work, so the agent can
-	// answer where the question was asked instead of somewhere else.
-	// +kubebuilder:validation:MaxLength=63
+	// Board names the project board this work was asked for on, and marks
+	// the session as SHARED: everyone who may dispatch in the project can
+	// drive it, because the conversation is the project's rather than one
+	// person's.
+	//
+	// It does not change who PAYS. OwnerUserID stays whoever first asked,
+	// and their credential funds every turn — including turns a colleague
+	// types. Sharing the keyboard and sharing the bill are different
+	// decisions, and only one of them was made here.
 	Board string `json:"board,omitempty"`
 	// FollowPreview points the Cell's resident preview at this session's
 	// worktree while it runs, so the user watches the work live.
