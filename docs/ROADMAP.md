@@ -55,6 +55,26 @@ cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
 
 ### Added in alpha.5 → alpha.6
 
+- **Accounts** — invitations, email login, one principal per person, kept in
+  a SQLite file on a volume. No self-registration: an account here comes
+  with a shell inside the cluster. A password change ends every session,
+  because the cookie signature covers the hash.
+- **Project files** — upload a spec or a spreadsheet; text is extracted once,
+  at upload, and lands in the worktree at `.agentcell/library/` so the agent
+  reads it with the same Read and grep it uses for code.
+- **The agent's own interface** — a resident session runs the CLI the way a
+  person would, welcome screen and slash commands included, and a follow-up
+  is typed at it rather than started as a new process.
+- **Preview in the workspace** — a project serves its work-in-progress from
+  the session that made it, shown in a tab beside the terminal on its own
+  origin.
+- **A session survives its runtime** — a rebuilt runtime reopens the CLI on
+  the conversation already in that worktree, so what comes back is the
+  session rather than a blank shell. Per runner, because the mechanism is
+  the runner's: `claude --continue` and `kimi -c` have it; Codex does not
+  declare an interactive resume and continues from its state directory on
+  the next instruction instead.
+
 Everything here was exercised on the single-node k3s cluster; the ones that
 were not are named as such.
 
@@ -68,14 +88,16 @@ were not are named as such.
   conversation. Opening its terminal or asking one more thing wakes it where
   it was; the agent is not re-run. A session nobody returns to is published
   after a week, not deleted.
-- **One live session per person per Cell** — the agent CLIs already open and
-  switch conversations; a second layer of that only made it possible to be
-  locked out of your own work when slots filled. The slot cap now bounds
-  people, not tasks.
-- **Teams and a board** — a membership list that outlives one project, and a
-  stream where `@cell do the thing` dispatches and answers in the same place.
-  The board's conversation with a project is the team's own session, not the
-  asker's.
+- **One live session per person per project** — the agent CLIs already open
+  and switch conversations; a second layer of that only made it possible to
+  be locked out of your own work. This is a ROUTING rule, not the quota:
+  `maxSessions` counts sessions, because a shared conversation is one slot
+  whether two people type into it or ten.
+- **A board per project** — a stream where saying something IS asking that
+  project's agent. The conversation is the project's own session, funded by
+  the person who opened it and drivable by anyone who may dispatch there;
+  who pays and who types are different questions and only the second is
+  shared. (There is no team layer: the project's member list is the scope.)
 - **A project made of several repositories** — one workspace, one agent, N
   repositories side by side. Each keeps its own remote, base branch and
   credential, and a session that touches three produces three branches,
@@ -109,14 +131,6 @@ were not are named as such.
   container packages are user-scoped and unlinked from the repository
   ([#16](https://github.com/zippo1908/agentcell/issues/16)). Release artifacts
   are complete; only the automation is not.
-- **Resume across a replaced runtime, automatically** — a lost runtime is
-  rebuilt and the window restored, but the restored window is a fresh shell:
-  it is the NEXT follow-up that continues the conversation, because
-  `continue` resumes by the recorded id (Claude) or the per-session state
-  directory (Codex). Re-attaching at recovery time, without waiting for the
-  user to type, is not wired up.
-
-### Medium term
 - **Multi-node** — the workspace PVC is ReadWriteOnce and every pod of a Cell
   is pinned to the anchor's node, so a Cell cannot outgrow one machine. RWX
   storage is what lifts that ceiling.

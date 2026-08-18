@@ -1,6 +1,6 @@
 # ADR-0013: Roles on the Cell, not a policy engine (yet)
 
-Status: accepted
+Status: accepted; superseded in part (2026-08, see "What changed since")
 
 ## The question
 
@@ -154,3 +154,36 @@ operator edits at runtime without a release. None of those are here.
   everywhere — the single-user story is unchanged.
 - `can()` is the only place a decision is made. If it ever needs an engine,
   that is where the engine goes.
+
+
+## What changed since
+
+Two parts of this decision no longer describe the system, and pretending
+otherwise would make the record worse than useless — somebody would follow
+it and be wrong.
+
+**Teams are gone.** This ADR gave a Cell an optional team whose member list
+supplied defaults, with a name on the Cell overriding it in both directions.
+That was a second membership model for a product where every capability —
+a terminal, a preview, a release — belongs to a project. Two answers to one
+question drift: somebody in the team but off the project could read the
+whole conversation about work they could not open. The project's own member
+list is now the only scope, and the board's conversation belongs to the
+project too.
+
+The removal had to be safe for deployments already running. A Cell written
+before it carries `spec.team` and usually no members of its own — the team
+WAS its list — so the access rule was changed to read an empty member list
+as OPEN. Left as it was, such a project would have reported itself
+restricted while naming nobody: closed to everyone, administrators included.
+A rule that turns an upgrade into a lockout is worse than one that is
+briefly too generous.
+
+**Sharing a session is not a flaw to prevent.** The original text treated a
+personal runtime as something that could never be shared. It can, and the
+board's conversation is exactly that case. What may NOT be shared silently
+is the bill: a session records the real person who opened it, that person's
+credential funds every turn, and an operator typing into it does not become
+the sponsor. Per-user uids and 0700 directories remain the default isolation
+topology — that is an implementation strategy, not a reason a project's
+conversation cannot have several people in it.

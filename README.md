@@ -183,6 +183,31 @@ reaches production until a person has read it.
 
 Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
+
+### Who owns what
+
+```
+Project (Cell)
+  └── session quota (maxSessions: how many sessions may hold a slot here)
+       └── Session ── owner: a real person, written once, never changed
+            │           their credential funds every turn of it
+            ├── operators: whoever may dispatch in the project, for a SHARED
+            │              session (the board's) — they type, they do not pay
+            ├── worktree + conversation (on the volume, survives the runtime)
+            └── review ── PR / release
+```
+
+Two decisions people keep expecting to be one: sharing a keyboard and
+sharing a bill. A board conversation is shared — anybody on the project can
+answer in it — and it is still funded by whoever opened it. An operator
+never silently becomes the sponsor, and the credential is never swapped out
+from under the person who lent it.
+
+Per-user Unix uids, 0700 directories and one tmux server per person are the
+DEFAULT isolation topology, not a product principle: they are how sessions
+stay out of each other's way by default, and they are not a reason a session
+cannot be shared deliberately.
+
 ## Implemented vs designed
 
 | Capability | State |
@@ -224,7 +249,7 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 | **celld leader election**: one replica reconciles, every replica serves the console, ~4s takeover measured on a killed leader | ✅ tested |
 | Single-use preview tickets enforced across replicas (redemption is an atomic create against the API server, not a map in one process) | ✅ tested |
 | **Board**: one stream per project — saying something there IS asking that project's agent, no `@cell` needed; `@user` mentions; the board's conversation is its own session, not the asker's | ✅ tested |
-| **One live session per person per Cell**, with follow-ups queued and delivered on wake; the slot cap bounds people, not tasks | ✅ tested |
+| **One live session per person per project** (a routing rule), with follow-ups queued in order and delivered on wake; `maxSessions` counts SESSIONS — one shared conversation is one slot whether two people type into it or ten | ✅ tested |
 | **PlacementClass**: an administrator offers machine pools; nothing a maintainer sends can become a node selector or a toleration | ✅ tested |
 | **Create-a-project by choosing**: devbox, runner and provider as cards narrowed to what can be driven; only name and repo are typed | ✅ |
 | Database *configuration* per zone (dev and prod name separate secrets; the platform injects, never provisions) | ✅ |
