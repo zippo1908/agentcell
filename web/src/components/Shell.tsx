@@ -1,6 +1,8 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { cellTone } from '../lib/format'
 
 /** 16px stroke icons, inline so there is no icon font to load. */
 const icon = (d: string) => (
@@ -28,15 +30,32 @@ const IconCaps = icon('M12 3l8 4.5v9L12 21l-8-4.5v-9z|M12 12l8-4.5|M12 12v9|M12 
  * second look.
  */
 export function Shell() {
+  // The navigation folds away. On the workspace especially, every column
+  // that is not the terminal is in the way — and this one is 224px of
+  // links somebody has already learned.
+  const [navOpen, setNavOpen] = useState(() => localStorage.getItem('ws-nav') !== 'closed')
+  useEffect(() => {
+    localStorage.setItem('ws-nav', navOpen ? 'open' : 'closed')
+  }, [navOpen])
   const { data: reviews } = useQuery({ queryKey: ['reviews'], queryFn: () => api.reviews() })
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: 60_000, retry: false })
   const pending = reviews?.filter((r) => r.state === 'Pending').length ?? 0
 
   const link = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : '')
+  const onWorkspace = useLocation().pathname.startsWith('/workspace')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const { data: cells } = useQuery({ queryKey: ['cells'], queryFn: () => api.cells(), refetchInterval: 15000 })
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar ${navOpen ? '' : 'folded'}`}>
+        <button
+          className="nav-fold"
+          onClick={() => setNavOpen(!navOpen)}
+          title={navOpen ? '收起菜单' : '展开菜单'}
+        >
+          {navOpen ? '‹' : '›'}
+        </button>
         <div className="logo-block">
           <span className="logo-glyph">
             <span />
@@ -48,54 +67,105 @@ export function Shell() {
           </span>
         </div>
         <nav>
-          <div className="nav-label">导航</div>
-          {/* The board first: it is where work is asked for and answered, so
-              it is where somebody opening the console should land. */}
+          {/* Two places, because there are two things you do here: ask for
+              work, and watch it happen. Everything else is a setting, and
+              settings belong behind your own name — not in the path
+              somebody walks twenty times a day. */}
           <NavLink to="/board" className={link}>
             {IconBoard} 黑板
           </NavLink>
           <NavLink to="/workspace" className={link}>
             {IconWork} 工作台
           </NavLink>
-          <NavLink to="/dashboard" className={link}>
-            {IconHome} 概览
-          </NavLink>
-          <NavLink to="/cells" className={link}>
-            {IconCells} 工作区
-          </NavLink>
-          <NavLink to="/reviews" className={link}>
-            {IconReview} 批阅
-            {pending > 0 && <span className="nav-count">{pending > 99 ? '99+' : pending}</span>}
-          </NavLink>
-          <NavLink to="/capabilities" className={link}>
-            {IconCaps} 能力
-          </NavLink>
-          <NavLink to="/credentials" className={link}>
-            {IconKey} 我的凭据
-          </NavLink>
-          <NavLink to="/teams" className={link}>
-            {IconTeam} 团队
-          </NavLink>
         </nav>
+
+        {/* Projects live in the navigation, not inside the workspace.
+            Choosing what to work on IS navigation; keeping a second list of
+            projects inside the page meant the same choice existed twice and
+            cost a column of the terminal's width. */}
+        <div className="nav-label nav-projects-label">
+          项目
+          <Link to="/cells/new" className="ws-new" title="新建项目">
+            +
+          </Link>
+        </div>
+        <div className="nav-projects">
+          {(cells ?? []).map((c) => (
+            <NavLink
+              key={c.name}
+              to={`/workspace/${c.name}`}
+              className={({ isActive }) => `nav-project ${isActive ? 'active' : ''}`}
+              title={c.description || c.name}
+            >
+              <span className={`dot ${cellTone(c.phase)}`} />
+              <span className="nav-project-name">{c.name}</span>
+            </NavLink>
+          ))}
+          {(cells ?? []).length === 0 && (
+            <Link to="/cells/new" className="nav-project muted">
+              还没有项目,建一个
+            </Link>
+          )}
+        </div>
+
         <span className="spacer" />
+
+        {/* Everything else lives behind your own name.
+            A console's navigation should hold the things you do, not the
+            things you occasionally configure — and "occasionally" is what
+            credentials, teams, capabilities and the review queue are once a
+            project is running. */}
         <div className="user-box">
-          <div className="user-line">
+          {menuOpen && (
+            <div className="user-menu">
+              <NavLink to="/reviews" className={link} onClick={() => setMenuOpen(false)}>
+                {IconReview} 批阅
+                {pending > 0 && <span className="nav-count">{pending > 99 ? '99+' : pending}</span>}
+              </NavLink>
+              <NavLink to="/dashboard" className={link} onClick={() => setMenuOpen(false)}>
+                {IconHome} 概览
+              </NavLink>
+              <NavLink to="/capabilities" className={link} onClick={() => setMenuOpen(false)}>
+                {IconCaps} 能力
+              </NavLink>
+              <NavLink to="/credentials" className={link} onClick={() => setMenuOpen(false)}>
+                {IconKey} 我的凭据
+              </NavLink>
+              <NavLink to="/teams" className={link} onClick={() => setMenuOpen(false)}>
+                {IconTeam} 团队
+              </NavLink>
+              <NavLink to="/cells" className={link} onClick={() => setMenuOpen(false)}>
+                {IconCells} 全部项目
+              </NavLink>
+              <form method="post" action="/logout">
+                <button className="user-menu-out" type="submit">
+                  退出登录
+                </button>
+              </form>
+            </div>
+          )}
+          <button
+            className="user-line"
+            onClick={() => setMenuOpen(!menuOpen)}
+            title={menuOpen ? '收起' : '设置与其他'}
+          >
             <span className="user-mark">{(me?.name ?? '?').slice(0, 2)}</span>
             <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {me?.name ?? '…'}
             </span>
-          </div>
-          {/* A console that implies per-user privacy it does not have is worse
-              than one that admits it. */}
+            <span className="user-caret">{menuOpen ? '▾' : '▴'}</span>
+          </button>
           {me?.shared && (
             <div className="faint" style={{ fontSize: 11, lineHeight: 1.5 }}>
-              共享令牌登录:所有人是同一个主体,会话之间没有私密性。配置 OIDC 后每人独立。
+              共享令牌登录:所有人是同一个主体,会话之间没有私密性。
             </div>
           )}
         </div>
       </aside>
       <main className="main">
-        <div className="main-inner">
+        {/* The workspace is an instrument panel, not a document: it gets the
+            whole width, and sizes its own margin. */}
+        <div className={`main-inner ${onWorkspace ? 'bleed' : ''}`}>
           <Outlet />
         </div>
       </main>

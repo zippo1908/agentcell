@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { Branch } from '../api/types'
@@ -20,19 +20,21 @@ import { cellTone } from '../lib/format'
  * produced.
  */
 export function WorkspacePage() {
-  const [cell, setCell] = useState<string>('')
+  // The project comes from the URL, because choosing one is navigation and
+  // the sidebar is where navigation lives. Keeping a second list in here
+  // meant the same choice existed twice and cost a column of the terminal's
+  // width.
+  const { cell: routeCell } = useParams()
+  const navigate = useNavigate()
+  const cell = routeCell ?? ''
+
   const [showTree, setShowTree] = useState(true)
-  // The project list folds away for the same reason the branch tree does:
-  // when you are reading a terminal, every column that is not the terminal
-  // is in the way.
-  const [showList, setShowList] = useState(true)
   // Which pane the middle is showing. The parent needs to know because a
   // preview takes the branch column's width as well.
   const [mainView, setMainView] = useState<'terminal' | 'preview'>('terminal')
   const root = useRef<HTMLDivElement>(null)
   // Both side columns are draggable and both remember their width. The
   // middle takes whatever is left, because the middle is the terminal.
-  const [listW, setListW] = usePaneWidth('list', 210, 140, 420)
   const [treeW, setTreeW] = usePaneWidth('tree', 260, 180, 520)
   // The page's own side margin. On a wide screen the default gutter throws
   // away exactly the width a terminal wants; on a narrow one, removing it
@@ -41,13 +43,6 @@ export function WorkspacePage() {
   const [gutter, setGutter] = usePaneWidth('gutter', 16, 0, 160)
 
   // -1 from a double-click means "back to the default".
-  const dragList = useCallback(
-    (x: number) => {
-      const left = root.current?.getBoundingClientRect().left ?? 0
-      setListW(x < 0 ? 210 : x - left)
-    },
-    [setListW],
-  )
   // Dragging the page edge itself. Measured from the window, not the grid,
   // because the thing being sized IS the space outside the grid.
   const dragGutter = useCallback(
@@ -63,9 +58,11 @@ export function WorkspacePage() {
   )
 
   const cells = useQuery({ queryKey: ['cells'], queryFn: () => api.cells(), refetchInterval: 10000 })
+  // Land on something rather than on nothing: with no project in the URL,
+  // go to the first one.
   useEffect(() => {
-    if (!cell && cells.data?.length) setCell(cells.data[0].name)
-  }, [cells.data, cell])
+    if (!cell && cells.data?.length) navigate(`/workspace/${cells.data[0].name}`, { replace: true })
+  }, [cells.data, cell, navigate])
 
   if (cells.isLoading) return <Spinner />
   if (!cells.data?.length) {
@@ -81,12 +78,9 @@ export function WorkspacePage() {
   return (
     <div
       ref={root}
-      className={`ws ${showTree && mainView === 'terminal' ? '' : 'ws-notree'} ${
-        showList ? '' : 'ws-nolist'
-      }`}
+      className={`ws ${showTree && mainView === 'terminal' ? '' : 'ws-notree'}`}
       style={
         {
-          '--ws-list': `${listW}px`,
           '--ws-tree': `${treeW}px`,
           '--ws-gutter': `${gutter}px`,
         } as React.CSSProperties
@@ -99,38 +93,6 @@ export function WorkspacePage() {
       <div className="ws-gutter" />
       <Splitter onDrag={dragGutter} title="拖动调整页面左右留白(双击复位)" />
 
-      {showList ? (
-      <aside className="ws-list">
-        <div className="ws-head">
-          <span>项目</span>
-          <Link to="/cells/new" className="ws-new" title="新建项目">
-            +
-          </Link>
-          <button className="ws-fold" onClick={() => setShowList(false)} title="收起项目栏">
-            ‹
-          </button>
-        </div>
-        {cells.data.map((c) => (
-          <button
-            key={c.name}
-            className={`ws-item ${c.name === cell ? 'on' : ''}`}
-            onClick={() => setCell(c.name)}
-          >
-            <span className="ws-item-name">{c.name}</span>
-            <span className={`dot ${cellTone(c.phase)}`} />
-            <span className="ws-item-sub">
-              {c.activeSessions ?? 0}/{c.maxSessions ?? 0} 在用
-            </span>
-          </button>
-        ))}
-      </aside>
-      ) : (
-        <button className="ws-unfold left" onClick={() => setShowList(true)} title="展开项目栏">
-          ›
-        </button>
-      )}
-
-      {showList && <Splitter onDrag={dragList} title="拖动调整项目栏宽度(双击复位)" />}
 
       <section className="ws-main">
         {cell && <CellWork cell={cell} onView={setMainView} />}
