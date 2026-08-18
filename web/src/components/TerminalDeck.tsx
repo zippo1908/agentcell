@@ -32,9 +32,11 @@ export function TerminalDeck({ session }: { session: string }) {
   return (
     <>
       {live.map((s) => (
-        // display, not conditional rendering: unmounting is what closed the
-        // socket. The hidden ones keep reading and keep their scrollback.
-        <div key={s} style={{ display: s === session ? 'block' : 'none' }}>
+        // hidden, not unmounted: unmounting is what closed the socket. The
+        // hidden ones keep reading and keep their scrollback. The attribute
+        // rather than an inline style, so the pane's own layout rules still
+        // decide how the visible one is sized.
+        <div key={s} className="term-slot" hidden={s !== session}>
           <Terminal session={s} />
         </div>
       ))}

@@ -83,6 +83,11 @@ export const api = {
       '/api/kimi/login', { method: 'POST' }),
   kimiLoginPoll: () =>
     req<{ url?: string; code?: string; status: string; message?: string }>('/api/kimi/login'),
+  sleepSession: (name: string) =>
+    req<{ ok: string; message?: string }>(`/api/sessions/${name}/sleep`, { method: 'POST' }),
+  restartRuntime: (name: string) =>
+    req<{ ok: string; message?: string }>(`/api/sessions/${name}/restart`, { method: 'POST' }),
+
   kimiDisconnect: () =>
     req<{ status: string; message?: string }>('/api/kimi/login', { method: 'DELETE' }),
 

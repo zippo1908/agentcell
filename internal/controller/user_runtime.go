@@ -271,6 +271,21 @@ const maxRecoveries = 3
 // says the next thing. Recovery restores the terminal — the user decides
 // what happens in it.
 func (r *SessionReconciler) recoverResident(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) (ctrl.Result, error) {
+	// A restart somebody ASKED for is not evidence of an unstable runtime,
+	// so it must not spend the recovery budget. Without this, pressing
+	// 重启 three times over the life of a session — a perfectly reasonable
+	// thing to do to a wedged terminal — silently settles the work on the
+	// third press, which is the exact opposite of what the button promises.
+	if _, asked := sess.Annotations[acv1.RestartRequestedAnnotation]; asked {
+		delete(sess.Annotations, acv1.RestartRequestedAnnotation)
+		if err := r.Update(ctx, sess); err != nil {
+			return ctrl.Result{}, err
+		}
+		sess.Status.Recoveries = 0
+		if err := r.Status().Update(ctx, sess); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if sess.Status.Recoveries >= maxRecoveries {
 		return r.startSettle(ctx, sess, cell, ns, id,
 			fmt.Sprintf("runtime lost %d times; settling rather than rebuilding again", sess.Status.Recoveries))

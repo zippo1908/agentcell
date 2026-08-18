@@ -4,6 +4,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// RestartRequestedAnnotation marks a runtime teardown that a PERSON asked
+// for, so the controller rebuilds without counting it as a crash. Recovery
+// is budgeted (a runtime that dies over and over must eventually settle
+// rather than flap forever), and a deliberate restart drawing on that same
+// budget would turn the third press of a button into "your session is
+// over".
+const RestartRequestedAnnotation = "agentcell.io/restart-requested"
+
 // SessionSpec is one disposable work session: a task dispatched to an
 // agent inside a Cell's slot.
 type SessionSpec struct {

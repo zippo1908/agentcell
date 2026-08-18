@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { Branch } from '../api/types'
 import { TerminalDeck } from '../components/TerminalDeck'
+import { SessionControls } from '../components/SessionControls'
 import { Splitter, usePaneWidth } from '../components/Splitter'
 import { Badge, Spinner, useToast } from '../ui/primitives'
 import { cellTone } from '../lib/format'
@@ -168,6 +169,7 @@ function CellWork({ cell }: { cell: string }) {
             打开预览 ↗
           </a>
         )}
+        {live && <SessionControls session={live.name} phase={live.phase} onDone={() => qc.invalidateQueries({ queryKey: ['cell', cell] })} />}
       </div>
 
       <div className="ws-term">

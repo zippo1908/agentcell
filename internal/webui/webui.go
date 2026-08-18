@@ -150,6 +150,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{session}", h.settleSession)
 	mux.HandleFunc("GET /api/sessions/{session}/state", h.sessionState)
 	mux.HandleFunc("POST /api/sessions/{session}/continue", h.continueSession)
+	mux.HandleFunc("POST /api/sessions/{session}/sleep", h.sleepSession)
+	mux.HandleFunc("POST /api/sessions/{session}/restart", h.restartRuntime)
 	// The SPA is last: it serves built assets and falls back to index.html
 	// so client-side routes (/cells/x, /reviews) survive a hard reload.
 	mux.Handle("/", spaHandler())
