@@ -2,7 +2,9 @@ package webui
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"html/template"
 	"net/http"
 	"net/url"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,6 +39,10 @@ type Authenticator struct {
 	// gateway that OVERWRITES these headers (e.g. APISIX must set, not
 	// append, X-Forwarded-*).
 	TrustForwardedHeaders bool
+	// Accounts, when set, is what makes this deployment multi-person:
+	// email logins, invitations, and a principal per human. Without it the
+	// static token remains the only way in and everyone is one principal.
+	Accounts *Accounts
 	// tickets is the single-use guard. Shared through the API server when a
 	// client is wired, because "used once" has to hold across replicas.
 	tickets sharedTickets
@@ -75,6 +81,24 @@ func freshKeyMaterial() []byte {
 
 // SetKeyMaterial pins the preview signing seed to operator-provided bytes so
 // tickets stay valid across restarts and across replicas.
+// SessionKey derives the key that signs account session cookies.
+//
+// Separate from the preview key by domain string, so the same material can
+// seed both without a ticket ever being usable as a session or the reverse
+// — two credentials that mean very different things must not be
+// interchangeable just because they share a secret.
+func (a *Authenticator) SessionKey() []byte {
+	h := sha256.New()
+	_, _ = h.Write(a.keyMaterial)
+	_, _ = h.Write([]byte{0})
+	for _, t := range a.sortedTokens() {
+		_, _ = h.Write([]byte(t))
+		_, _ = h.Write([]byte{0})
+	}
+	_, _ = h.Write([]byte("agentcell-session-v1"))
+	return h.Sum(nil)
+}
+
 func (a *Authenticator) SetKeyMaterial(b []byte) {
 	if len(b) > 0 {
 		a.keyMaterial = b
@@ -109,8 +133,20 @@ func (a *Authenticator) resolve(r *http.Request, presented string) (identity.Pri
 		}
 		return p, true
 	}
+	// An account session cookie, which is what a person logged in with an
+	// email carries. Checked before the static token because the static
+	// token is the break-glass path, not the normal one.
+	if a.Accounts != nil {
+		if p, ok := a.Accounts.FromCookie(r.Context(), presented); ok {
+			return p, true
+		}
+	}
 	if a.valid(presented) {
-		return identity.StaticToken, true
+		// The bootstrap credential is an administrator by definition: it is
+		// how an operator sets a deployment up before any person exists.
+		p := identity.StaticToken
+		p.Admin = true
+		return p, true
 	}
 	return identity.Principal{}, false
 }
@@ -262,7 +298,8 @@ func consoleCookieName(secure bool) string {
 // a pass-through — celld logs a warning at startup in that case.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.Enabled() || r.URL.Path == "/healthz" || r.URL.Path == "/login" {
+		if !a.Enabled() || r.URL.Path == "/healthz" ||
+			strings.HasPrefix(r.URL.Path, "/login") || strings.HasPrefix(r.URL.Path, "/invite") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -310,9 +347,41 @@ func (a *Authenticator) LoginRoutes(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(loginPageHTML(""))
+	})
+	mux.HandleFunc("POST /login", a.accountLogin)
+	mux.HandleFunc("POST /logout", a.logout)
+	// The token form stays reachable so an operator whose account table is
+	// empty — or whose own account is locked out — still has a way in.
+	mux.HandleFunc("GET /login/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(loginHTML)
 	})
-	mux.HandleFunc("POST /login", a.tokenLogin)
+	mux.HandleFunc("POST /login/token", a.tokenLogin)
+}
+
+// loginPageHTML renders the email form, with an optional message. Server
+// rendered because it must work before any of the console's JavaScript —
+// which lives behind auth — has been allowed to load.
+func loginPageHTML(msg string) []byte {
+	note := ""
+	if msg != "" {
+		note = `<p style="color:#e0776a;margin:0">` + template.HTMLEscapeString(msg) + `</p>`
+	}
+	return []byte(`<!doctype html><meta charset=utf-8>
+<title>AgentCell — 登录</title>
+<style>body{font:15px system-ui;display:grid;place-items:center;height:100vh;margin:0;background:#171a18;color:#e6e9e7}
+form{display:flex;gap:8px;flex-direction:column;width:300px}
+input,button{padding:9px;border-radius:6px;border:1px solid #333;font:inherit}
+button{background:#58a17b;color:#10140f;border:0;cursor:pointer}
+a{color:#8ab;font-size:13px}</style>
+<form method=post action=/login>
+<h2>AgentCell</h2>` + note + `
+<input name=email type=email placeholder="邮箱" autofocus autocomplete=username>
+<input name=password type=password placeholder="密码" autocomplete=current-password>
+<button>登录</button>
+<a href="/login/token">用访问令牌登录</a>
+</form>`)
 }
 
 func (a *Authenticator) tokenLogin(w http.ResponseWriter, r *http.Request) {

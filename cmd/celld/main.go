@@ -26,6 +26,7 @@ import (
 	"github.com/zippo1908/agentcell/internal/controller"
 	"github.com/zippo1908/agentcell/internal/forge"
 	"github.com/zippo1908/agentcell/internal/identity"
+	"github.com/zippo1908/agentcell/internal/store"
 	"github.com/zippo1908/agentcell/internal/useruid"
 	"github.com/zippo1908/agentcell/internal/version"
 	"github.com/zippo1908/agentcell/internal/webui"
@@ -63,6 +64,10 @@ func main() {
 			"honour X-Forwarded-Proto/Host; enable ONLY behind a gateway that OVERWRITES them (e.g. APISIX), never where celld is directly reachable")
 		allowNoAuth = flag.Bool("allow-no-auth", false,
 			"start with the HTTP surface unauthenticated (dev only)")
+		dbPath = flag.String("db", "",
+			"SQLite file holding people, invitations, lent credentials and forge identities; empty disables accounts and leaves the static token as the only way in")
+		bootstrapAdmin = flag.String("bootstrap-admin", "",
+			"email of the first administrator, created with AGENTCELL_BOOTSTRAP_PASSWORD if no account exists yet")
 		showVersion   = flag.Bool("version", false, "print version and exit")
 		defaultRunner = flag.String("default-runner", "kimi",
 			"agent CLI a new project starts with")
@@ -178,6 +183,30 @@ func main() {
 	// Preview tickets must not be signed with a key derived from an empty
 	// token list, which is a publicly computable constant.
 	auth.SetKeyMaterial([]byte(os.Getenv("AGENTCELL_PREVIEW_KEY")))
+
+	// Accounts turn this from "one shared token" into a place with people
+	// in it. Optional, because the upstream project is also run as a
+	// single-operator tool where a token is the honest answer.
+	if *dbPath != "" {
+		db, err := store.Open(*dbPath)
+		if err != nil {
+			log.Error(err, "opening the accounts database", "path", *dbPath)
+			os.Exit(1)
+		}
+		defer func() { _ = db.Close() }()
+		auth.Accounts = &webui.Accounts{DB: db, Key: auth.SessionKey()}
+		if *bootstrapAdmin != "" {
+			pw := os.Getenv("AGENTCELL_BOOTSTRAP_PASSWORD")
+			if pw == "" {
+				log.Info("skipping bootstrap admin: AGENTCELL_BOOTSTRAP_PASSWORD is not set")
+			} else if err := auth.Accounts.Bootstrap(context.Background(), *bootstrapAdmin, pw); err != nil {
+				log.Error(err, "creating the first administrator")
+				os.Exit(1)
+			}
+		}
+		n, _ := db.CountUsers(context.Background())
+		log.Info("accounts enabled", "db", *dbPath, "people", n)
+	}
 	// Single-use must mean single-use across replicas, not per process.
 	auth.UseSharedTicketStore(mgr.GetClient(), *controlNS)
 	if err := mgr.Add(alwaysRun(auth.SweepTickets)); err != nil {
@@ -221,6 +250,7 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	auth.LoginRoutes(mux)
+	ui.PublicRoutes(mux)
 	mux.Handle("/", auth.Middleware(ui.Routes()))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_ = healthz.Ping(nil)

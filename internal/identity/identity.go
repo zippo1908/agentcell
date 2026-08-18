@@ -24,10 +24,19 @@ const (
 	// single shared identity by nature, which is exactly why it is not the
 	// default once an IdP is configured.
 	KindToken Kind = "token"
+	// KindUser is a person with an account on this deployment: invited by
+	// somebody, holding their own password, their own credentials and their
+	// own forge identity. This is what makes "your key" and "your GitLab
+	// account" mean anything — under a shared token they were one drawer.
+	KindUser Kind = "user"
 )
 
 // Principal is the authenticated caller.
 type Principal struct {
+	// Admin may invite people and act on anyone's behalf in the places the
+	// product says an administrator can. Carried here rather than looked up
+	// per check, so a handler cannot forget to ask.
+	Admin bool
 	// Subject is stable and unique across issuers. Human-debuggable; not
 	// used directly as a Kubernetes field value (see ID).
 	Subject string
@@ -38,6 +47,11 @@ type Principal struct {
 
 // StaticToken is the principal every static bearer token resolves to.
 var StaticToken = Principal{Subject: "token:static", Name: "static token", Kind: KindToken}
+
+// UserSubject identifies a person by the address they log in with. The
+// address, not a row id: it stays stable if the store is ever rebuilt, and
+// it is what an operator reads in an audit line.
+func UserSubject(email string) string { return "user:" + strings.ToLower(strings.TrimSpace(email)) }
 
 // OIDCSubject builds a subject that stays unique when two issuers happen to
 // use the same `sub` — which they do, since `sub` is only required to be
