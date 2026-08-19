@@ -158,6 +158,29 @@ func (db *DB) migrate() error {
 			created_at INTEGER NOT NULL,
 			PRIMARY KEY (user_id, provider)
 		)`,
+		// The entity a person IS, separate from the ways they log in.
+		// See principals.go for why this is not the same as users, and why
+		// adopting existing ids rather than allocating new ones is what
+		// makes the change safe. A principal row carries no attributes on
+		// purpose: name, email and admin belong to an account, and a
+		// principal outlives any particular account it was reached through.
+		`CREATE TABLE IF NOT EXISTS principals (
+			id         TEXT PRIMARY KEY,
+			created_at INTEGER NOT NULL
+		)`,
+		// (provider, subject) is the login; principal_id is who it is.
+		// The primary key is the login, because one login must resolve to
+		// exactly one person — while one person may have many logins.
+		`CREATE TABLE IF NOT EXISTS identity_bindings (
+			provider     TEXT NOT NULL,
+			subject      TEXT NOT NULL,
+			principal_id TEXT NOT NULL,
+			bound_by     TEXT NOT NULL DEFAULT '',
+			created_at   INTEGER NOT NULL,
+			PRIMARY KEY (provider, subject)
+		)`,
+		`CREATE INDEX IF NOT EXISTS bindings_by_principal
+			ON identity_bindings (principal_id)`,
 	}
 	for i, s := range steps {
 		if _, err := db.sql.Exec(s); err != nil {
@@ -192,6 +215,11 @@ func (db *DB) migrate() error {
 	// nothing and stops the next person having to find that out.
 	if err := db.renameColumn("grants", "provider", "credential"); err != nil {
 		return fmt.Errorf("rename grants.provider: %w", err)
+	}
+	// Adopt existing identities as principals. Runs last because it reads
+	// users, and after every ALTER because it reads the current shape.
+	if err := db.backfillPrincipals(); err != nil {
+		return fmt.Errorf("adopt existing identities as principals: %w", err)
 	}
 	return nil
 }
@@ -250,12 +278,41 @@ type User struct {
 // sets of credentials and two halves of the same person's work.
 func NormalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
+// CreateUser writes the account AND the principal it is a login for.
+//
+// One transaction, because a user with no principal is not a valid state: on
+// their next request authentication would resolve their login, find no
+// binding, and allocate a fresh id — so the account would answer to one id
+// during sign-up and a different one forever after. Doing it here rather
+// than at each call site means the two callers (redeeming an invitation and
+// bootstrapping the first administrator) cannot disagree.
+//
+// The principal adopts the id the caller computed, exactly as the backfill
+// adopts existing ones, so an account created today and an account migrated
+// from before this change are indistinguishable.
 func (db *DB) CreateUser(ctx context.Context, id, email, name, passwordHash string, admin, canCreate bool) error {
-	_, err := db.sql.ExecContext(ctx,
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO users (id, email, name, password, is_admin, can_create_projects, created_at)
 		 VALUES (?,?,?,?,?,?,?)`,
-		id, NormalizeEmail(email), name, passwordHash, boolInt(admin), boolInt(canCreate), time.Now().Unix())
-	return err
+		id, NormalizeEmail(email), name, passwordHash, boolInt(admin), boolInt(canCreate), now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO principals (id, created_at) VALUES (?,?)`, id, now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO identity_bindings (provider, subject, principal_id, created_at)
+		 VALUES ('user', ?, ?, ?)`, "user:"+NormalizeEmail(email), id, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetCanCreate grants or withdraws the right to start projects.
