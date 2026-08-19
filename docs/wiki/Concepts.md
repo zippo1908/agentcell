@@ -13,6 +13,9 @@
 | **运行时**(Runtime) | 你在这个项目里的那份私有环境 | 别人看不进来,你也看不进别人的 |
 | **模型 key**(Credential) | 你的 API key | 自己加、自己花,不会被别人稀里糊涂用掉 |
 | **批阅**(Review) | 做完了、等人看的活 | 没经过这一步,不会变成 PR |
+| **知识库**(Files) | 传给这个项目的文件 | 每次派工都跟着进沙盒,不用在任务里重复贴 |
+| **项目令牌** | 这个项目 clone/push 用的那份凭据 | 和「个人令牌」「建项目的授权」是三件事 |
+| **个人 forge 令牌** | 你自己的 GitLab/GitHub 令牌 | 你的提交在 GitLab 那边算你的;从不出借 |
 
 
 ## 一张图
@@ -103,6 +106,9 @@ flowchart TB
 | **Project** (Cell) | one repository, set up and kept running | everything else hangs off it |
 | **Session** | your working copy and terminal in a project | one per person; where you talk to the agent |
 | **Board** | the project's message stream | ask for work here; hear back here |
+| **Knowledge base** | files uploaded to a project | delivered into every sandbox, so a spec is not re-pasted per task |
+| **Project credential** | what this project clones and pushes with | distinct from a personal token and from may-create-projects |
+| **Personal forge token** | your own GitLab/GitHub token | your commits are yours over there; never lent |
 | **Slot** | permission to use the machine in a project | limits how many **people** work there at once |
 | **Machine pool** (PlacementClass) | a class of machine an admin offers | which server a project runs on |
 | **Runtime** | your private environment inside a project | nobody can see into yours, you cannot see into theirs |

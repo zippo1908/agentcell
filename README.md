@@ -187,7 +187,14 @@ Full diagrams (control plane, lifecycle, git-broker): **[docs/ARCHITECTURE.md](d
 ### Who owns what
 
 ```
+Account ── may-create-projects (granted on the invitation, not on a project)
+  │         └── personal forge token (GitLab/GitHub: theirs, never lent)
+  ↓
 Project (Cell)
+  ├── repository (may be attached later; REPLACING one is a migration)
+  ├── member list ── the project's whole scope (there is no team layer)
+  ├── knowledge base ── uploaded files, delivered into every sandbox
+  ├── project credential ── what THIS project clones and pushes with
   └── session quota (maxSessions: how many sessions may hold a slot here)
        └── Session ── owner: a real person, written once, never changed
             │           their credential funds every turn of it
@@ -196,6 +203,14 @@ Project (Cell)
             ├── worktree + conversation (on the volume, survives the runtime)
             └── review ── PR / release
 ```
+
+Three things called "token" answer three different questions:
+
+| | Belongs to | Answers |
+|---|---|---|
+| may-create-projects | the account | may this person start a new project |
+| personal forge token | the account | whose commit is this, as far as GitLab is concerned |
+| project credential | the project | what does THIS project clone and push with |
 
 Two decisions people keep expecting to be one: sharing a keyboard and
 sharing a bill. A board conversation is shared — anybody on the project can
@@ -234,6 +249,12 @@ cannot be shared deliberately.
 | Helm chart + GHCR images + cloud presets (k3s / ACK / TKE) | ✅ `helm lint`-verified |
 | **Terminal in the browser** (xterm.js ↔ tmux over WebSocket, read-write); only the session's owner may attach — a Cell maintainer may not | ✅ tested |
 | **Dormancy**: an idle session gives back its slot and runtime and keeps its worktree + conversation; opening the terminal or a follow-up wakes it where it was | ✅ tested |
+| **Preview without a command**: the platform reads the checkout and decides (dev/start, Django, a static page); when it finds nothing it says so instead of serving nothing silently | ✅ tested |
+| **Repository attached later**: a project can exist before its repo does; REPLACING one is refused, because that is a migration | ✅ |
+| **Project knowledge base**: uploaded files delivered into every sandbox, text extracted where it can be | ✅ |
+| **Board mentions**: typing `@` lists the project's members and the agent; resolved by the name on somebody's address, ambiguity refused rather than guessed; an `@` that reaches nobody says so | ✅ tested |
+| **Personal forge token**: bound by its owner, projected as a basic-auth credential a project may use, never lent | ✅ |
+| **May-create-projects**: granted on the invitation; an upgrade never withdraws it from existing accounts | ✅ tested |
 | **Accounts**: invitations, email login, a principal per person; a password change ends every session because the cookie signature covers the hash | ✅ tested |
 | **Files**: upload a spec or a spreadsheet; text is extracted once, on upload, and lands in the worktree at `.agentcell/library/` for the agent to Read and grep | ✅ tested |
 | **Interactive agent**: the resident session runs the CLI the way a person would — its own screen, its own slash commands — and a follow-up is typed at it | ✅ tested |
@@ -302,7 +323,7 @@ kubectl -n agentcell-system rollout restart deploy/celld
 # 4. A Cell with a resident preview, then dispatch and watch it live
 cellctl cell create shop --repo https://github.com/you/shop.git \
   --image ghcr.io/agentcell/devbox --secret git-cred \
-  --preview "npm run dev -- --host" --preview-port 5173 --description "极简电商"
+  --description "a minimal shop"
 cellctl dispatch shop --task "把商品卡片改成两列" \
   --runner claude --provider aliyun-bailian --model qwen3-coder-plus --cred bailian-key --follow
 
