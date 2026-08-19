@@ -107,3 +107,22 @@ kubectl -n cell-<name> exec runtime-<uid> -- cat /workspace/users/<uid>/state/<i
   bug: what is not yours answers 404 on purpose.
 
 </details>
+
+## 「账号库暂时读不到,平台级操作已停用」
+
+**这不是故障,是设计。** 授权在控制面读不到账号库时一律关门
+([ADR-0015](../adr/0015-authorization-fails-closed.md)):控制面不可用可以让工作
+停下,但不能让权限变宽。故障期间**管理员也一并被拒绝**——管理员身份恰恰是此刻
+无法核验的那个声明。
+
+受影响的只有平台级操作(建项目、邀请人)。开终端、派活、看预览不经过这条路。
+
+**怎么进去修**:用**部署令牌**。它在查库之前被解析,所以库挂了它照常工作——
+这是唯一的逃生通道,而且是有意做窄的。
+
+```bash
+kubectl -n agentcell-system get secret celld-tokens -o jsonpath='{.data}'
+```
+
+**怎么确认真因**:看 celld 日志里判定的 `rule`。`store-unavailable` 是库读不到;
+`account-deleted` 是这个账号已经被删了而 cookie 还没过期——后者不是故障,不用修。

@@ -146,6 +146,112 @@ were not are named as such.
 - **In-cluster registry** for clusters that cannot reach ghcr.io, plus an
   814 MB alpine devbox.
 
+## Security and identity, in order
+
+This order is deliberate, and it is not the order the work *looks* most
+impressive in. Two things separate the top of this list from the bottom:
+whether a failure needs an adversary, and whether the fix gets more expensive
+the longer it waits.
+
+**Assumed threat model.** Careless agents, ordinary internal users, and — the
+one that is specific to this kind of platform — an agent acting on injected
+instructions it read in a repository, an issue, or a web page. A malicious
+administrator with host access is explicitly *not* a defence target at this
+stage. Twenty to thirty-five developers is phase one, not the architectural
+ceiling.
+
+### P0 — Authorization fails closed ✅ done
+
+An unreachable account store used to widen everyone's authority: the error
+was indistinguishable from "this identity has no account row", which is a
+permit. One disk-full event handed out project creation.
+[ADR-0015](adr/0015-authorization-fails-closed.md). The control plane may
+stop work when it cannot be read; it may not grant it. The deployment token
+is the single, deliberate break-glass path, resolved before the store is
+consulted so it survives the outage that makes it necessary.
+
+### P0 — A Principal ID that does not move
+
+Today `ID() = hash(subject)`, so identity is *derived from the way a person
+authenticated*, and that value is denormalized into Kubernetes objects, Unix
+uids, Secret labels and audit records — four places that cannot be updated in
+one transaction. Changing IdP therefore changes who everybody is.
+
+The correct shape inverts it: a permanent opaque internal id, with external
+identities as attributes of it.
+
+    principal_id = "01J…"          ← internal, opaque, allocated once
+      ├── binding: casdoor / subject=…
+      ├── binding: entra   / subject=…
+      └── binding: email   / …
+
+A Principal is an entity in the ontology; an OIDC identity is one of its
+*identifiers*, not its primary key. Done now this is a model change. Done
+after Casdoor, group IAM and org sync are connected, it is an identity
+migration project touching four systems.
+
+### P1 — Egress that is denied by default and attributed
+
+Every pod in a cell namespace may currently reach any host on 443. That is
+not gratuitous — model APIs, git, and package mirrors all need to go out —
+but it means the carefully built merge/review/release gate controls only what
+an agent can *bring back*. What it can *send out* is unrestricted, and
+prompt injection makes that a live path rather than a theoretical one.
+
+The answer is not to close 443; it is to make egress go through something
+that can name what it allows and record what it did:
+
+    agent runtime → egress gateway → { model APIs, forges, approved mirrors }
+
+with default-deny, FQDN policy, request audit, and — the part that makes it
+worth more than a firewall — attribution back to principal, cell and session,
+so the record reads `user → session → agent → destination`. That is the audit
+trail an enterprise agent platform actually needs, and it composes with the
+identity work above rather than duplicating it.
+
+### P1 — Separate the control and runtime fault domains
+
+celld, the account store and the audit record currently share a node with the
+agent workloads, whose requests are oversubscribed against their limits by
+roughly 48× with no admission control. An agent that goes wide takes
+authorization and audit down with it — and takes down the very thing that
+would explain what happened.
+
+This is fault containment, not scale: it wants one small control node and
+one or more runtime nodes, plus quotas and an admission policy. It does not
+want a microservice fleet, a dozen nodes, or a message bus.
+
+### P2 — `open` must not mean `maintainer`
+
+A memberless project currently treats every authenticated user as a
+maintainer, which makes the default state of a new project "anyone on the
+deployment can release from it". Replace the binary with `private` (default)
+/ `organization` / `open`, where open grants viewer or member and maintainer
+comes only from an explicit role binding.
+
+### P2 — Casdoor, enterprise OIDC, org sync
+
+See [AUTHENTICATION.md](AUTHENTICATION.md). Gated on the Principal ID work
+above, not the other way round.
+
+### P3 — Role / Permission / RoleBinding as data
+
+The authorization control plane proper: policy that changes without a
+deploy, a scope hierarchy, and a global view of who holds what. The seams
+(`can`, `canPlatform`, `Decision`) exist for this and no caller changes when
+it lands.
+
+### P3 — Identity propagation to agents, MCP servers and tools
+
+Once a principal is stable and egress is attributed, the same identity can
+follow a call all the way into the tools an agent invokes.
+
+> The ordering has one counter-intuitive consequence worth stating: **do not
+> start by deciding which roles go in the JWT.** Identity correctness, the
+> network boundary, the failure boundary and the trust boundary are all below
+> that layer, and a role model built on top of unstable foundations is a
+> console that looks governed.
+
 ## Next
 
 ### Near term
