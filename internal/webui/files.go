@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -177,25 +178,37 @@ func (h *Handler) getFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := strings.TrimPrefix(r.PathValue("path"), "/")
-	content, text, ct, err := h.Auth.Accounts.DB.FileContent(r.Context(), cell.Name, p)
-	if err != nil {
-		writeErr(w, 404, errNotFound)
-		return
-	}
+
 	// ?text=1 asks for the extracted layer — what the agent sees, which is
 	// the thing worth previewing for a document nobody can render.
 	if r.URL.Query().Get("text") == "1" {
+		text, err := h.Auth.Accounts.DB.FileText(r.Context(), cell.Name, p)
+		if err != nil {
+			writeErr(w, 404, errNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		writeDownloadHeaders(w, p, true)
 		_, _ = w.Write([]byte(text))
 		return
 	}
+
+	// Streamed, not buffered: a 25 MB upload used to be read whole into the
+	// server's memory on its way out, and out of a database holding one
+	// connection for the entire platform.
+	rc, size, ct, err := h.Auth.Accounts.DB.OpenFile(r.Context(), cell.Name, p)
+	if err != nil {
+		writeErr(w, 404, errNotFound)
+		return
+	}
+	defer func() { _ = rc.Close() }()
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	writeDownloadHeaders(w, p, r.URL.Query().Get("inline") == "1")
-	_, _ = w.Write(content)
+	_, _ = io.Copy(w, rc)
 }
 
 // writeDownloadHeaders makes uploaded content safe to serve from the

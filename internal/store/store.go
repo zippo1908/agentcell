@@ -26,6 +26,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,7 +39,13 @@ import (
 // broken" — a distinction that decides whether to answer 404 or 500.
 var ErrNotFound = errors.New("not found")
 
-type DB struct{ sql *sql.DB }
+type DB struct {
+	sql *sql.DB
+	// blobs holds uploaded bytes on the volume. Kept out of the database so
+	// a large download cannot queue in front of an authorization check —
+	// see blobs.go.
+	blobs blobStore
+}
 
 // Open prepares the database and applies the schema.
 //
@@ -54,7 +62,11 @@ func Open(path string) (*DB, error) {
 	// surface as "database is locked" under exactly the load where the
 	// product needs to be dull.
 	d.SetMaxOpenConns(1)
-	db := &DB{sql: d}
+	// Uploaded bytes go beside the database, not into it. See blobs.go for
+	// why: one connection for the whole store means one connection for the
+	// whole platform, and a 25 MB download must not queue in front of a
+	// login.
+	db := &DB{sql: d, blobs: blobStore{root: filepath.Join(filepath.Dir(path), "blobs")}}
 	if err := db.migrate(); err != nil {
 		_ = d.Close()
 		return nil, err
@@ -118,17 +130,17 @@ func (db *DB) migrate() error {
 		// volume cannot be shared with them. Keeping bytes in one place the
 		// control plane already backs up beats a second storage system for
 		// what is, in practice, a few megabytes of text per project.
+		// The INDEX of a project's library. The bytes are on the volume
+		// beside this file (blobs.go) — a policy store is small, hot and
+		// transactional, a file library is large, cold and streamed, and
+		// putting them in one SQLite file made every login queue behind
+		// every download.
 		`CREATE TABLE IF NOT EXISTS files (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			cell        TEXT NOT NULL,
 			path        TEXT NOT NULL,
 			size        INTEGER NOT NULL,
 			mime        TEXT NOT NULL DEFAULT '',
-			-- text is the layer an agent can actually read. Extracted once
-			-- at upload for formats worth extracting, empty for the rest,
-			-- so materialising into a sandbox never has to parse anything.
-			text        TEXT NOT NULL DEFAULT '',
-			content     BLOB,
 			uploaded_by TEXT NOT NULL DEFAULT '',
 			created_at  INTEGER NOT NULL,
 			UNIQUE (cell, path)
@@ -167,6 +179,12 @@ func (db *DB) migrate() error {
 		if err := db.addColumn(c.table, c.column, c.decl); err != nil {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
+	}
+	if err := db.addColumn("files", "has_text", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("add files.has_text: %w", err)
+	}
+	if err := db.drainFileBlobs(); err != nil {
+		return fmt.Errorf("move file blobs onto the volume: %w", err)
 	}
 	// grants.provider held a Secret name from the day it was written, which
 	// made every reader of this schema wrong about what it contained. The
@@ -550,22 +568,27 @@ type File struct {
 }
 
 // PutFile stores or replaces a file at a path within a project.
+//
+// Bytes land on the volume first; the row is what makes them visible. The
+// other order would publish a row pointing at a file that is not there yet.
 func (db *DB) PutFile(ctx context.Context, cell, path, mime, text string, content []byte, by string) error {
+	if err := db.blobs.put(cell, path, content, text); err != nil {
+		return err
+	}
 	_, err := db.sql.ExecContext(ctx,
-		`INSERT INTO files (cell, path, size, mime, text, content, uploaded_by, created_at)
-		 VALUES (?,?,?,?,?,?,?,?)
+		`INSERT INTO files (cell, path, size, mime, has_text, uploaded_by, created_at)
+		 VALUES (?,?,?,?,?,?,?)
 		 ON CONFLICT(cell, path) DO UPDATE SET
-		   size=excluded.size, mime=excluded.mime, text=excluded.text,
-		   content=excluded.content, uploaded_by=excluded.uploaded_by,
-		   created_at=excluded.created_at`,
-		cell, path, len(content), mime, text, content, by, time.Now().Unix())
+		   size=excluded.size, mime=excluded.mime, has_text=excluded.has_text,
+		   uploaded_by=excluded.uploaded_by, created_at=excluded.created_at`,
+		cell, path, len(content), mime, boolInt(text != ""), by, time.Now().Unix())
 	return err
 }
 
 // Files lists a project's files, newest path order, without their bytes.
 func (db *DB) Files(ctx context.Context, cell string) ([]File, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT path, size, mime, length(text) > 0, uploaded_by, created_at
+		`SELECT path, size, mime, has_text, uploaded_by, created_at
 		 FROM files WHERE cell = ? ORDER BY path`, cell)
 	if err != nil {
 		return nil, err
@@ -582,19 +605,40 @@ func (db *DB) Files(ctx context.Context, cell string) ([]File, error) {
 	return out, rows.Err()
 }
 
-// FileContent returns one file's bytes and its extracted text.
-func (db *DB) FileContent(ctx context.Context, cell, path string) ([]byte, string, string, error) {
+// OpenFile streams one file's bytes.
+//
+// A reader rather than a []byte: a 25 MB download used to be read whole into
+// the server's memory on its way out. The row is consulted for the type and
+// then released; the bytes never touch a database connection.
+func (db *DB) OpenFile(ctx context.Context, cell, path string) (io.ReadCloser, int64, string, error) {
+	var mime string
 	row := db.sql.QueryRowContext(ctx,
-		`SELECT content, text, mime FROM files WHERE cell = ? AND path = ?`, cell, path)
-	var content []byte
-	var text, mime string
-	if err := row.Scan(&content, &text, &mime); err != nil {
+		`SELECT mime FROM files WHERE cell = ? AND path = ?`, cell, path)
+	if err := row.Scan(&mime); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, "", "", ErrNotFound
+			return nil, 0, "", ErrNotFound
 		}
-		return nil, "", "", err
+		return nil, 0, "", err
 	}
-	return content, text, mime, nil
+	rc, size, err := db.blobs.open(cell, path)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	return rc, size, mime, nil
+}
+
+// FileText returns the extracted layer — what an agent reads.
+func (db *DB) FileText(ctx context.Context, cell, path string) (string, error) {
+	var n int
+	row := db.sql.QueryRowContext(ctx,
+		`SELECT 1 FROM files WHERE cell = ? AND path = ?`, cell, path)
+	if err := row.Scan(&n); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return db.blobs.text(cell, path)
 }
 
 // TextLayer returns everything an agent can read, for materialising into a
@@ -602,23 +646,42 @@ func (db *DB) FileContent(ctx context.Context, cell, path string) ([]byte, strin
 // container costs the same bytes over and over and an agent cannot read
 // them anyway — they stay in the console, and the index says they exist.
 func (db *DB) TextLayer(ctx context.Context, cell string) (map[string]string, error) {
+	// The paths come from the database; the text comes from the volume. The
+	// rows are drained before any file is read, so building a library for a
+	// session never holds the single connection open across disk I/O.
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT path, text FROM files WHERE cell = ? AND length(text) > 0`, cell)
+		`SELECT path FROM files WHERE cell = ? AND has_text = 1`, cell)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[string]string{}
+	var paths []string
 	for rows.Next() {
-		var p, t string
-		if err := rows.Scan(&p, &t); err != nil {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
 			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, p := range paths {
+		t, err := db.blobs.text(cell, p)
+		if err != nil || t == "" {
+			continue
 		}
 		out[p] = t
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
+// DeleteFile removes the row first, then the bytes.
+//
+// This order on purpose: an orphaned file is wasted space, an orphaned row is
+// a download that fails forever.
 func (db *DB) DeleteFile(ctx context.Context, cell, path string) error {
 	res, err := db.sql.ExecContext(ctx, `DELETE FROM files WHERE cell = ? AND path = ?`, cell, path)
 	if err != nil {
@@ -627,14 +690,16 @@ func (db *DB) DeleteFile(ctx context.Context, cell, path string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return db.blobs.remove(cell, path)
 }
 
 // DeleteCellFiles removes a project's whole library, for when the project
 // itself goes.
 func (db *DB) DeleteCellFiles(ctx context.Context, cell string) error {
-	_, err := db.sql.ExecContext(ctx, `DELETE FROM files WHERE cell = ?`, cell)
-	return err
+	if _, err := db.sql.ExecContext(ctx, `DELETE FROM files WHERE cell = ?`, cell); err != nil {
+		return err
+	}
+	return db.blobs.removeCell(cell)
 }
 
 func boolInt(b bool) int {
@@ -642,4 +707,63 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// drainFileBlobs moves any bytes still living in the database out onto the
+// volume.
+//
+// Runs on every open and does nothing once there is nothing to move: the
+// query selects only rows that still carry content. Deployments created
+// after this change have no such rows and never enter the loop, and the
+// legacy columns are left in place rather than dropped — an ALTER that
+// rewrites a table full of blobs is not something to do on the way up.
+func (db *DB) drainFileBlobs() error {
+	var n int
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('files') WHERE name = 'content'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil // fresh schema: the columns never existed
+	}
+	rows, err := db.sql.Query(
+		`SELECT cell, path FROM files WHERE content IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	type ref struct{ cell, path string }
+	var todo []ref
+	for rows.Next() {
+		var r ref
+		if err := rows.Scan(&r.cell, &r.path); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// One row at a time, and each one written to the volume BEFORE the
+	// database forgets it: a crash halfway leaves rows still holding their
+	// bytes, and the next start picks up where this one stopped.
+	for _, r := range todo {
+		var content []byte
+		var text string
+		if err := db.sql.QueryRow(
+			`SELECT content, text FROM files WHERE cell = ? AND path = ?`,
+			r.cell, r.path).Scan(&content, &text); err != nil {
+			return err
+		}
+		if err := db.blobs.put(r.cell, r.path, content, text); err != nil {
+			return err
+		}
+		if _, err := db.sql.Exec(
+			`UPDATE files SET content = NULL, text = '', has_text = ? WHERE cell = ? AND path = ?`,
+			boolInt(text != ""), r.cell, r.path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
