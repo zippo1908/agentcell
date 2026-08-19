@@ -91,16 +91,24 @@ func (db *DB) migrate() error {
 			expires_at INTEGER NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
-		// A lent credential. grantee_kind is 'user' or 'team' so one table
-		// answers both "lend it to Li" and "lend it to the platform team".
+		// A lent credential: "Zhu's key may also be spent by Wang."
+		//
+		// grantee_kind is 'user' or 'team'. Teams no longer exist as a scope
+		// here, but the column stays because rows written by an older build
+		// would otherwise become unreadable — and 'user' is the only value
+		// anything writes now.
+		//
+		// The lent thing is named by its Secret, not by a vendor: a person
+		// may hold several keys for one vendor, and "which key" is the
+		// question a grant has to answer.
 		`CREATE TABLE IF NOT EXISTS grants (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
 			granter_id   TEXT NOT NULL,
 			grantee_kind TEXT NOT NULL,
 			grantee_id   TEXT NOT NULL,
-			provider     TEXT NOT NULL,
+			credential   TEXT NOT NULL,
 			created_at   INTEGER NOT NULL,
-			UNIQUE (granter_id, grantee_kind, grantee_id, provider)
+			UNIQUE (granter_id, grantee_kind, grantee_id, credential)
 		)`,
 		// A project's own files: what people upload for the agent to work
 		// from — specs, screenshots, exported spreadsheets, meeting notes.
@@ -160,7 +168,28 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
 	}
+	// grants.provider held a Secret name from the day it was written, which
+	// made every reader of this schema wrong about what it contained. The
+	// table had no callers at all until lending shipped, so renaming it costs
+	// nothing and stops the next person having to find that out.
+	if err := db.renameColumn("grants", "provider", "credential"); err != nil {
+		return fmt.Errorf("rename grants.provider: %w", err)
+	}
 	return nil
+}
+
+// renameColumn renames a column if the old name is still there.
+func (db *DB) renameColumn(table, from, to string) error {
+	var n int
+	if err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, from).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	_, err := db.sql.Exec(`ALTER TABLE ` + table + ` RENAME COLUMN ` + from + ` TO ` + to)
+	return err
 }
 
 // addColumn adds a column unless it is already there.
@@ -378,21 +407,22 @@ type Grant struct {
 	GranterID   string
 	GranteeKind string
 	GranteeID   string
-	Provider    string
+	// Credential is the Secret's name — which key, not which vendor.
+	Credential string
 }
 
 func (db *DB) CreateGrant(ctx context.Context, g Grant) error {
 	_, err := db.sql.ExecContext(ctx,
-		`INSERT OR IGNORE INTO grants (granter_id, grantee_kind, grantee_id, provider, created_at)
+		`INSERT OR IGNORE INTO grants (granter_id, grantee_kind, grantee_id, credential, created_at)
 		 VALUES (?,?,?,?,?)`,
-		g.GranterID, g.GranteeKind, g.GranteeID, g.Provider, time.Now().Unix())
+		g.GranterID, g.GranteeKind, g.GranteeID, g.Credential, time.Now().Unix())
 	return err
 }
 
 func (db *DB) DeleteGrant(ctx context.Context, g Grant) error {
 	_, err := db.sql.ExecContext(ctx,
-		`DELETE FROM grants WHERE granter_id=? AND grantee_kind=? AND grantee_id=? AND provider=?`,
-		g.GranterID, g.GranteeKind, g.GranteeID, g.Provider)
+		`DELETE FROM grants WHERE granter_id=? AND grantee_kind=? AND grantee_id=? AND credential=?`,
+		g.GranterID, g.GranteeKind, g.GranteeID, g.Credential)
 	return err
 }
 
@@ -401,7 +431,7 @@ func (db *DB) DeleteGrant(ctx context.Context, g Grant) error {
 // passes the team ids it already resolved rather than this package growing
 // a second idea of what a team is.
 func (db *DB) GrantsTo(ctx context.Context, userID string, teamIDs []string) ([]Grant, error) {
-	q := `SELECT granter_id, grantee_kind, grantee_id, provider FROM grants
+	q := `SELECT granter_id, grantee_kind, grantee_id, credential FROM grants
 	      WHERE (grantee_kind='user' AND grantee_id=?)`
 	args := []any{userID}
 	if len(teamIDs) > 0 {
@@ -419,7 +449,7 @@ func (db *DB) GrantsTo(ctx context.Context, userID string, teamIDs []string) ([]
 	var out []Grant
 	for rows.Next() {
 		var g Grant
-		if err := rows.Scan(&g.GranterID, &g.GranteeKind, &g.GranteeID, &g.Provider); err != nil {
+		if err := rows.Scan(&g.GranterID, &g.GranteeKind, &g.GranteeID, &g.Credential); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -431,7 +461,7 @@ func (db *DB) GrantsTo(ctx context.Context, userID string, teamIDs []string) ([]
 // take it back.
 func (db *DB) GrantsBy(ctx context.Context, granterID string) ([]Grant, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT granter_id, grantee_kind, grantee_id, provider FROM grants
+		`SELECT granter_id, grantee_kind, grantee_id, credential FROM grants
 		 WHERE granter_id = ? ORDER BY created_at DESC`, granterID)
 	if err != nil {
 		return nil, err
@@ -440,7 +470,7 @@ func (db *DB) GrantsBy(ctx context.Context, granterID string) ([]Grant, error) {
 	var out []Grant
 	for rows.Next() {
 		var g Grant
-		if err := rows.Scan(&g.GranterID, &g.GranteeKind, &g.GranteeID, &g.Provider); err != nil {
+		if err := rows.Scan(&g.GranterID, &g.GranteeKind, &g.GranteeID, &g.Credential); err != nil {
 			return nil, err
 		}
 		out = append(out, g)

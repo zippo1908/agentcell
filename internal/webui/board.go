@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -483,24 +482,17 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 // vendor, so more than one is a question, not a coin flip — and the answer
 // goes in the stream where it was asked.
 func (h *Handler) soleCredential(ctx context.Context, p identity.Principal) (string, error) {
-	var list corev1.SecretList
-	if err := h.Client.List(ctx, &list,
-		client.InNamespace(h.Namespace),
-		// Model keys only: a connected account is a credential, but it is not
-		// a key you can be asked to choose between.
-		client.MatchingLabels{credLabel: credKindModel}); err != nil {
-		return "", fmt.Errorf("读不到凭据:%w", err)
-	}
-	mine := []string{}
-	for i := range list.Items {
-		if p.Owns(list.Items[i].Labels[OwnerLabel]) {
-			mine = append(mine, list.Items[i].Name)
-		}
-	}
-	sort.Strings(mine)
+	// Owned AND lent: a colleague who has been handed a key must be able to
+	// spend it without also owning one, which is the whole point of lending.
+	// Model keys only — a connected account is a credential, but it is not a
+	// key you can be asked to choose between.
+	mine := h.spendableCredentials(ctx, p)
 	switch len(mine) {
 	case 0:
-		return "", fmt.Errorf("你还没有配模型 key——去「我的凭据」加一个再来。")
+		// Names where to go, and all three ways out — the third one exists
+		// precisely so a new colleague is not stuck on their first afternoon.
+		return "", fmt.Errorf("你还没有可用的模型 key。去「我的凭据」自己加一把、" +
+			"连一次账号,或者请有 key 的同事在他那页把凭据借给你。")
 	case 1:
 		return mine[0], nil
 	default:

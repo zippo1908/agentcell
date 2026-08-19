@@ -135,6 +135,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/me/git-identities", h.listGitIdentities)
 	mux.HandleFunc("PUT /api/me/git-identities", h.putGitIdentity)
 	mux.HandleFunc("DELETE /api/me/git-identities/{provider}", h.deleteGitIdentity)
+	mux.HandleFunc("GET /api/me/grants", h.listGrants)
+	mux.HandleFunc("POST /api/me/grants", h.createGrant)
+	mux.HandleFunc("DELETE /api/me/grants/{credential}/{who}", h.deleteGrant)
 	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
 	mux.HandleFunc("GET /api/new-project-options", h.newProjectOptions)
 	mux.HandleFunc("GET /api/cells/{cell}/branches", h.listBranches)
@@ -648,8 +651,9 @@ func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptio
 	if !h.authorize(w, r, &cell, ActionDispatch) {
 		return
 	}
-	// A caller may only spend a model credential it owns.
-	if err := h.checkCredentialOwnership(r, req.CredentialSecret); err != nil {
+	// A caller may spend a model credential it owns — or one somebody lent
+	// them, which is how a new colleague gets to do anything at all.
+	if err := h.mayUseCredential(r, req.CredentialSecret); err != nil {
 		writeErr(w, 404, err)
 		return
 	}

@@ -73,7 +73,7 @@ func TestGrantsReachTeamsAndOnlyTheRightPeople(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Provider != "kimi" {
+	if len(got) != 1 || got[0].Credential != "kimi" {
 		t.Errorf("team member got %v, want the team's kimi grant", got)
 	}
 
@@ -83,7 +83,7 @@ func TestGrantsReachTeamsAndOnlyTheRightPeople(t *testing.T) {
 	}
 
 	// The personal grant reaches its target and nobody else.
-	if got, _ = db.GrantsTo(ctx, "li", nil); len(got) != 1 || got[0].Provider != "openai" {
+	if got, _ = db.GrantsTo(ctx, "li", nil); len(got) != 1 || got[0].Credential != "openai" {
 		t.Errorf("li got %v, want the personal openai grant", got)
 	}
 

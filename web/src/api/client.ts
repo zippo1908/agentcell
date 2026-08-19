@@ -121,6 +121,22 @@ export const api = {
       body: JSON.stringify({ url, branch, secretName }),
     }),
 
+  /** Keys I have lent out, and keys lent to me. */
+  grants: () =>
+    req<{
+      lent: { credential: string; email: string; name?: string; unknown?: boolean }[]
+      borrowed: { credential: string; from: string; hint?: string }[]
+    }>('/api/me/grants'),
+  lendCredential: (credential: string, email: string) =>
+    req<{ credential: string }>('/api/me/grants', {
+      method: 'POST',
+      body: JSON.stringify({ credential, email }),
+    }),
+  revokeGrant: (credential: string, who: string) =>
+    req<{ revoked: string }>(
+      `/api/me/grants/${encodeURIComponent(credential)}/${encodeURIComponent(who)}`,
+      { method: 'DELETE' }),
+
   /** My own forge tokens. Listing never returns the tokens themselves. */
   gitIdentities: () =>
     req<{ identities: { provider: string; username: string; secretName: string }[] }>(

@@ -47,6 +47,7 @@ export function CredentialsPage() {
         <span className="sub">模型 API key,只有你能用</span>
       </h1>
       <KimiAccount />
+      <Lending />
       <ForgeToken />
 
       <div className="card">
@@ -328,6 +329,140 @@ function ForgeToken() {
           {bind.isPending ? '保存中…' : list.some((g) => g.provider === provider) ? '替换' : '绑定'}
         </button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * 借出凭据 — hand a colleague a long-lived key so they can start working.
+ *
+ * A new colleague cannot do anything at all until they can pay for a turn:
+ * dispatch refuses before it even looks at the project. "Add your own key" and
+ * "connect your own account" are both fine answers and both a wall on
+ * somebody's first afternoon.
+ *
+ * A connected OAuth account is deliberately not lendable — its refresh token
+ * rotates, so two people holding it knock each other offline. The server
+ * refuses and says why; this list simply never offers one.
+ */
+function Lending() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [credential, setCredential] = useState('')
+  const [email, setEmail] = useState('')
+
+  const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.credentials })
+  const grants = useQuery({ queryKey: ['grants'], queryFn: api.grants })
+
+  const done = () => {
+    qc.invalidateQueries({ queryKey: ['grants'] })
+    qc.invalidateQueries({ queryKey: ['credentials'] })
+  }
+  const lend = useMutation({
+    mutationFn: () => api.lendCredential(credential || (creds ?? [])[0]?.name || '', email.trim()),
+    onSuccess: () => {
+      setEmail('')
+      toast.success('借出了。对方现在可以派工了')
+      done()
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const revoke = useMutation({
+    mutationFn: (v: { credential: string; who: string }) => api.revokeGrant(v.credential, v.who),
+    onSuccess: () => {
+      toast.success('已收回')
+      done()
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const mine = creds ?? []
+  const lent = grants.data?.lent ?? []
+  const borrowed = grants.data?.borrowed ?? []
+
+  return (
+    <div className="card">
+      <h3>借出凭据</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        把你的一把 key 借给同事,他就能在项目里派工——花的是<b>你的</b>额度,所以借给谁是件要想一下的事。
+        随时可以收回。
+      </p>
+
+      {borrowed.length > 0 && (
+        <div className="note" style={{ marginTop: 10 }}>
+          <b>别人借给你的:</b>
+          {borrowed.map((b) => (
+            <div key={b.credential} className="mono" style={{ marginTop: 4 }}>
+              {b.credential} {b.hint && <span className="faint">{b.hint}</span>}
+              <span className="faint"> —— 来自 {b.from}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {lent.length > 0 && (
+        <table className="grid" style={{ marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th>key</th>
+              <th>借给了</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {lent.map((g) => (
+              <tr key={g.credential + g.email}>
+                <td className="mono">{g.credential}</td>
+                <td>
+                  {g.name ? `${g.name} ` : ''}
+                  <span className="mono faint">{g.email}</span>
+                  {g.unknown && <span className="faint"> (查无此人)</span>}
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="ghost small"
+                    disabled={revoke.isPending}
+                    onClick={() => revoke.mutate({ credential: g.credential, who: g.email })}
+                  >
+                    收回
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {mine.length === 0 ? (
+        <p className="hint">你还没有可以借出去的 key。上面先加一把。</p>
+      ) : (
+        <div className="row" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+          <select value={credential || mine[0].name} onChange={(e) => setCredential(e.target.value)}>
+            {mine.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name} {c.hint}
+              </option>
+            ))}
+          </select>
+          <input
+            type="email"
+            placeholder="借给谁(邮箱)"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={{ minWidth: 240 }}
+          />
+          <button disabled={!email.trim() || lend.isPending} onClick={() => lend.mutate()}>
+            {lend.isPending ? '借出中…' : '借出'}
+          </button>
+        </div>
+      )}
+      {/* Said here rather than only in the server's refusal: somebody looking
+          for a way to share their Kimi login should find the answer before
+          they try it, not after. */}
+      <p className="hint">
+        「已连接的账号」借不了 —— 它的刷新令牌是轮换的,两个人同时用会互相把对方踢下线。
+        要共享就借一把 API key,或者让对方自己连一次账号(三十秒)。
+      </p>
     </div>
   )
 }
