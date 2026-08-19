@@ -149,6 +149,10 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 		emit(map[string]any{"t": "error", "message": err.Error()})
 	}
 
+	// Say what the wait is, because it can be two minutes of silence while a
+	// sleeping session wakes: a blank bubble reads as broken, not as loading.
+	emit(map[string]any{"t": "waiting", "message": "正在等项目里的会话就绪……"})
+
 	sess, err := h.waitBoardRuntime(ctx, t.Name)
 	if err != nil {
 		fail(err)
@@ -158,6 +162,7 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 		fail(fmt.Errorf("这个 celld 没有集群 exec 权限,流不了"))
 		return
 	}
+	emit(map[string]any{"t": "started", "message": "会话就绪,agent 开跑"})
 
 	uid, err := runtimeUID(sess.Status.PodName)
 	if err != nil {
@@ -185,6 +190,9 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	var full strings.Builder
+	// The CLI's last words that were not stream-json (its own error lines).
+	// When the run fails, these say why more often than the exit status does.
+	var plain []string
 	tick := time.NewTicker(askHeartbeat)
 	defer tick.Stop()
 	for {
@@ -200,7 +208,7 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				err := <-streamErr
 				if err != nil && full.Len() == 0 {
-					fail(fmt.Errorf("kimi 没有跑完:%w", err))
+					fail(fmt.Errorf("kimi 没有跑完:%s", streamFailure(err, plain)))
 					return
 				}
 				text := full.String()
@@ -225,6 +233,13 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 			if frag, ok := extractStreamText(line); ok {
 				full.WriteString(frag)
 				emit(map[string]any{"t": "delta", "text": frag})
+			} else if s := strings.TrimSpace(line); s != "" && !strings.HasPrefix(s, "{") {
+				// Plain stdout that is not stream-json is the CLI talking
+				// about itself — usually the reason it is about to fail.
+				if len(plain) >= 3 {
+					plain = plain[1:]
+				}
+				plain = append(plain, s)
 			}
 		}
 	}
@@ -341,10 +356,46 @@ func (h *Handler) runKimiStream(ctx context.Context, ns, pod string, argv []stri
 		}
 	}
 	err = sc.Err()
-	if err == nil && errBuf.Len() > 0 {
-		err = fmt.Errorf("%s", strings.TrimSpace(errBuf.String()))
+	if err != nil && errBuf.Len() > 0 {
+		// The exit status says THAT it failed; stderr says why. Keep both.
+		err = fmt.Errorf("%w — %s", err, lastLines(errBuf.String(), 3))
+	} else if err == nil && errBuf.Len() > 0 {
+		err = fmt.Errorf("%s", lastLines(errBuf.String(), 3))
 	}
 	return err
+}
+
+// lastLines returns the last n non-empty lines of s, joined — an error
+// message earns its place by what its tail says, not its first screenful.
+func lastLines(s string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, strings.TrimSpace(l))
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, " | ")
+}
+
+// streamFailure renders why a kimi run died, translating the failures that
+// have a user-facing fix into the fix. Everything else gets the CLI's own
+// last words attached — "exit code 1" alone sends people to the logs for no
+// reason.
+func streamFailure(err error, plain []string) string {
+	msg := err.Error()
+	detail := ""
+	if len(plain) > 0 {
+		detail = plain[len(plain)-1]
+		msg += " — " + detail
+	}
+	if strings.Contains(msg, "authorization grant is invalid") ||
+		strings.Contains(msg, "Invalid Authentication") {
+		return "Kimi 账号的授权失效了——到「凭据」页断开再重连一次,然后重新问。"
+	}
+	return msg
 }
 
 // extractStreamText pulls one piece of assistant text out of a stream-json

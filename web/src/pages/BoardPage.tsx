@@ -59,6 +59,9 @@ export function BoardPage() {
   const [stream, setStream] = useState<{
     ask: string
     text: string
+    /** What the wait currently is, told by the server: connecting, waking
+        the session, or the agent thinking. */
+    phase: string
     status: 'streaming' | 'error'
     error?: string
   } | null>(null)
@@ -66,7 +69,7 @@ export function BoardPage() {
 
   function openAsk(askID: string) {
     esRef.current?.close()
-    setStream({ ask: askID, text: '', status: 'streaming' })
+    setStream({ ask: askID, text: '', phase: '正在接通…', status: 'streaming' })
     // Same-origin and cookie-authenticated, so a plain relative EventSource.
     const es = new EventSource(`/api/cells/${team}/board/ask/${askID}`)
     esRef.current = es
@@ -75,6 +78,7 @@ export function BoardPage() {
         | { t: 'delta'; text: string }
         | { t: 'done'; text: string }
         | { t: 'error'; message: string }
+        | { t: 'waiting' | 'started'; message: string }
       if (msg.t === 'delta') {
         setStream((s) => (s && s.ask === askID ? { ...s, text: s.text + msg.text } : s))
       } else if (msg.t === 'done') {
@@ -83,6 +87,8 @@ export function BoardPage() {
         es.close()
         setStream(null)
         qc.invalidateQueries({ queryKey: ['board', team] })
+      } else if (msg.t === 'waiting' || msg.t === 'started') {
+        setStream((s) => (s && s.ask === askID ? { ...s, phase: msg.message } : s))
       } else {
         es.close()
         setStream((s) => (s && s.ask === askID ? { ...s, status: 'error', error: msg.message } : s))
@@ -262,7 +268,7 @@ export function BoardPage() {
             <div className="post-body">
               <div className="post-meta">
                 <span className="post-author">{team}</span>
-                <span className="faint">正在回答…</span>
+                <span className="faint">{stream.phase}</span>
               </div>
               {stream.status === 'error' ? (
                 <div className="post-text">
@@ -272,6 +278,17 @@ export function BoardPage() {
                   <button className="ghost small" style={{ marginTop: 4 }} onClick={() => setStream(null)}>
                     关闭
                   </button>
+                </div>
+              ) : stream.text === '' ? (
+                /* No delta yet: the agent is being woken or is thinking. A
+                   blank bubble reads as broken, so the wait gets a face. */
+                <div className="post-text stream-waiting">
+                  <span className="think-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                  <span className="shimmer-text">{stream.phase}</span>
                 </div>
               ) : (
                 <div className="post-text">
