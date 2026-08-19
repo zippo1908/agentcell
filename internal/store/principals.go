@@ -138,7 +138,17 @@ func (db *DB) ResolveOrCreatePrincipal(ctx context.Context, provider, subject st
 		 VALUES (?,?,?,?)`, provider, subject, id, now); err != nil {
 		// Somebody else bound this login between our read and our write.
 		// Their row is as good as ours; take theirs rather than failing.
-		if existing, e := db.PrincipalFor(ctx, provider, subject); e == nil {
+		//
+		// Read through the TRANSACTION, not through db.sql. The pool is
+		// capped at a single connection, so a query issued on the pool
+		// while this transaction holds it waits for a connection that only
+		// this transaction can release — a deadlock that resolves as a hung
+		// request when the context expires, with nothing in the log to say
+		// what it was waiting for.
+		var existing string
+		if e := tx.QueryRowContext(ctx,
+			`SELECT principal_id FROM identity_bindings WHERE provider = ? AND subject = ?`,
+			provider, subject).Scan(&existing); e == nil && existing != "" {
 			return existing, nil
 		}
 		return "", err
