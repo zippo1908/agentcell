@@ -18,6 +18,20 @@ import { useToast } from '../ui/primitives'
  * So it offers. Only the repository URL and a name are typed, because only
  * those are genuinely new information.
  */
+// The same derivation the server does, so the form can show what the
+// address will be instead of refusing what somebody typed. A name with
+// nothing usable in it gets its id from the server; here it just shows
+// nothing rather than guessing at a hash.
+function slug(typed: string): string {
+  return typed
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '')
+}
+
 export function CellNewPage() {
   const nav = useNavigate()
   const toast = useToast()
@@ -87,8 +101,15 @@ export function CellNewPage() {
         <div className="form-section-title">项目</div>
         <label className="field">
           <span>名称</span>
-          <input value={f.name} onChange={set('name')} placeholder="shop" />
-          <em>小写字母、数字和短横;它会成为命名空间和预览域名的一部分。</em>
+          <input value={f.name} onChange={set('name')} placeholder="商城前端" />
+          <em>
+            叫什么都行,中文也可以。
+            {slug(f.name) && (
+              <>
+                {' '}地址会用 <code className="mono">{slug(f.name)}</code> —— 那是命名空间和预览域名里出现的部分。
+              </>
+            )}
+          </em>
         </label>
         <label className="field">
           <span>仓库地址(可以先不填)</span>

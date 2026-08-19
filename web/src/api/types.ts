@@ -4,6 +4,8 @@
 
 export interface Cell {
   name: string
+  /** What people call it. The name above is the address it lives at. */
+  displayName?: string
   phase: string
   description: string
   activeSessions: number

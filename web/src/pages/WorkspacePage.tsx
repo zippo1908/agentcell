@@ -224,7 +224,7 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: WorkView) => voi
     <>
       <div className="ws-head ws-main-head">
         <Link to={`/cells/${cell}`} className="ws-title">
-          {cell}
+          {detail.data?.cell?.displayName || cell}
         </Link>
         {detail.data?.cell && <Badge tone={cellTone(detail.data.cell.phase)}>{detail.data.cell.phase}</Badge>}
         {live && <span className="faint">{live.phase}</span>}

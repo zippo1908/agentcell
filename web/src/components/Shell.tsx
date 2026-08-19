@@ -95,10 +95,10 @@ export function Shell() {
               key={c.name}
               to={`/workspace/${c.name}`}
               className={({ isActive }) => `nav-project ${isActive ? 'active' : ''}`}
-              title={c.description || c.name}
+              title={c.description || c.displayName || c.name}
             >
               <span className={`dot ${cellTone(c.phase)}`} />
-              <span className="nav-project-name">{c.name}</span>
+              <span className="nav-project-name">{c.displayName || c.name}</span>
             </NavLink>
           ))}
           {(cells ?? []).length === 0 && (

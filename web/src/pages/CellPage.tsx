@@ -112,7 +112,7 @@ export function CellPage() {
         ← 返回工作区
       </Link>
       <h1 className="page-title">
-        {cell.name}
+        {cell.displayName || cell.name}
         <Badge tone={cellTone(cell.phase)}>{cell.phase || 'Unknown'}</Badge>
         <span className="sub">
           槽位 {cell.activeSessions}/{cell.maxSessions}

@@ -96,8 +96,18 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	if err := ids.ValidateCellName(req.Name); err != nil {
-		writeErr(w, 400, err)
+	// The typed name is kept as it was typed; the object's name is derived.
+	// Asking a person for "lowercase letters, digits and dashes" and then
+	// refusing what they typed is a form arguing about an implementation
+	// detail they never asked to know.
+	display := strings.TrimSpace(req.Name)
+	if display == "" {
+		writeErr(w, 400, fmt.Errorf("给这个项目起个名字"))
+		return
+	}
+	name := ids.SlugCellName(display)
+	if err := ids.ValidateCellName(name); err != nil {
+		writeErr(w, 400, fmt.Errorf("这个名字派生不出可用的地址(%s);换一个,或者带上一些字母数字", display))
 		return
 	}
 	// The repository is no longer required here. A project is usually agreed
@@ -117,7 +127,7 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cell := &acv1.Cell{ObjectMeta: metav1.ObjectMeta{
-		Namespace: h.Namespace, Name: req.Name,
+		Namespace: h.Namespace, Name: name,
 		Annotations: map[string]string{
 			"agentcell.io/created-by": identity.FromContext(r.Context()).ID(),
 		},
@@ -167,6 +177,7 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cell.Spec = acv1.CellSpec{
+		DisplayName: display,
 		Members:     members,
 		Repo:        acv1.RepoSpec{URL: req.RepoURL, Branch: branch, SecretName: req.SecretName},
 		Image:       req.Image,
@@ -226,10 +237,13 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		cell.Spec.Preview.Command = p
 	}
 	if err := h.Client.Create(r.Context(), cell); err != nil {
-		writeErr(w, 409, err)
+		// Two projects deriving the same address is a real collision, and
+		// saying which address makes it fixable — "already exists" naming an
+		// object nobody chose the name of is not.
+		writeErr(w, 409, fmt.Errorf("已经有一个项目占用了地址 %s;换个名字", name))
 		return
 	}
-	writeJSON(w, 201, map[string]string{"cell": cell.Name})
+	writeJSON(w, 201, map[string]string{"cell": cell.Name, "displayName": display})
 }
 
 // validateRepoLayout refuses a project group that cannot be laid out.

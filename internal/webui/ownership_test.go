@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/access"
 	"github.com/zippo1908/agentcell/internal/identity"
+	"github.com/zippo1908/agentcell/pkg/ids"
 )
 
 var (
@@ -278,15 +280,47 @@ func TestCreateCellRefusesABorrowedGitCredential(t *testing.T) {
 
 func TestCreateCellValidatesAndRecordsItsCreator(t *testing.T) {
 	c, h := ownedFixture(t)
-	t.Run("a bad name is refused before anything is created", func(t *testing.T) {
-		for _, bad := range []string{"", "Shop", "a_b", strings.Repeat("x", 100), "../etc"} {
-			body := `{"name":"` + bad + `","repoURL":"https://example/x.git","image":"img"}`
+	t.Run("only an empty name is refused; the rest are made usable", func(t *testing.T) {
+		// A name is what a person calls the project; the ADDRESS is derived.
+		// Refusing "Shop" for not being a lowercase DNS label was the form
+		// arguing about an implementation detail nobody asked to know.
+		body := `{"name":"","repoURL":"https://example/x.git","image":"img"}`
+		req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells", strings.NewReader(body)), alice)
+		rec := httptest.NewRecorder()
+		h.createCell(rec, req)
+		if rec.Code != 400 {
+			t.Errorf("an empty name = %d, want 400", rec.Code)
+		}
+
+		for i, typed := range []string{"Store", "a_b", strings.Repeat("x", 100), "../etc", "商城前端"} {
+			body := `{"name":"` + typed + `","repoURL":"https://example/x.git","image":"img` + fmt.Sprint(i) + `"}`
 			req := asUser(httptest.NewRequest(http.MethodPost, "/api/cells", strings.NewReader(body)), alice)
 			rec := httptest.NewRecorder()
 			h.createCell(rec, req)
-			if rec.Code != 400 {
-				t.Errorf("name %q = %d, want 400", bad, rec.Code)
+			if rec.Code != 201 {
+				t.Errorf("name %q = %d, want it accepted: %s", typed, rec.Code, rec.Body)
+				continue
 			}
+			var got struct{ Cell string }
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			// Whatever was typed, the address is safe to be a namespace and
+			// a DNS label — no separators, no case, no length surprise.
+			if err := ids.ValidateCellName(got.Cell); err != nil {
+				t.Errorf("name %q produced address %q: %v", typed, got.Cell, err)
+			}
+		}
+
+		// A real collision is reported honestly, naming the address — the
+		// person did not choose it, so "already exists" alone would name
+		// something they have never seen.
+		body = `{"name":"Shop","repoURL":"https://example/x.git","image":"img"}`
+		req = asUser(httptest.NewRequest(http.MethodPost, "/api/cells", strings.NewReader(body)), alice)
+		rec = httptest.NewRecorder()
+		h.createCell(rec, req)
+		if rec.Code != 409 || !strings.Contains(rec.Body.String(), "shop") {
+			t.Errorf("a colliding name = %d (%s); want 409 naming the address", rec.Code, rec.Body)
 		}
 	})
 	t.Run("repo and image are required", func(t *testing.T) {

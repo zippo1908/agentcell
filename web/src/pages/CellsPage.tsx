@@ -59,8 +59,14 @@ export function CellsPage() {
                 {(cells ?? []).map((c) => (
                   <tr key={c.name} className="clickable" onClick={() => nav(`/cells/${c.name}`)}>
                     <td>
-                      <div style={{ fontWeight: 600 }}>{c.name}</div>
-                      <div className="mono faint">{c.followSession ? `跟随 ${c.followSession.slice(0, 8)}` : ''}</div>
+                      <div style={{ fontWeight: 600 }}>{c.displayName || c.name}</div>
+                      {/* The address, shown small: it is what appears in URLs
+                          and namespaces, so it has to be findable — but it is
+                          not what the project is called. */}
+                      <div className="mono faint">
+                        {c.displayName && c.displayName !== c.name ? c.name : ''}
+                        {c.followSession ? ` 跟随 ${c.followSession.slice(0, 8)}` : ''}
+                      </div>
                     </td>
                     <td>
                       <Badge tone={cellTone(c.phase)}>{c.phase || 'Unknown'}</Badge>

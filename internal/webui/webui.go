@@ -357,7 +357,10 @@ func (h *Handler) previewOriginFor(r *http.Request) string {
 }
 
 type cellView struct {
-	Name           string `json:"name"`
+	Name string `json:"name"`
+	// DisplayName is what people called it. Empty on projects created
+	// before names were free text, where the address IS the name.
+	DisplayName    string `json:"displayName,omitempty"`
 	Phase          string `json:"phase"`
 	Description    string `json:"description"`
 	ActiveSessions int32  `json:"activeSessions"`
@@ -401,7 +404,8 @@ type cellView struct {
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 	v := cellView{
-		Name: c.Name, Phase: string(c.Status.Phase), Description: c.Spec.Description,
+		Name: c.Name, DisplayName: c.Spec.DisplayName,
+		Phase: string(c.Status.Phase), Description: c.Spec.Description,
 		ActiveSessions: c.Status.ActiveSessions, MaxSessions: c.Spec.MaxSessions,
 		PreviewPath: c.Status.PreviewPath, ProductionPath: c.Status.ProductionPath,
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,

@@ -159,6 +159,14 @@ type CellSpec struct {
 	// there is no cross-repository atomicity to be had, so the platform does
 	// not imply one.
 	Repos []RepoSpec `json:"repos,omitempty"`
+	// DisplayName is what people call this project.
+	//
+	// The object's NAME has to be a DNS label — it becomes a namespace and
+	// part of a preview host — but that is the platform's problem, not the
+	// namer's. Somebody who wants to call a project 「平台运维组」 should be
+	// able to, and read that name back everywhere afterwards.
+	// +kubebuilder:validation:MaxLength=63
+	DisplayName string `json:"displayName,omitempty"`
 	// Image is the devbox image for the anchor and session pods; it must
 	// contain the agent CLIs plus git and tmux. cell-runtime is baked in at
 	// image build time.
