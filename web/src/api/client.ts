@@ -219,10 +219,14 @@ export const api = {
   members: (cell: string) =>
     req<{ members: { email: string; name?: string; role: string; unknown?: boolean }[]; open: boolean }>(
       `/api/cells/${cell}/members`),
-  putMember: (cell: string, userID: string, role: string) =>
+  // An address goes in `email`, which the server resolves to an id. Sending
+  // it as `userID` stored the address verbatim, and the authorization check
+  // compares against a hashed id — so the member list looked right and
+  // granted nothing.
+  putMember: (cell: string, who: string, role: string) =>
     req<{ access: string }>(`/api/cells/${cell}/members`, {
       method: 'PUT',
-      body: JSON.stringify({ userID, role }),
+      body: JSON.stringify(who.includes('@') ? { email: who, role } : { userID: who, role }),
     }),
   removeMember: (cell: string, userID: string) =>
     req<{ access: string }>(`/api/cells/${cell}/members/${encodeURIComponent(userID)}`, {
