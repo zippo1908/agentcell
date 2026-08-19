@@ -181,18 +181,27 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: WorkView) => voi
   }, [cell])
 
   const opening = useRef('')
-  useEffect(() => {
-    if (!cell || live || detail.isLoading || opening.current === cell) return
+  // The reason opening failed, told to the person who can fix it. Leaving
+  // this in a catch meant "正在给你开" stayed up forever — slow and broken
+  // read exactly the same, and broken is the common case (no key yet).
+  const [openError, setOpenError] = useState<string | null>(null)
+  const tryOpen = useCallback(() => {
+    if (!cell) return
     opening.current = cell
+    setOpenError(null)
     api
       .openCell(cell)
       .then(() => qc.invalidateQueries({ queryKey: ['cell', cell] }))
-      .catch(() => {
-        // Leave the empty state in place; it says what to do next, and the
-        // reason is usually one the person has to act on (no key yet).
+      .catch((e: Error) => {
         opening.current = ''
+        setOpenError(e.message)
       })
-  }, [cell, live, detail.isLoading, qc])
+  }, [cell, qc])
+  useEffect(() => {
+    setOpenError(null)
+    if (!cell || live || detail.isLoading || opening.current === cell) return
+    tryOpen()
+  }, [cell, live, detail.isLoading, tryOpen])
 
   // Say a thing. The server fills in the runner, the provider and the key
   // from what the project already decided — none of that is new information
@@ -294,6 +303,18 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: WorkView) => voi
         )}
         {live ? (
           <TerminalDeck session={live.name} />
+        ) : openError ? (
+          <div className="ws-empty">
+            <p>终端没开起来:{openError}</p>
+            <div className="btn-row" style={{ marginTop: 8 }}>
+              <Link to="/credentials">
+                <button className="small">去凭据页</button>
+              </Link>
+              <button className="ghost small" onClick={tryOpen}>
+                重试
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="ws-empty">
             <p>正在给你开这个项目的终端……</p>
