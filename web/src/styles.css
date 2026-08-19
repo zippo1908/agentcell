@@ -616,7 +616,7 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 
 @media (prefers-reduced-motion: reduce) {
   .card, .toast, .modal, .modal-mask { animation: none; }
-  .badge.amber .dot, .stream-caret { animation: none; }
+  .badge.amber .dot, .stream-caret, .think-dots span, .shimmer-text { animation: none; }
 }
 
 /* ── The board ────────────────────────────────────────────────────────────
@@ -669,6 +669,39 @@ pre.diff .meta { display: block; color: var(--text-faint); }
   animation: caret-breathe 1.1s ease-in-out infinite;
 }
 @keyframes caret-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.12; } }
+
+/* The wait before the first delta. A blank bubble reads as broken, so the
+   wait gets a face: three dots that think, and the phase named in light that
+   sweeps — the same amber as every other in-flight thing, spent two ways so
+   the two never blur with a pulsing badge. */
+.stream-waiting { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.think-dots { display: inline-flex; gap: 4px; align-items: center; }
+.think-dots span {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--amber);
+  animation: think-bounce 1.2s ease-in-out infinite;
+}
+.think-dots span:nth-child(2) { animation-delay: 0.15s; }
+.think-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes think-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.55; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+.shimmer-text {
+  font-size: 12.5px;
+  background: linear-gradient(90deg,
+    var(--text-faint) 0%, var(--text-faint) 35%,
+    var(--amber) 50%,
+    var(--text-faint) 65%, var(--text-faint) 100%);
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-sweep 2.2s linear infinite;
+}
+@keyframes shimmer-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
 
 /* Who you are talking to, in the board header: chips for the first few, the
    full list one click away — most days nobody needs more than a glance. */
