@@ -472,6 +472,15 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 			return false
 		}
 	}
+	if model == "" && provider != "" {
+		// Defaults may name a pairing without a model; the dispatch form has
+		// the same gap and answers it with the provider's first model. A
+		// session created without one starts the CLI with no default_model,
+		// which fails only after everything else has already worked.
+		if pr, ok := h.Registry.Provider(provider); ok && len(pr.Models) > 0 {
+			model = pr.Models[0]
+		}
+	}
 	sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model = runner, provider, model
 	cred, err := h.credentialFor(ctx, p, runner)
 	if err != nil {

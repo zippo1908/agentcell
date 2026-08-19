@@ -107,6 +107,11 @@ export const api = {
       body: JSON.stringify({ body }),
     }),
 
+  /** Wake the project's conversation and learn whether an ask would work. */
+  boardPrewarm: (cell: string) =>
+    req<{ session: 'none' | 'warming' | 'ready'; credential?: 'ok' | 'invalid' | 'missing' | 'unknown'; message?: string }>(
+      `/api/cells/${cell}/board/prewarm`),
+
   people: () =>
     req<{ email: string; name?: string; admin?: boolean; disabled?: boolean; canCreate?: boolean }[]>(
       '/api/people'),

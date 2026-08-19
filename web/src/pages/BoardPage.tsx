@@ -40,6 +40,22 @@ export function BoardPage() {
     refetchInterval: 4000,
   })
 
+  // Opening the board wakes the project's conversation (server side), so an
+  // @机器人 ask does not spend its first two minutes behind a waiting bubble.
+  // The same endpoint reports a dead credential BEFORE it can fail an ask —
+  // poll briskly while anything is unresolved, stop once all is well.
+  const prewarm = useQuery({
+    queryKey: ['board-prewarm', team],
+    queryFn: () => api.boardPrewarm(team),
+    enabled: !!team,
+    refetchInterval: (q) => {
+      const d = q.state.data
+      if (!d || d.session !== 'ready') return 8000
+      if (d.credential === 'invalid' || d.credential === 'missing') return 30000
+      return false
+    },
+  })
+
   const post = useMutation({
     mutationFn: () => api.postToBoard(team, text),
     onSuccess: (data) => {
@@ -250,6 +266,24 @@ export function BoardPage() {
       </div>
 
       <div className="board-stream">
+        {/* The warm-up says itself: a waking session gets the same face as a
+            thinking agent, and a dead credential is named — with where to fix
+            it — before it can fail an ask. */}
+        {prewarm.data?.session === 'warming' && (
+          <div className="form-note board-banner">
+            <span className="think-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="shimmer-text">正在唤醒这个项目的会话……</span>
+          </div>
+        )}
+        {(prewarm.data?.credential === 'invalid' || prewarm.data?.credential === 'missing') && (
+          <div className="note board-banner">
+            {prewarm.data.message} —— <Link to="/credentials">去凭据页</Link>
+          </div>
+        )}
         {posts.length === 0 && !stream && (
           <div className="board-empty">
             <p>还没有人说话。</p>

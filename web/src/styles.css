@@ -641,6 +641,7 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 }
 .board-empty { padding: 40px 0; text-align: center; color: var(--text-dim); }
 .board-empty p { margin: 0 0 6px; }
+.board-banner { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 
 .post { display: flex; gap: 10px; padding: 9px 0; }
 .post + .post { border-top: 1px solid var(--border-soft); }
