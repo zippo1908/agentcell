@@ -134,7 +134,11 @@ func (a *Authenticator) resolve(r *http.Request, presented string) (identity.Pri
 		if err != nil {
 			return identity.Principal{}, false
 		}
-		return p, true
+		// An IdP login is one of a principal's identifiers, not the
+		// principal. Resolving here is what lets the same human arrive over
+		// SSO and over a password and be the same entity — and what stops a
+		// change of issuer URL from turning everybody into strangers.
+		return a.Accounts.resolved(r.Context(), p), true
 	}
 	// An account session cookie, which is what a person logged in with an
 	// email carries. Checked before the static token because the static

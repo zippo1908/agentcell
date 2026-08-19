@@ -168,89 +168,82 @@ Casbin 的 enforcer **把策略缓存在内存里**。celld 一旦多副本,策�
 
 ---
 
-## 2. 唯一真正困难的地方:切换会换掉人的身份
+## 2. 身份连续性:已经解决了
 
-这是这篇文档存在的理由。
+> 这一节曾经叫「唯一真正困难的地方」。它现在描述的是一件已完成的事
+> ([ADR-0016](adr/0016-principal-id-decoupled-from-identity.md))。
 
-Principal 的 `Subject` 决定 `ID()`,而 `ID()` 是**写进 Kubernetes 对象里的那个值**:
-
-```go
-ID() = "u-" + hex(sha256(Subject)[:8])
-```
-
-同一个人,两种登录方式,算出来是两个人:
+问题曾经是:`ID()` 从登录方式**推导**而来,而这个值被写进四个没法放在一个事务里
+改的地方——Cell 成员表、Secret 属主标签、Session 属主、Unix uid。所以同一个人
+换一种登录方式就是另一个人:
 
 ```
-账号密码  subject=user:zhumingze@us.tinci.com   ->  u-dd7f41d41e4f5437
-OIDC     subject=oidc:958ce9f3:zhumingze       ->  u-b5a8e3499eb2168f
+密码   subject=user:zhumingze@us.tinci.com  ->  u-dd7f41d41e4f5437
+OIDC   subject=oidc:958ce9f3:zhumingze      ->  u-b5a8e3499eb2168f
 ```
 
-而这个 ID 决定了**至少四样东西**:
+现在关系反过来了:
 
-- `Cell.spec.members[].userID` —— 项目成员资格
-- Secret 上的 `agentcell.io/owner` 标签 —— 凭据归谁
-- `useruid` 分配的 Unix uid —— 也就是 `/workspace/users/<uid>/` 这棵私有树:
-  **工作树、CLI 状态、tmux socket、已连接的账号**
-- `Session.spec.ownerUserID` —— 谁为这条会话付账,不可变
+```mermaid
+flowchart LR
+  subgraph P["Principal —— 实体,id 分配一次,永不推导"]
+    PID["u-dd7f41d4…"]
+  end
+  B1["binding<br/>provider=user<br/>subject=user:zhumingze@…"] --> PID
+  B2["binding<br/>provider=oidc<br/>subject=oidc:958ce9f3:…"] --> PID
+  B3["binding<br/>provider=oidc(Entra)<br/>subject=…"] --> PID
+  PID --> K8S["Cell 成员表 · Secret 属主<br/>Session 属主 · Unix uid"]
+```
 
-**所以直接打开 OIDC 开关,每个人都会以一个崭新的陌生人身份登录进来**:项目里没有
-他、凭据不是他的、工作树打不开、正在跑的会话不认他。而且**不会有任何报错**——
-系统会认为这是一个从没见过的新人,这正是它该有的行为。
+**Principal 是本体里的实体,OIDC identity 只是它的一种 Identifier。**
+加或删一条 binding 不触碰 id,所以那四份副本一个都不用动。
 
-> 这不是 bug,是「主体即身份」这个设计的直接后果。它换来的好处是:身份不依赖任何
-> 数据库行,存储重建了也不变;而代价就是主体本身必须稳定。
+**迁移是「收养」而不是「换发」**:每个现有账号当前的 id 被收养成它的已分配 id,
+本地登录成为第一条 binding。**一个值都不移动**,变的只是这个值从哪来——从推导
+变成存储。回填只有两条 `INSERT OR IGNORE`,没有 UPDATE 也没有 DELETE,所以结构上
+不可能损坏既有数据。
+
+顺带拆掉的一个障碍:**以前这个系统里没法给人改邮箱**(改了他就变成另一个人,
+这就是为什么没有这个接口)。现在 binding 跟着改、id 不动就行了。
 
 ---
 
-## 3. 迁移方案:先建立身份连续性,再切开关
+## 3. 开启 OIDC 之前还差一件事:自助关联
 
-### 第一步:选定并**冻结** subject 的算法
+**这一件是硬前置,不是优化。**
 
-`OIDCSubject(issuer, sub)` 把 issuer 也哈希进去,是为了两个 IdP 恰好用了同一个
-`sub` 时不撞车。代价是:**换 issuer URL 就等于换掉所有人的身份。**
+现在能创建 binding 的只有「第一次见到这个登录」这一条路。所以一个已有用户第一次
+用 SSO 登录,会得到一个**新** principal——而这是**正确的**:
 
-所以上线前把这两件事定死,写进部署文档:
+> **未绑定的登录不按邮箱认亲。** IdP 管理员可以改任何人的 email claim,仅凭邮箱
+> 相同就合并身份,等于让控制 IdP 的人改一个字段就接管这里的任何账号。
 
-- **issuer URL 一个字都不许再改**(包括 http→https、有无末尾斜杠)。
-  `--oidc-issuer` 里的值会被 `TrimRight("/")`,但 scheme 和主机名的任何改动都是换人。
-- **`sub` 用什么**。Casdoor 可以给 UUID、用户名、邮箱。**选一个此人一辈子不会变的**
-  ——邮箱会因为改名、部门调动而变,UUID 不会。选 UUID,把邮箱只当显示用。
+所以关联必须是一次单独的、有意的行为:
 
-### 第二步:身份链接表(必须,不是可选)
+1. 第一次用 SSO 登录、且这个 subject 没被绑定过
+2. 如果邮箱与某个已有账号相同 → 提示「这看起来是你,用密码确认一次」
+3. **密码验证通过** → 写入 binding
+4. 从此他无论用哪种方式登录,都是同一个 principal
 
-在账号库里加一张表,把「旧的 user: 主体」和「新的 oidc: 主体」指向同一个人:
+**为什么必须是密码**:这是唯一一件 IdP 管理员做不到的事。一次确认,只做一次。
 
-```
-identity_links(primary_subject, linked_subject, linked_at, linked_by)
-```
+### 切换期两种方式并存
 
-解析时:认证产出一个 Principal → 查链接表 → 如果这个 subject 被链接到某个
-primary,就用 primary 的 ID。**一个人可以有多个登录方式,只有一个身份。**
+账号密码这条路**不要立刻关掉**:SSO 出故障时还有路进得来(IdP 是新的单点故障,
+第一个月一定会有意外);没关联完的人还能登录并完成关联;**静态令牌永远保留**
+——它是把部署装起来的那条路,也是授权在故障时的唯一逃生通道
+([ADR-0015](adr/0015-authorization-fails-closed.md))。
 
-这条要放在 `identity` 包里、`ID()` 之前,而**不是**散在各调用点——否则就是又一处
-「同一个问题两个函数回答」,而这个仓库已经因为这个吃过三次亏。
+关联率到 100% 之后,再把密码登录从界面上收起来(**保留后端能力**,只是不 offer)。
 
-### 第三步:自助链接,不是管理员批量改
+### issuer URL 定死
 
-第一次用 SSO 登录、且这个 subject 没被链接过时:
+`OIDCSubject(issuer, sub)` 把 issuer 哈希进 subject,所以**换 issuer URL 等于换掉
+所有人的 subject**——binding 会失配,他们又变成新人。上线前定死并写进部署文档:
 
-1. 如果邮箱与某个已有账号相同 → 提示「这看起来是你,用密码确认一次」
-2. 密码验证通过 → 写入链接
-3. 从此这个人无论用哪种方式登录,都是同一个 ID
-
-**为什么要密码确认**:IdP 上的邮箱声明是可以被管理员改的。仅凭邮箱相同就合并两个
-身份,等于让能改 IdP 邮箱的人接管平台上任何一个账号。**一次密码确认把这条路堵死**,
-而且只需要做一次。
-
-### 第四步:切换期两种方式并存
-
-账号密码这条路**不要立刻关掉**:
-
-- SSO 出故障时还有路进得来(IdP 是新的单点故障,第一个月一定会有意外)
-- 没链接完的人还能登录并完成链接
-- 静态令牌**永远保留**:它是把部署装起来的那条路,也是 IdP 彻底不可用时的破窗
-
-链接率到 100% 之后,再把账号密码登录从界面上收起来(**保留后端能力**,只是不 offer)。
+- **issuer URL 一个字都不许再改**(包括 http→https、有无末尾斜杠)
+- **`sub` 用一个此人一辈子不会变的值**。Casdoor 可以给 UUID、用户名、邮箱——
+  **选 UUID**,邮箱会因改名和部门调动而变
 
 ---
 

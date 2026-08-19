@@ -158,6 +158,29 @@ func (db *DB) migrate() error {
 			created_at INTEGER NOT NULL,
 			PRIMARY KEY (user_id, provider)
 		)`,
+		// The entity a person IS, separate from the ways they log in.
+		// See principals.go for why this is not the same as users, and why
+		// adopting existing ids rather than allocating new ones is what
+		// makes the change safe. A principal row carries no attributes on
+		// purpose: name, email and admin belong to an account, and a
+		// principal outlives any particular account it was reached through.
+		`CREATE TABLE IF NOT EXISTS principals (
+			id         TEXT PRIMARY KEY,
+			created_at INTEGER NOT NULL
+		)`,
+		// (provider, subject) is the login; principal_id is who it is.
+		// The primary key is the login, because one login must resolve to
+		// exactly one person — while one person may have many logins.
+		`CREATE TABLE IF NOT EXISTS identity_bindings (
+			provider     TEXT NOT NULL,
+			subject      TEXT NOT NULL,
+			principal_id TEXT NOT NULL,
+			bound_by     TEXT NOT NULL DEFAULT '',
+			created_at   INTEGER NOT NULL,
+			PRIMARY KEY (provider, subject)
+		)`,
+		`CREATE INDEX IF NOT EXISTS bindings_by_principal
+			ON identity_bindings (principal_id)`,
 	}
 	for i, s := range steps {
 		if _, err := db.sql.Exec(s); err != nil {
@@ -192,6 +215,11 @@ func (db *DB) migrate() error {
 	// nothing and stops the next person having to find that out.
 	if err := db.renameColumn("grants", "provider", "credential"); err != nil {
 		return fmt.Errorf("rename grants.provider: %w", err)
+	}
+	// Adopt existing identities as principals. Runs last because it reads
+	// users, and after every ALTER because it reads the current shape.
+	if err := db.backfillPrincipals(); err != nil {
+		return fmt.Errorf("adopt existing identities as principals: %w", err)
 	}
 	return nil
 }

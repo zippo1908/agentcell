@@ -170,7 +170,7 @@ stop work when it cannot be read; it may not grant it. The deployment token
 is the single, deliberate break-glass path, resolved before the store is
 consulted so it survives the outage that makes it necessary.
 
-### P0 — A Principal ID that does not move
+### P0 — A Principal ID that does not move ✅ done
 
 Today `ID() = hash(subject)`, so identity is *derived from the way a person
 authenticated*, and that value is denormalized into Kubernetes objects, Unix
@@ -186,9 +186,19 @@ identities as attributes of it.
       └── binding: email   / …
 
 A Principal is an entity in the ontology; an OIDC identity is one of its
-*identifiers*, not its primary key. Done now this is a model change. Done
-after Casdoor, group IAM and org sync are connected, it is an identity
-migration project touching four systems.
+*identifiers*, not its primary key.
+[ADR-0016](adr/0016-principal-id-decoupled-from-identity.md).
+
+Shipped by ADOPTING every existing id rather than reissuing: nothing in
+Kubernetes or on disk moved, and the rollout is a no-op for everybody who
+already had an account. It also lifts a limit nobody had written down —
+there was no way to change somebody's email, because doing so changed who
+they were.
+
+**One hard prerequisite remains before OIDC can be turned on**: the
+self-service linking flow. Until it exists, an existing person signing in
+through SSO becomes a new principal — correctly, since matching on email
+alone would let whoever controls the IdP take over any account here.
 
 ### P1 — Egress that is denied by default and attributed
 
