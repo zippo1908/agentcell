@@ -66,6 +66,17 @@ func (h *Handler) restartRuntime(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 501, fmt.Errorf("这个 celld 没有集群权限,重启不了运行时"))
 		return
 	}
+	// A session that has ENDED cannot be restarted, and saying so is the
+	// whole point: Error is terminal, so the controller stops reconciling it
+	// and the annotation this handler writes is never read. Accepting the
+	// request would leave somebody pressing a button that does nothing, on
+	// exactly the session that most needs help.
+	if isTerminalPhase(sess.Status.Phase) {
+		writeErr(w, 409, fmt.Errorf(
+			"这条会话已经结束(%s),重启不了。回项目里再开一条新的——工作树和之前的产出都还在。",
+			sess.Status.Phase))
+		return
+	}
 	pod := sess.Status.PodName
 	if pod == "" {
 		writeErr(w, 409, fmt.Errorf("这条会话还没有运行时可重启"))
@@ -111,4 +122,14 @@ func (h *Handler) mySession(w http.ResponseWriter, r *http.Request) (*acv1.Sessi
 		return nil, false
 	}
 	return &sess, true
+}
+
+// isTerminalPhase mirrors the controller's own rule: these phases are the
+// end of a session's life, and nothing reconciles them afterwards.
+func isTerminalPhase(p acv1.SessionPhase) bool {
+	switch p {
+	case acv1.SessionSettled, acv1.SessionDiscarded, acv1.SessionError:
+		return true
+	}
+	return false
 }
