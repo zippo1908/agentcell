@@ -24,7 +24,7 @@ func open(t *testing.T) *DB {
 // account and none of their own work.
 func TestEmailCaseIsNotIdentity(t *testing.T) {
 	db := open(t)
-	if err := db.CreateUser(t.Context(), "u1", "Zhu@Tinci.com", "Zhu", "hash", false); err != nil {
+	if err := db.CreateUser(t.Context(), "u1", "Zhu@Tinci.com", "Zhu", "hash", false, false); err != nil {
 		t.Fatal(err)
 	}
 	u, _, err := db.UserByEmail(t.Context(), "  zhu@tinci.com ")
@@ -34,7 +34,7 @@ func TestEmailCaseIsNotIdentity(t *testing.T) {
 	if u.ID != "u1" {
 		t.Errorf("id = %q, want u1", u.ID)
 	}
-	if err := db.CreateUser(t.Context(), "u2", "ZHU@TINCI.COM", "", "h", false); err == nil {
+	if err := db.CreateUser(t.Context(), "u2", "ZHU@TINCI.COM", "", "h", false, false); err == nil {
 		t.Error("a second account was created for the same address")
 	}
 }
@@ -73,7 +73,7 @@ func TestGrantsReachTeamsAndOnlyTheRightPeople(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Provider != "kimi" {
+	if len(got) != 1 || got[0].Credential != "kimi" {
 		t.Errorf("team member got %v, want the team's kimi grant", got)
 	}
 
@@ -83,7 +83,7 @@ func TestGrantsReachTeamsAndOnlyTheRightPeople(t *testing.T) {
 	}
 
 	// The personal grant reaches its target and nobody else.
-	if got, _ = db.GrantsTo(ctx, "li", nil); len(got) != 1 || got[0].Provider != "openai" {
+	if got, _ = db.GrantsTo(ctx, "li", nil); len(got) != 1 || got[0].Credential != "openai" {
 		t.Errorf("li got %v, want the personal openai grant", got)
 	}
 
@@ -144,7 +144,7 @@ func TestGitIdentityIsPerPersonAndNeverListedWithItsToken(t *testing.T) {
 // session, worktree and piece of authorship that points at this person.
 func TestDisablingKeepsTheAccount(t *testing.T) {
 	db := open(t)
-	if err := db.CreateUser(t.Context(), "u1", "a@b.c", "A", "h", false); err != nil {
+	if err := db.CreateUser(t.Context(), "u1", "a@b.c", "A", "h", false, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SetDisabled(t.Context(), "a@b.c", true); err != nil {

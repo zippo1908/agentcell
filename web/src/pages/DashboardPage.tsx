@@ -22,15 +22,15 @@ export function DashboardPage() {
   return (
     <>
       <h1 className="page-title">
-        工作台
+        概览
         <span className="sub">你欠着什么,和什么在跑</span>
       </h1>
 
       <div className="stat-row slim">
-        <Stat num={isLoading ? NONE : (cells?.length ?? 0)} label="工作区" tone="accent" />
+        <Stat num={isLoading ? NONE : (cells?.length ?? 0)} label="项目" tone="accent" />
         <Stat num={isLoading ? NONE : running} label="在跑的会话" tone={running > 0 ? 'green' : undefined} />
         <Stat num={pending.length} label="待批阅" tone={pending.length > 0 ? 'amber' : undefined} />
-        {broken.length > 0 && <Stat num={broken.length} label="异常工作区" tone="red" />}
+        {broken.length > 0 && <Stat num={broken.length} label="异常项目" tone="red" />}
       </div>
 
       <div className="card">
@@ -59,7 +59,7 @@ export function DashboardPage() {
 
       <div className="card">
         <h3>
-          工作区
+          项目
           <span className="spacer" />
           <Link to="/cells/new" className="faint" style={{ fontSize: 11, borderBottom: 'none' }}>
             新建 →
@@ -67,11 +67,11 @@ export function DashboardPage() {
         </h3>
         {(cells ?? []).length === 0 ? (
           <EmptyState
-            title="还没有工作区"
-            hint="一个工作区是一个项目:常驻的代码检出、预览,和一组会话槽位。"
+            title="还没有项目"
+            hint="项目 = 常驻的代码检出、预览,和一组会话槽位。"
             action={
               <Link to="/cells/new" style={{ borderBottom: 'none' }}>
-                <button className="primary small">新建工作区</button>
+                <button className="primary small">新建项目</button>
               </Link>
             }
           />

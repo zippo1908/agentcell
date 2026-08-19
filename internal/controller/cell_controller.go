@@ -661,9 +661,15 @@ func previewPort(cell *acv1.Cell) int32 {
 	return 3000
 }
 
-// previewReadiness gates anchor readiness on the preview actually listening,
-// but only when a preview command is configured (an anchor with no preview
-// idles and never binds a port, so a probe would wedge it NotReady).
+// previewReadiness gates anchor readiness on the preview actually listening
+// — but only when somebody stated a command.
+//
+// Deliberately NOT extended to auto mode. Auto cannot promise a preview: it
+// reads the checkout and may legitimately conclude there is nothing to
+// serve. Probing then would wedge the anchor NotReady forever over a
+// non-failure, which is a shape this deployment has already produced once
+// (an anchor 16 hours NotReady on a port nothing was ever going to bind).
+// A stated command is a promise, and a promise is fair to probe.
 func previewReadiness(cell *acv1.Cell) *corev1.Probe {
 	if len(cell.Spec.Preview.Command) == 0 {
 		return nil

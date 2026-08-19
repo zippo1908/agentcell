@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,8 +31,16 @@ import (
 // NEVER silently does nothing. It answers, in the stream, saying what it
 // could not find and what it would have accepted.
 
-// mentionRe matches @token where token is a Cell name or a u- id.
-var mentionRe = regexp.MustCompile(`@([a-z0-9][-a-z0-9]{0,62})`)
+// mentionRe matches @token where token is a Cell name, a u- id, or the way a
+// person is actually named — the local part of their address, or the whole
+// address when two colleagues share one.
+//
+// It used to match only `[a-z0-9][-a-z0-9]*`, which in practice meant the
+// hashed user id. Nobody types `@u-9f3a1c…`, so in practice nobody addressed
+// anybody: the feature existed and was unreachable. The composer now offers
+// a picker, and what the picker inserts has to be something a human can also
+// type and read back afterwards.
+var mentionRe = regexp.MustCompile(`@([A-Za-z0-9][-A-Za-z0-9._]{0,62}(?:@[A-Za-z0-9][-A-Za-z0-9.]{0,62})?)`)
 
 // botAliases are what people type when they mean "the agent" without
 // knowing, or caring, which Cell that is.
@@ -177,7 +184,7 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	p := identity.FromContext(r.Context())
 
-	users := h.resolveMentions(t, text)
+	users := h.resolveMentions(r.Context(), t, text)
 	post := acv1.Post{
 		Kind: acv1.PostUser, Author: p.ID(), Body: text, Mentions: users,
 	}
@@ -190,6 +197,16 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 	// one agent — so calling it is just saying so.
 	if hasBotAlias(text) {
 		h.dispatchFromBoard(r.Context(), t.Name, t.Name, text, p)
+	}
+
+	// The rule at the top of this file, finally applied to people too: an @
+	// that matched nobody used to just not be in Mentions, and the writer had
+	// no way to tell the difference between "delivered" and "typed the name
+	// slightly wrong". Now it answers in the stream.
+	if miss := h.unresolvedMentions(r.Context(), t, text, users); len(miss) > 0 {
+		h.systemPost(r.Context(), t.Name,
+			"没找到这些人:@"+strings.Join(miss, " @")+" —— 只能 @ 这个项目的成员。输入 @ 会列出可选的人。",
+			t.Name)
 	}
 	writeJSON(w, 201, map[string]any{"id": post.ID})
 }
@@ -242,20 +259,122 @@ func (h *Handler) teamCells(ctx context.Context, team string) []string {
 // project it could be addressed to. Naming which agent to talk to was a
 // question a team-wide board had to ask; here the answer is the project the
 // board is on.
-func (h *Handler) resolveMentions(t *acv1.Cell, body string) (users []string) {
+func (h *Handler) resolveMentions(ctx context.Context, t *acv1.Cell, body string) (users []string) {
 	member := map[string]bool{}
 	for _, m := range t.Spec.Members {
 		member[m.UserID] = true
 	}
+	// How a person may be written: their id, their whole address, or the
+	// local part of it. The last one is what people actually type, and it is
+	// only offered when it is unambiguous among THIS project's members —
+	// delivering "@li" to the wrong Li is worse than not delivering it.
+	byName := map[string]string{}
+	ambiguous := map[string]bool{}
+	for _, u := range h.accountsForMentions(ctx) {
+		id := identity.Principal{Subject: identity.UserSubject(u.email)}.ID()
+		if !member[id] {
+			continue
+		}
+		full := strings.ToLower(u.email)
+		byName[full] = id
+		local := full
+		if i := strings.IndexByte(full, '@'); i > 0 {
+			local = full[:i]
+		}
+		if prev, dup := byName[local]; dup && prev != id {
+			ambiguous[local] = true
+		}
+		byName[local] = id
+	}
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			users = append(users, id)
+		}
+	}
+	for _, m := range mentionRe.FindAllStringSubmatch(body, -1) {
+		tok := m[1]
+		if member[tok] {
+			add(tok)
+			continue
+		}
+		low := strings.ToLower(tok)
+		if ambiguous[low] {
+			// Deliberately not delivered, and deliberately not silent: the
+			// caller reports what it could not resolve.
+			continue
+		}
+		add(byName[low])
+	}
+	return users
+}
+
+// unresolvedMentions returns the @tokens that named nobody.
+//
+// Things that are legitimately not people are excluded: the bot aliases, and
+// the project's own name (which is how the board has always addressed the
+// agent). Everything left over is somebody the writer meant to reach and did
+// not — which is exactly what they need told.
+func (h *Handler) unresolvedMentions(ctx context.Context, t *acv1.Cell, body string, resolved []string) []string {
+	if len(t.Spec.Members) == 0 {
+		// An open project has no member list to check against, so there is
+		// nothing here that can be called wrong.
+		return nil
+	}
+	known := map[string]bool{}
+	for _, id := range resolved {
+		known[id] = true
+	}
+	member := map[string]bool{}
+	for _, m := range t.Spec.Members {
+		member[m.UserID] = true
+	}
+	byName := map[string]bool{}
+	for _, u := range h.accountsForMentions(ctx) {
+		id := identity.Principal{Subject: identity.UserSubject(u.email)}.ID()
+		if !member[id] {
+			continue
+		}
+		full := strings.ToLower(u.email)
+		byName[full] = true
+		if i := strings.IndexByte(full, '@'); i > 0 {
+			byName[full[:i]] = true
+		}
+	}
+	var miss []string
 	seen := map[string]bool{}
 	for _, m := range mentionRe.FindAllStringSubmatch(body, -1) {
 		tok := m[1]
-		if member[tok] && !seen[tok] {
-			seen[tok] = true
-			users = append(users, tok)
+		low := strings.ToLower(tok)
+		switch {
+		case seen[low], known[tok], byName[low], member[tok]:
+		case low == strings.ToLower(t.Name):
+		case low == "bot" || low == "agent" || low == "ai":
+		default:
+			seen[low] = true
+			miss = append(miss, tok)
 		}
 	}
-	return users
+	return miss
+}
+
+// accountsForMentions lists the deployment's people, or nothing at all on a
+// deployment without accounts — where mentions can only ever be ids.
+func (h *Handler) accountsForMentions(ctx context.Context) []accountLite {
+	db := h.accountsDB()
+	if db == nil {
+		return nil
+	}
+	users, err := db.Users(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]accountLite, 0, len(users))
+	for _, u := range users {
+		out = append(out, accountLite{u.Email, u.Name})
+	}
+	return out
 }
 
 func hasBotAlias(body string) bool {
@@ -363,24 +482,17 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 // vendor, so more than one is a question, not a coin flip — and the answer
 // goes in the stream where it was asked.
 func (h *Handler) soleCredential(ctx context.Context, p identity.Principal) (string, error) {
-	var list corev1.SecretList
-	if err := h.Client.List(ctx, &list,
-		client.InNamespace(h.Namespace),
-		// Model keys only: a connected account is a credential, but it is not
-		// a key you can be asked to choose between.
-		client.MatchingLabels{credLabel: credKindModel}); err != nil {
-		return "", fmt.Errorf("读不到凭据:%w", err)
-	}
-	mine := []string{}
-	for i := range list.Items {
-		if p.Owns(list.Items[i].Labels[OwnerLabel]) {
-			mine = append(mine, list.Items[i].Name)
-		}
-	}
-	sort.Strings(mine)
+	// Owned AND lent: a colleague who has been handed a key must be able to
+	// spend it without also owning one, which is the whole point of lending.
+	// Model keys only — a connected account is a credential, but it is not a
+	// key you can be asked to choose between.
+	mine := h.spendableCredentials(ctx, p)
 	switch len(mine) {
 	case 0:
-		return "", fmt.Errorf("你还没有配模型 key——去「我的凭据」加一个再来。")
+		// Names where to go, and all three ways out — the third one exists
+		// precisely so a new colleague is not stuck on their first afternoon.
+		return "", fmt.Errorf("你还没有可用的模型 key。去「我的凭据」自己加一把、" +
+			"连一次账号,或者请有 key 的同事在他那页把凭据借给你。")
 	case 1:
 		return mine[0], nil
 	default:

@@ -24,3 +24,14 @@ metadata:
 data:
 {{ toYaml .Values.presets.runners | indent 2 }}
 {{- end }}
+{{- if .Values.presets.devboxes }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentcell-devboxes
+  namespace: {{ .Values.controlNamespace }}
+  labels: {{- include "agentcell.labels" . | nindent 4 }}
+data:
+{{ toYaml .Values.presets.devboxes | indent 2 }}
+{{- end }}

@@ -38,8 +38,21 @@ type RepoSpec struct {
 // the Cell, so the user can watch the agent's work and recalibrate the
 // product description against what they see.
 type PreviewSpec struct {
+	// Mode says whether a preview should run at all.
+	//
+	// Empty and "auto" both mean the platform reads the checkout and works
+	// the command out (see cmd/cell-runtime/preview_detect.go). That is the
+	// default because a preview is the thing people actually want and the
+	// answer is already written in the repository — asking for it on a
+	// create form, before the repository has anything in it, produced
+	// projects with no preview and nothing saying why.
+	//
+	// "off" means never, for a project that genuinely has nothing to serve.
+	// +kubebuilder:validation:Enum=auto;off
+	Mode PreviewMode `json:"mode,omitempty"`
 	// Command is run (via sh -c when len==1, else exec'd) in the preview
 	// target directory by the anchor, restarted with backoff when it exits.
+	// Empty in auto mode; set, it always wins over detection.
 	Command []string `json:"command,omitempty"`
 	// Port the command serves HTTP on inside the anchor pod.
 	Port int32 `json:"port,omitempty"`
@@ -48,6 +61,26 @@ type PreviewSpec struct {
 	// means the main checkout.
 	FollowSession string `json:"followSession,omitempty"`
 }
+
+// LibraryVersionAnnotation marks when a project's files last changed, so a
+// running session can be topped up instead of having to be restarted. Any
+// value that changes will do; the console writes a timestamp.
+const LibraryVersionAnnotation = "agentcell.io/library-version"
+
+// PreviewMode selects between letting the platform decide and switching the
+// preview off. There is deliberately no "on": "on" without a command is
+// exactly what auto already is.
+type PreviewMode string
+
+const (
+	// PreviewAuto reads the checkout and decides. The zero value.
+	PreviewAuto PreviewMode = "auto"
+	// PreviewOff runs no preview for this project.
+	PreviewOff PreviewMode = "off"
+)
+
+// PreviewEnabled reports whether this Cell wants a preview at all.
+func (p PreviewSpec) PreviewEnabled() bool { return p.Mode != PreviewOff }
 
 // ProductionSpec is the Cell's 正式区: a deployment fully isolated from the
 // dev zone (own shallow clone on an emptyDir, never the shared PVC), which
@@ -126,6 +159,14 @@ type CellSpec struct {
 	// there is no cross-repository atomicity to be had, so the platform does
 	// not imply one.
 	Repos []RepoSpec `json:"repos,omitempty"`
+	// DisplayName is what people call this project.
+	//
+	// The object's NAME has to be a DNS label — it becomes a namespace and
+	// part of a preview host — but that is the platform's problem, not the
+	// namer's. Somebody who wants to call a project 「平台运维组」 should be
+	// able to, and read that name back everywhere afterwards.
+	// +kubebuilder:validation:MaxLength=63
+	DisplayName string `json:"displayName,omitempty"`
 	// Image is the devbox image for the anchor and session pods; it must
 	// contain the agent CLIs plus git and tmux. cell-runtime is baked in at
 	// image build time.

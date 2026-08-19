@@ -156,7 +156,14 @@ flowchart TB
 ### 谁拥有什么
 
 ```
+账号 ── 建项目的授权(在邀请上给出,不在任何项目上)
+  │      └── 个人 forge 令牌(GitLab/GitHub:只属于他,从不出借)
+  ↓
 项目(Cell)
+  ├── 仓库(可以先不填,之后再关联;换仓库是迁移,不是改字段)
+  ├── 成员名单 ── 就是这个项目的全部范围(没有团队这一层)
+  ├── 知识库 ── 上传的文件,每次派工带进沙盒
+  ├── 项目令牌 ── 这个项目 clone/push 用哪份凭据
   └── 会话配额(maxSessions:这里同时能有几条会话占槽位)
        └── 会话 ── owner:一个真人,创建时写一次、终身不变
             │         他的凭据为这条会话的每一轮买单
@@ -165,6 +172,14 @@ flowchart TB
             ├── worktree + 对话(在卷上,活过运行时重建)
             └── 批阅 ── PR / 发布
 ```
+
+三种「令牌」很容易混成一件事,它们回答的是三个不同的问题:
+
+| | 属于谁 | 回答什么 |
+|---|---|---|
+| 建项目的授权 | 账号 | 这个人能不能新开一个项目 |
+| 个人 forge 令牌 | 账号 | 他自己的提交,在 GitLab 那边算谁的 |
+| 项目令牌 | 项目 | 这个项目 clone/push 时用哪份凭据 |
 
 有两个决定常被当成一个:共享键盘,和共享账单。黑板对话是共享的——项目里
 任何人都能在里面回话——而它仍然由开启它的人出资。operator 不会悄悄变成
@@ -200,6 +215,12 @@ flowchart TB
 | 派工表单由服务端目录驱动:选 runner 只列它能驱动的 provider、默认同厂商、模型来自清单且可自填 | ✅ |
 | **浏览器内终端**(xterm.js ↔ tmux over WebSocket,可读写);只有会话的 owner 能 attach,Cell 的 maintainer 也不行 | ✅ 已验证 |
 | **休眠回收**:空闲会话交回槽位与运行时,保留 worktree 与对话;打开终端或追问即在原处唤醒 | ✅ 已验证 |
+| **预览自动判定**:不再要人写预览命令,平台读 checkout 自己决定(dev/start、Django、静态页);认不出来就不起并说明原因 | ✅ 有测试 |
+| **仓库可后补**:项目先建、GitLab 之后关联;换仓库被明确拒绝(那是迁移) | ✅ |
+| **项目知识库**:上传的文件随每次派工进沙盒,正文可读的会被抽取 | ✅ |
+| **黑板 @ 人**:输入 @ 列出项目成员与机器人;按邮箱前缀解析,歧义时拒绝猜;@ 不到人会出声 | ✅ 有测试 |
+| **个人 forge 令牌**:自己绑 GitLab/GitHub,投影成 basic-auth 凭据供项目选用,从不出借 | ✅ |
+| **建项目授权**:邀请时给出;升级不会收走已有账号的这项权限 | ✅ 有测试 |
 | **账号**:邀请、邮箱登录、一人一个主体;改一次密码所有地方的登录同时失效(cookie 签名覆盖了密码哈希) | ✅ 已验证 |
 | **文件**:上传规格、表格;文本在上传时抽一次,落到 worktree 的 `.agentcell/library/`,agent 用 Read 和 grep 直接读 | ✅ 已验证 |
 | **交互式 agent**:常驻会话按人的用法启动 CLI——它自己的界面、自己的斜杠命令;后续消息是打字打给它 | ✅ 已验证 |
@@ -263,10 +284,12 @@ kubectl -n agentcell-system create secret generic git-cred --type=kubernetes.io/
 kubectl -n agentcell-system create secret generic bailian-key --from-literal=key=sk-...
 kubectl -n agentcell-system rollout restart deploy/celld
 
-# 4. 建带常驻预览的 Cell,派工并实时看
+# 4. 建 Cell,派工并实时看
+#    预览默认开着:不给 --preview 就由平台读仓库自己判断怎么起
+#    (package.json 的 dev/start、Django、根目录静态页),认不出来就不起并说明原因。
+#    --repo 也可以先不给,之后在项目页里关联。
 cellctl cell create shop --repo https://github.com/you/shop.git \
-  --image ghcr.io/agentcell/devbox --secret git-cred \
-  --preview "npm run dev -- --host" --preview-port 5173 --description "极简电商"
+  --image ghcr.io/agentcell/devbox --secret git-cred --description "极简电商"
 cellctl dispatch shop --task "把商品卡片改成两列" \
   --runner claude --provider aliyun-bailian --model qwen3-coder-plus --cred bailian-key --follow
 
@@ -313,6 +336,10 @@ helm upgrade --install agentcell oci://ghcr.io/zippo1908/charts/agentcell \
 celld **自己**拿 provider 的 JWKS 验 ID token,**绝不信任身份头**——Pod 网络上任何
 东西都能伪造一个头。所以不装网关也能用,任何标准 OIDC 提供方都行。想要现成的注册、
 登录和 TLS,[`deploy/identity/`](deploy/identity/) 里有 Casdoor + Apache APISIX® 的清单。
+
+接入公司统一身份的完整说明——包括**为什么不能直接打开开关**(同一个人换登录方式
+会算出不同的 ID,项目成员、凭据归属和工作树都挂在那个 ID 上)、以及身份链接怎么做:
+**[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)**。
 
 **边看边改**:常驻会话在 agent 结束后保留槽位,你可以看完结果**在同一个对话里再补
 一句**,而不是重派一个什么都要重新摸清的新会话:

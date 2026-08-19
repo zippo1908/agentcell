@@ -96,7 +96,22 @@ func (h *Handler) accountsByID(r *http.Request) map[string]accountLite {
 // nothing, and close the project to everyone else while doing it.
 func (h *Handler) memberID(r *http.Request, req memberRequest) (string, error) {
 	if req.UserID != "" {
-		return req.UserID, nil
+		// An address arriving in the id field is an address, not an id.
+		//
+		// Taking it literally is what actually happened: the console sent
+		// people's emails through this field, they were stored verbatim, and
+		// the authorization check compares against a hashed id — so the
+		// member list looked exactly right and granted nothing. Worse,
+		// naming a member CLOSES the project, so the effect of adding two
+		// colleagues was that the project disappeared for everybody,
+		// including the person who added them.
+		//
+		// deleteMember already translated an address here. This is the same
+		// rule, on the path that writes.
+		if !strings.Contains(req.UserID, "@") {
+			return req.UserID, nil
+		}
+		req.Email = req.UserID
 	}
 	if req.Email == "" {
 		return "", fmt.Errorf("要么给 email,要么给 userID")
@@ -135,12 +150,29 @@ func (h *Handler) putMember(w http.ResponseWriter, r *http.Request) {
 				return nil
 			}
 		}
+		// Asked BEFORE the append. EffectiveAccess reads "open" off an empty
+		// member list, so asking afterwards can never be true — the branch
+		// below was unreachable, and a project was only ever restricted by
+		// the side effect of no longer having an empty list.
+		wasOpen := effectiveAccess(cell) == acv1.AccessOpen
 		cell.Spec.Members = append(cell.Spec.Members, acv1.Member{UserID: id, Role: req.Role})
 		// Naming somebody is an unambiguous statement that this project has
 		// an inside and an outside, so it closes an open Cell rather than
 		// leaving it open with a member list nobody enforces.
-		if effectiveAccess(cell) == acv1.AccessOpen {
+		//
+		// Closing it must not lock out the person closing it. On an open
+		// project everybody is a maintainer, so whoever adds the first
+		// member is working with access they are about to withdraw from
+		// themselves — and the way back needs cluster access, which is
+		// exactly what this API exists to avoid needing.
+		if wasOpen {
 			cell.Spec.Access = acv1.AccessRestricted
+			if me := identity.FromContext(r.Context()); me.Kind == identity.KindUser || me.Kind == identity.KindOIDC {
+				if !isMember(cell.Spec.Members, me.ID()) {
+					cell.Spec.Members = append(cell.Spec.Members,
+						acv1.Member{UserID: me.ID(), Role: acv1.RoleMaintainer})
+				}
+			}
 		}
 		return nil
 	})
@@ -176,6 +208,15 @@ func (h *Handler) deleteMember(w http.ResponseWriter, r *http.Request) {
 		cell.Spec.Members = out
 		return nil
 	})
+}
+
+func isMember(ms []acv1.Member, id string) bool {
+	for _, m := range ms {
+		if m.UserID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func hasMaintainer(ms []acv1.Member) bool {

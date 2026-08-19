@@ -21,7 +21,11 @@ type createCellRequest struct {
 	SecretName  string `json:"secretName"`
 	Image       string `json:"image"`
 	Description string `json:"description"`
-	Preview     string `json:"preview"`
+	// Preview is an explicit command. Normally empty: the platform reads the
+	// checkout and works one out.
+	Preview string `json:"preview"`
+	// PreviewMode is "off" to run no preview at all; anything else is auto.
+	PreviewMode string `json:"previewMode"`
 	PreviewPort int32  `json:"previewPort"`
 	MaxSessions int32  `json:"maxSessions"`
 	// ProductionTarget: "incell" (default) runs production in this Cell;
@@ -57,18 +61,61 @@ type createCellRequest struct {
 // something whose whole point is that a team works in it together. Anyone
 // who can authenticate can create one; the creator is recorded, because
 // "who brought this project in" is the first question asked later.
+// mayCreateProjects reports whether this caller may bring a new project onto
+// the platform.
+//
+// Only account holders are checked. An OIDC user or a static token predates
+// this grant and has no row to carry it, and quietly withdrawing something
+// those deployments already do would be an upgrade that breaks them.
+func (h *Handler) mayCreateProjects(r *http.Request) error {
+	db := h.accountsDB()
+	if db == nil {
+		return nil
+	}
+	p := identity.FromContext(r.Context())
+	if p.Kind != identity.KindUser {
+		return nil
+	}
+	u, _, err := db.UserByEmail(r.Context(), p.Email)
+	if err != nil {
+		return nil
+	}
+	if u.Admin || u.CanCreate {
+		return nil
+	}
+	return fmt.Errorf("你的账号还没有开通「创建项目」;找管理员开通,或者请项目维护者把你加进已有项目")
+}
+
 func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
+	if err := h.mayCreateProjects(r); err != nil {
+		writeErr(w, 403, err)
+		return
+	}
 	var req createCellRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	if err := ids.ValidateCellName(req.Name); err != nil {
-		writeErr(w, 400, err)
+	// The typed name is kept as it was typed; the object's name is derived.
+	// Asking a person for "lowercase letters, digits and dashes" and then
+	// refusing what they typed is a form arguing about an implementation
+	// detail they never asked to know.
+	display := strings.TrimSpace(req.Name)
+	if display == "" {
+		writeErr(w, 400, fmt.Errorf("给这个项目起个名字"))
 		return
 	}
-	if strings.TrimSpace(req.RepoURL) == "" || strings.TrimSpace(req.Image) == "" {
-		writeErr(w, 400, fmt.Errorf("repoURL and image are required"))
+	name := ids.SlugCellName(display)
+	if err := ids.ValidateCellName(name); err != nil {
+		writeErr(w, 400, fmt.Errorf("这个名字派生不出可用的地址(%s);换一个,或者带上一些字母数字", display))
+		return
+	}
+	// The repository is no longer required here. A project is usually agreed
+	// on before its GitLab repository exists, and demanding the URL up front
+	// only bought a Cell pointed at something that did not resolve yet.
+	// PUT /api/cells/{cell}/repo attaches it later.
+	if strings.TrimSpace(req.Image) == "" {
+		writeErr(w, 400, fmt.Errorf("image is required"))
 		return
 	}
 	// A git credential is a Secret in the control namespace, and pointing a
@@ -80,7 +127,7 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cell := &acv1.Cell{ObjectMeta: metav1.ObjectMeta{
-		Namespace: h.Namespace, Name: req.Name,
+		Namespace: h.Namespace, Name: name,
 		Annotations: map[string]string{
 			"agentcell.io/created-by": identity.FromContext(r.Context()).ID(),
 		},
@@ -130,6 +177,7 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cell.Spec = acv1.CellSpec{
+		DisplayName: display,
 		Members:     members,
 		Repo:        acv1.RepoSpec{URL: req.RepoURL, Branch: branch, SecretName: req.SecretName},
 		Image:       req.Image,
@@ -171,18 +219,31 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Every project gets a preview unless it says otherwise. Which command
+	// serves this checkout is read out of the checkout itself, so the form
+	// no longer asks — the answer lives in the repository, and on the day a
+	// project is created the repository is usually still empty.
+	port := req.PreviewPort
+	if port == 0 {
+		port = 3000
+	}
+	cell.Spec.Preview = acv1.PreviewSpec{Port: port}
+	if req.PreviewMode == string(acv1.PreviewOff) {
+		cell.Spec.Preview.Mode = acv1.PreviewOff
+	}
+	// A command may still be stated — by cellctl, by a project whose server
+	// detection cannot work out — and it always wins over detection.
 	if p := strings.Fields(req.Preview); len(p) > 0 {
-		port := req.PreviewPort
-		if port == 0 {
-			port = 3000
-		}
-		cell.Spec.Preview = acv1.PreviewSpec{Command: p, Port: port}
+		cell.Spec.Preview.Command = p
 	}
 	if err := h.Client.Create(r.Context(), cell); err != nil {
-		writeErr(w, 409, err)
+		// Two projects deriving the same address is a real collision, and
+		// saying which address makes it fixable — "already exists" naming an
+		// object nobody chose the name of is not.
+		writeErr(w, 409, fmt.Errorf("已经有一个项目占用了地址 %s;换个名字", name))
 		return
 	}
-	writeJSON(w, 201, map[string]string{"cell": cell.Name})
+	writeJSON(w, 201, map[string]string{"cell": cell.Name, "displayName": display})
 }
 
 // validateRepoLayout refuses a project group that cannot be laid out.

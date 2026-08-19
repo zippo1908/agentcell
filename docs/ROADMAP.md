@@ -53,6 +53,31 @@ cluster — see [E2E_RESULTS.md](E2E_RESULTS.md) for the runs.
 - **Packaging** — Helm chart and images on GHCR, cloud presets for k3s /
   Alibaba ACK / Tencent TKE.
 
+### Added since alpha.6 (unreleased)
+
+- **A preview nobody configures** — the create form no longer asks for a
+  command. The runtime reads the checkout and works one out; when it finds
+  nothing to serve it says which, instead of serving nothing silently
+  ([ADR-0014](adr/0014-preview-without-a-command.md)). This also fixed a
+  one-element `preview.command` being exec'd as a filename by the anchor,
+  which had held a real anchor `NotReady` for sixteen hours.
+- **A project before its repository** — projects are usually agreed on
+  before somebody creates the GitLab repo for them, so `repoURL` is optional
+  and attached later. Replacing an attached repository is refused: that is a
+  migration, not a form field.
+- **Mentions that reach people** — typing `@` on the board lists the
+  project's members and the agent. Mentions resolve by the name on somebody's
+  address rather than a hashed id, which nobody typed — so in practice nobody
+  had ever been mentioned. Ambiguity is refused rather than guessed, and an
+  `@` that reaches nobody answers in the stream.
+- **May-create-projects** — granted on the invitation, by whoever decides to
+  bring somebody in. Existing accounts keep it across the upgrade.
+- **Personal forge tokens** — bind your own GitLab/GitHub token in 我的凭据;
+  it is projected as a credential your projects may use, and never lent.
+- **The project's own page** — knowledge base, members (by address, not
+  hash) and the project's credential, each a tab. The preview left the tab
+  strip: it opens in its own window.
+
 ### Added in alpha.5 → alpha.6
 
 - **Accounts** — invitations, email login, one principal per person, kept in

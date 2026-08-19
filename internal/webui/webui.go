@@ -33,6 +33,11 @@ type Handler struct {
 	Client    client.Client
 	Namespace string // control namespace holding Cell/Session CRs
 	Registry  *access.Registry
+	// Devboxes is the image catalogue the create-a-project form offers,
+	// resolved once at startup so an operator's overlay actually reaches it.
+	// It used to be re-read from the built-in table on every request, which
+	// meant an overlay directory could never change what people saw.
+	Devboxes []access.Devbox
 	// Forge serves diffs through the broker (ADR-0006); nil/disabled makes
 	// the diff endpoint report 501 and review purely informational.
 	Forge *forge.Client
@@ -130,6 +135,14 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/cells", h.createCell)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
+	mux.HandleFunc("PUT /api/cells/{cell}/repo", h.putRepo)
+	mux.HandleFunc("PUT /api/cells/{cell}/repo-credential", h.putRepoCredential)
+	mux.HandleFunc("GET /api/me/git-identities", h.listGitIdentities)
+	mux.HandleFunc("PUT /api/me/git-identities", h.putGitIdentity)
+	mux.HandleFunc("DELETE /api/me/git-identities/{provider}", h.deleteGitIdentity)
+	mux.HandleFunc("GET /api/me/grants", h.listGrants)
+	mux.HandleFunc("POST /api/me/grants", h.createGrant)
+	mux.HandleFunc("DELETE /api/me/grants/{credential}/{who}", h.deleteGrant)
 	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
 	mux.HandleFunc("GET /api/new-project-options", h.newProjectOptions)
 	mux.HandleFunc("GET /api/cells/{cell}/branches", h.listBranches)
@@ -344,7 +357,10 @@ func (h *Handler) previewOriginFor(r *http.Request) string {
 }
 
 type cellView struct {
-	Name           string `json:"name"`
+	Name string `json:"name"`
+	// DisplayName is what people called it. Empty on projects created
+	// before names were free text, where the address IS the name.
+	DisplayName    string `json:"displayName,omitempty"`
 	Phase          string `json:"phase"`
 	Description    string `json:"description"`
 	ActiveSessions int32  `json:"activeSessions"`
@@ -375,17 +391,29 @@ type cellView struct {
 	// SchedulingMessage is the scheduler's own explanation for a Cell that
 	// has landed nowhere — otherwise the most opaque state this system has.
 	SchedulingMessage string `json:"schedulingMessage,omitempty"`
+	// RepoURL is empty for a project created before its repository existed.
+	// The console needs to know, because that project can be looked at but
+	// not worked in, and the reason has to be on the page rather than
+	// discovered as an agent with nothing to check out.
+	RepoURL    string `json:"repoURL,omitempty"`
+	RepoBranch string `json:"repoBranch,omitempty"`
+	// RepoSecretName is which credential this project clones and pushes
+	// with. A name only — never anything from inside it.
+	RepoSecretName string `json:"repoSecretName,omitempty"`
 }
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 	v := cellView{
-		Name: c.Name, Phase: string(c.Status.Phase), Description: c.Spec.Description,
+		Name: c.Name, DisplayName: c.Spec.DisplayName,
+		Phase: string(c.Status.Phase), Description: c.Spec.Description,
 		ActiveSessions: c.Status.ActiveSessions, MaxSessions: c.Spec.MaxSessions,
 		PreviewPath: c.Status.PreviewPath, ProductionPath: c.Status.ProductionPath,
 		ReleaseRef: c.Spec.Production.Ref, FollowSession: c.Spec.Preview.FollowSession,
 		Message: c.Status.Message, HandoffMessage: c.Status.HandoffMessage,
 		Access: string(effectiveAccess(c)), Members: c.Spec.Members,
 		Node: c.Status.Node, SchedulingMessage: c.Status.SchedulingMessage,
+		RepoURL: c.Spec.Repo.URL, RepoBranch: c.Spec.Repo.Branch,
+		RepoSecretName: c.Spec.Repo.SecretName,
 	}
 	for k, val := range c.Spec.Placement.NodeSelector {
 		v.Pool = k + "=" + val
@@ -632,8 +660,9 @@ func (h *Handler) dispatchInto(w http.ResponseWriter, r *http.Request, taskOptio
 	if !h.authorize(w, r, &cell, ActionDispatch) {
 		return
 	}
-	// A caller may only spend a model credential it owns.
-	if err := h.checkCredentialOwnership(r, req.CredentialSecret); err != nil {
+	// A caller may spend a model credential it owns — or one somebody lent
+	// them, which is how a new colleague gets to do anything at all.
+	if err := h.mayUseCredential(r, req.CredentialSecret); err != nil {
 		writeErr(w, 404, err)
 		return
 	}

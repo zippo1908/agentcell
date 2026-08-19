@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { cellTone } from '../lib/format'
+import { getTheme, setTheme, type Theme } from '../lib/theme'
 
 /** 16px stroke icons, inline so there is no icon font to load. */
 const icon = (d: string) => (
@@ -24,10 +25,10 @@ const IconCaps = icon('M12 3l8 4.5v9L12 21l-8-4.5v-9z|M12 12l8-4.5|M12 12v9|M12 
 /**
  * App chrome: a fixed 224px sidebar and a fluid centred content column.
  *
- * The active nav item is a solid black pill — the loudest thing in the UI,
- * and one of only two filled-black surfaces (the other is a primary button).
- * Everything else is hairlines and grays, so "where am I" never needs a
- * second look.
+ * The active nav item is a solid pill in the accent ink — the loudest thing
+ * in the UI, and one of only two filled surfaces (the other is a primary
+ * button). Everything else is hairlines and neutrals, so "where am I" never
+ * needs a second look.
  */
 export function Shell() {
   // The navigation folds away. On the workspace especially, every column
@@ -43,7 +44,7 @@ export function Shell() {
 
   const link = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : '')
   const onWorkspace = useLocation().pathname.startsWith('/workspace')
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [theme, setThemeState] = useState<Theme>(() => getTheme())
   const { data: cells } = useQuery({ queryKey: ['cells'], queryFn: () => api.cells(), refetchInterval: 15000 })
 
   return (
@@ -53,6 +54,8 @@ export function Shell() {
           className="nav-fold"
           onClick={() => setNavOpen(!navOpen)}
           title={navOpen ? '收起菜单' : '展开菜单'}
+          aria-label={navOpen ? '收起菜单' : '展开菜单'}
+          aria-expanded={navOpen}
         >
           {navOpen ? '‹' : '›'}
         </button>
@@ -63,19 +66,23 @@ export function Shell() {
           <span>
             <span className="logo-text">AgentCell</span>
             <br />
-            <span className="logo-sub">agent 工作台</span>
+            <span className="logo-sub">agent 车间</span>
           </span>
         </div>
         <nav>
-          {/* Two places, because there are two things you do here: ask for
-              work, and watch it happen. Everything else is a setting, and
-              settings belong behind your own name — not in the path
-              somebody walks twenty times a day. */}
+          {/* The daily loop: ask for work, watch it happen, review what came
+              back. Review sits here — not behind a popup — because its
+              pending badge is exactly the kind of thing that must be visible
+              without opening anything. */}
           <NavLink to="/board" className={link}>
             {IconBoard} 黑板
           </NavLink>
           <NavLink to="/workspace" className={link}>
             {IconWork} 工作台
+          </NavLink>
+          <NavLink to="/reviews" className={link}>
+            {IconReview} 批阅
+            {pending > 0 && <span className="nav-count">{pending > 99 ? '99+' : pending}</span>}
           </NavLink>
         </nav>
 
@@ -85,7 +92,7 @@ export function Shell() {
             cost a column of the terminal's width. */}
         <div className="nav-label nav-projects-label">
           项目
-          <Link to="/cells/new" className="ws-new" title="新建项目">
+          <Link to="/cells/new" className="ws-new" title="新建项目" aria-label="新建项目">
             +
           </Link>
         </div>
@@ -95,10 +102,10 @@ export function Shell() {
               key={c.name}
               to={`/workspace/${c.name}`}
               className={({ isActive }) => `nav-project ${isActive ? 'active' : ''}`}
-              title={c.description || c.name}
+              title={c.description || c.displayName || c.name}
             >
               <span className={`dot ${cellTone(c.phase)}`} />
-              <span className="nav-project-name">{c.name}</span>
+              <span className="nav-project-name">{c.displayName || c.name}</span>
             </NavLink>
           ))}
           {(cells ?? []).length === 0 && (
@@ -108,53 +115,64 @@ export function Shell() {
           )}
         </div>
 
+        {/* Administration, not work: these are the pages you visit to
+            configure the platform rather than to use it, so they get their
+            own group at the bottom of the nav instead of competing with the
+            daily loop above. */}
+        <div className="nav-label">管理</div>
+        <nav className="nav-manage">
+          <NavLink to="/dashboard" className={link}>
+            {IconHome} 概览
+          </NavLink>
+          <NavLink to="/cells" className={link}>
+            {IconCells} 全部项目
+          </NavLink>
+          <NavLink to="/capabilities" className={link}>
+            {IconCaps} 能力
+          </NavLink>
+          <NavLink to="/credentials" className={link}>
+            {IconKey} 凭据
+          </NavLink>
+          <NavLink to="/people" className={link}>
+            {IconPeople} 人员
+          </NavLink>
+        </nav>
+
         <span className="spacer" />
 
-        {/* Everything else lives behind your own name.
-            A console's navigation should hold the things you do, not the
-            things you occasionally configure — and "occasionally" is what
-            credentials, teams, capabilities and the review queue are once a
-            project is running. */}
         <div className="user-box">
-          {menuOpen && (
-            <div className="user-menu">
-              <NavLink to="/reviews" className={link} onClick={() => setMenuOpen(false)}>
-                {IconReview} 批阅
-                {pending > 0 && <span className="nav-count">{pending > 99 ? '99+' : pending}</span>}
-              </NavLink>
-              <NavLink to="/dashboard" className={link} onClick={() => setMenuOpen(false)}>
-                {IconHome} 概览
-              </NavLink>
-              <NavLink to="/capabilities" className={link} onClick={() => setMenuOpen(false)}>
-                {IconCaps} 能力
-              </NavLink>
-              <NavLink to="/credentials" className={link} onClick={() => setMenuOpen(false)}>
-                {IconKey} 我的凭据
-              </NavLink>
-              <NavLink to="/cells" className={link} onClick={() => setMenuOpen(false)}>
-                {IconCells} 全部项目
-              </NavLink>
-              <NavLink to="/people" className={link} onClick={() => setMenuOpen(false)}>
-                {IconPeople} 人员与邀请
-              </NavLink>
-              <form method="post" action="/logout">
-                <button className="user-menu-out" type="submit">
-                  退出登录
-                </button>
-              </form>
-            </div>
-          )}
-          <button
-            className="user-line"
-            onClick={() => setMenuOpen(!menuOpen)}
-            title={menuOpen ? '收起' : '设置与其他'}
-          >
+          <div className="theme-switch" role="group" aria-label="界面主题">
+            {(
+              [
+                ['light', '浅色'],
+                ['dark', '深色'],
+                ['system', '系统'],
+              ] as [Theme, string][]
+            ).map(([t, label]) => (
+              <button
+                key={t}
+                type="button"
+                className={theme === t ? 'on' : ''}
+                onClick={() => {
+                  setTheme(t)
+                  setThemeState(t)
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="user-line">
             <span className="user-mark">{(me?.name ?? '?').slice(0, 2)}</span>
             <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {me?.name ?? '…'}
             </span>
-            <span className="user-caret">{menuOpen ? '▾' : '▴'}</span>
-          </button>
+            <form method="post" action="/logout">
+              <button className="ghost small" type="submit">
+                退出
+              </button>
+            </form>
+          </div>
           {me?.shared && (
             <div className="faint" style={{ fontSize: 11, lineHeight: 1.5 }}>
               共享令牌登录:所有人是同一个主体,会话之间没有私密性。

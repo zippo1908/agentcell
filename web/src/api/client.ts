@@ -6,7 +6,7 @@ import type {
   Credential,
   Me,
   Meta,
-  NodePool,
+  PlacementClass,
   NewProjectOptions,
   Post,
   Branch,
@@ -106,20 +106,57 @@ export const api = {
     }),
 
   people: () =>
-    req<{ email: string; name?: string; admin?: boolean; disabled?: boolean }[]>('/api/people'),
-  createInvite: (email: string, name: string, admin: boolean) =>
+    req<{ email: string; name?: string; admin?: boolean; disabled?: boolean; canCreate?: boolean }[]>(
+      '/api/people'),
+  createInvite: (email: string, name: string, admin: boolean, canCreate: boolean) =>
     req<{ invite: string; path: string; expires: string }>('/api/invites', {
       method: 'POST',
-      body: JSON.stringify({ email, name, admin }),
+      body: JSON.stringify({ email, name, admin, canCreate }),
     }),
 
-  nodePools: () => req<NodePool[]>('/api/nodepools'),
+  /** Attach a repository to a project created before it had one. */
+  attachRepo: (cell: string, url: string, branch: string, secretName: string) =>
+    req<{ repo: unknown }>(`/api/cells/${cell}/repo`, {
+      method: 'PUT',
+      body: JSON.stringify({ url, branch, secretName }),
+    }),
 
-  /** Empty key clears the placement and lets the scheduler choose again. */
-  savePlacement: (name: string, key: string, value: string) =>
-    req<{ nodeSelector: Record<string, string>; tolerations: number }>(
+  /** Keys I have lent out, and keys lent to me. */
+  grants: () =>
+    req<{
+      lent: { credential: string; email: string; name?: string; unknown?: boolean }[]
+      borrowed: { credential: string; from: string; hint?: string }[]
+      lendable: { name: string; kind: string; hint?: string }[]
+    }>('/api/me/grants'),
+  lendCredential: (credential: string, email: string, acknowledge = false) =>
+    req<{ credential: string; kind?: string }>('/api/me/grants', {
+      method: 'POST',
+      body: JSON.stringify({ credential, email, acknowledge }),
+    }),
+  revokeGrant: (credential: string, who: string) =>
+    req<{ revoked: string }>(
+      `/api/me/grants/${encodeURIComponent(credential)}/${encodeURIComponent(who)}`,
+      { method: 'DELETE' }),
+
+  /** My own forge tokens. Listing never returns the tokens themselves. */
+  gitIdentities: () =>
+    req<{ identities: { provider: string; username: string; secretName: string }[] }>(
+      '/api/me/git-identities'),
+  bindGitIdentity: (provider: string, username: string, token: string) =>
+    req<{ provider: string; username: string; secretName: string }>('/api/me/git-identities', {
+      method: 'PUT',
+      body: JSON.stringify({ provider, username, token }),
+    }),
+  unbindGitIdentity: (provider: string) =>
+    req<{ deleted: string }>(`/api/me/git-identities/${provider}`, { method: 'DELETE' }),
+
+  placementClasses: () => req<PlacementClass[]>('/api/placementclasses'),
+
+  /** Empty class clears the placement and lets the scheduler choose again. */
+  savePlacement: (name: string, className: string) =>
+    req<{ ok: string }>(
       `/api/cells/${name}/placement`,
-      { method: 'PUT', body: JSON.stringify({ key, value }) },
+      { method: 'PUT', body: JSON.stringify({ class: className }) },
     ),
 
   saveDescription: (name: string, description: string) =>
@@ -148,10 +185,54 @@ export const api = {
 
   diff: (session: string) => req<Diff>(`/api/sessions/${session}/diff`),
 
-  putMember: (cell: string, userID: string, role: string) =>
+  /** The project's knowledge base: what people put there for the agent. */
+  // A bare array, which is what the handler writes. Declaring it wrapped in
+  // an object made every library look empty: the request succeeded, the
+  // response was right, and `data.files` was undefined.
+  files: (cell: string) =>
+    req<{ path: string; size: number; mime: string; readable: boolean; uploadedBy?: string; created: number }[]>(
+      `/api/cells/${cell}/files`),
+  uploadFile: async (cell: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    // No Content-Type header: the browser has to set the multipart boundary,
+    // and setting it by hand produces a body the server cannot parse.
+    const res = await fetch(`/api/cells/${cell}/files`, { method: 'POST', body: form })
+    if (!res.ok) throw new Error((await res.text()) || `上传失败 (${res.status})`)
+    return res.json() as Promise<{ path: string }>
+  },
+  deleteFile: (cell: string, path: string) =>
+    req<{ ok: string }>(`/api/cells/${cell}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'DELETE',
+    }),
+  fileURL: (cell: string, path: string) =>
+    `/api/cells/${cell}/files/${path.split('/').map(encodeURIComponent).join('/')}`,
+
+  /** Which credential this project uses for its repository. */
+  setRepoCredential: (cell: string, secretName: string) =>
+    req<{ secretName: string }>(`/api/cells/${cell}/repo-credential`, {
+      method: 'PUT',
+      body: JSON.stringify({ secretName }),
+    }),
+  /** Or type one in on the project's own page, for somebody who has none. */
+  setRepoToken: (cell: string, username: string, token: string) =>
+    req<{ secretName: string }>(`/api/cells/${cell}/repo-credential`, {
+      method: 'PUT',
+      body: JSON.stringify({ username, token }),
+    }),
+
+  /** Who is on this project — names, not the hashes the CR stores. */
+  members: (cell: string) =>
+    req<{ members: { email: string; name?: string; role: string; unknown?: boolean }[]; open: boolean }>(
+      `/api/cells/${cell}/members`),
+  // An address goes in `email`, which the server resolves to an id. Sending
+  // it as `userID` stored the address verbatim, and the authorization check
+  // compares against a hashed id — so the member list looked right and
+  // granted nothing.
+  putMember: (cell: string, who: string, role: string) =>
     req<{ access: string }>(`/api/cells/${cell}/members`, {
       method: 'PUT',
-      body: JSON.stringify({ userID, role }),
+      body: JSON.stringify(who.includes('@') ? { email: who, role } : { userID: who, role }),
     }),
   removeMember: (cell: string, userID: string) =>
     req<{ access: string }>(`/api/cells/${cell}/members/${encodeURIComponent(userID)}`, {

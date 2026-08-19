@@ -57,6 +57,8 @@ func main() {
 		err = runDetach(os.Args[2:])
 	case "preview-start":
 		err = runPreviewStart(os.Args[2:])
+	case "library-write":
+		err = runLibraryWrite(os.Args[2:])
 	case "tell":
 		err = runTell(os.Args[2:])
 	case "askpass":

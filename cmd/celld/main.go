@@ -49,6 +49,8 @@ func main() {
 			"directory of provider preset overlays (*.yaml)")
 		runnersDir = flag.String("runners-dir", "/etc/agentcell/runners.d",
 			"directory of agent-CLI preset overlays (*.yaml); a CLI's flags change faster than releases do")
+		devboxesDir = flag.String("devboxes-dir", "/etc/agentcell/devboxes.d",
+			"directory of devbox catalogue overlays (*.yaml); the built-in list names images on ghcr.io, which a private cluster cannot pull")
 		gitBrokerURL = flag.String("git-broker-url", os.Getenv("AGENTCELL_GIT_BROKER"),
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		imagePullSecret = flag.String("image-pull-secret", os.Getenv("AGENTCELL_IMAGE_PULL_SECRET"),
@@ -84,6 +86,24 @@ func main() {
 	}
 	ctrl.SetLogger(logzap.New())
 	log := ctrl.Log.WithName("celld")
+
+	// The devbox catalogue is loaded ONCE, here, rather than re-read from the
+	// built-in table on every request. The overlay mechanism existed and was
+	// never fed anything: the create-a-project form offered ghcr.io images
+	// on clusters that cannot reach ghcr.io, so every new project began in
+	// ImagePullBackOff — with the configuration file claiming, in a comment,
+	// that an overlay directory would fix it.
+	devboxOverlays, err := readOverlays(*devboxesDir)
+	if err != nil {
+		log.Error(err, "reading devbox overlays", "dir", *devboxesDir)
+		os.Exit(1)
+	}
+	devboxes, err := access.LoadDevboxes(devboxOverlays...)
+	if err != nil {
+		log.Error(err, "loading the devbox catalogue")
+		os.Exit(1)
+	}
+	log.Info("devbox catalogue", "images", len(devboxes), "overlays", len(devboxOverlays))
 
 	registry, err := loadRegistry(*providersDir, *runnersDir)
 	if err != nil {
@@ -244,6 +264,7 @@ func main() {
 		DefaultRunner:   *defaultRunner,
 		DefaultProvider: *defaultProvider,
 		Client:          mgr.GetClient(), Namespace: *controlNS, Registry: registry, Forge: forgeClient,
+		Devboxes:   devboxes,
 		RESTConfig: mgr.GetConfig(), Kube: kubeClient,
 		PreviewOrigin: *previewOrigin, PreviewPort: previewPort,
 		PreviewDomain: *previewDomain, Auth: auth,

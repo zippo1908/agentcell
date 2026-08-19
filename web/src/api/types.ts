@@ -4,6 +4,8 @@
 
 export interface Cell {
   name: string
+  /** What people call it. The name above is the address it lives at. */
+  displayName?: string
   phase: string
   description: string
   activeSessions: number
@@ -27,6 +29,11 @@ export interface Cell {
   node?: string
   /** Placement in force, e.g. "agentcell.io/pool=gpu"; absent = scheduler chooses. */
   pool?: string
+  /** Absent on a project created before its repository existed. */
+  repoURL?: string
+  repoBranch?: string
+  /** Which credential this project clones and pushes with; a name only. */
+  repoSecretName?: string
   /** Why it has landed nowhere, in the scheduler's own words. */
   schedulingMessage?: string
   /** The Team whose members carry a role into this Cell. */
@@ -75,17 +82,18 @@ export interface Team {
   role: string
 }
 
-/** A class of machine a Cell can be placed on, as it exists in the cluster. */
-export interface NodePool {
-  key: string
-  value: string
-  label: string
+/** A class of machine a Cell can be placed on, as the operator offers it. */
+export interface PlacementClass {
+  name: string
+  displayName: string
+  description: string
+  /** The node selector the class expands to, e.g. "agentcell.io/pool=gpu". */
+  selector: string
   nodes: number
-  taints: string[]
-  /** Largest SINGLE node's free capacity — a Cell fits on one machine or none. */
-  freeCPU: string
-  freeMemory: string
-  schedulable: boolean
+  /** Largest single node's free capacity — a Cell fits on one machine or none. */
+  free?: string
+  /** Dedicated pools carry taints; the platform adds the toleration itself. */
+  tolerated?: boolean
 }
 
 export type SessionPhase =

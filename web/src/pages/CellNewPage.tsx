@@ -18,6 +18,20 @@ import { useToast } from '../ui/primitives'
  * So it offers. Only the repository URL and a name are typed, because only
  * those are genuinely new information.
  */
+// The same derivation the server does, so the form can show what the
+// address will be instead of refusing what somebody typed. A name with
+// nothing usable in it gets its id from the server; here it just shows
+// nothing rather than guessing at a hash.
+function slug(typed: string): string {
+  return typed
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '')
+}
+
 export function CellNewPage() {
   const nav = useNavigate()
   const toast = useToast()
@@ -32,7 +46,7 @@ export function CellNewPage() {
     model: '',
     placementClass: '',
     description: '',
-    preview: '',
+    previewMode: 'auto',
     previewPort: 3000,
     maxSessions: 2,
     productionTarget: 'incell',
@@ -72,28 +86,38 @@ export function CellNewPage() {
         maxSessions: Number(f.maxSessions) || 2,
       }),
     onSuccess: (r) => {
-      toast.success(`工作区 ${r.cell} 已创建`)
+      toast.success(`项目 ${r.cell} 已创建`)
       nav(`/cells/${r.cell}`)
     },
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const ok = f.name.trim() && f.repoURL.trim() && f.image.trim()
+  const ok = f.name.trim() && f.image.trim()
 
   return (
     <>
-      <h1 className="page-title">新建工作区</h1>
+      <h1 className="page-title">新建项目</h1>
       <div className="card" style={{ maxWidth: 720 }}>
         <div className="form-section-title">项目</div>
         <label className="field">
           <span>名称</span>
-          <input value={f.name} onChange={set('name')} placeholder="shop" />
-          <em>小写字母、数字和短横;它会成为命名空间和预览域名的一部分。</em>
+          <input value={f.name} onChange={set('name')} placeholder="商城前端" />
+          <em>
+            叫什么都行,中文也可以。
+            {slug(f.name) && (
+              <>
+                {' '}地址会用 <code className="mono">{slug(f.name)}</code> —— 那是命名空间和预览域名里出现的部分。
+              </>
+            )}
+          </em>
         </label>
         <label className="field">
-          <span>仓库地址</span>
+          <span>仓库地址(可以先不填)</span>
           <input value={f.repoURL} onChange={set('repoURL')} placeholder="https://git.tinci.com/team/shop.git" />
-          <em>agent 在这个仓库上干活,产出推成 session/&lt;id&gt; 分支等你批阅。</em>
+          <em>
+            agent 在这个仓库上干活,产出推成 session/&lt;id&gt; 分支等你批阅。
+            仓库还没建也没关系 —— 先把项目建起来,之后在项目页里关联。
+          </em>
         </label>
         <div className="row">
           <label className="field" style={{ flex: 1 }}>
@@ -124,7 +148,18 @@ export function CellNewPage() {
             >
               <span className="pick-name">{d.displayName}</span>
               <span className="pick-sub">{d.size}</span>
-              <span className="pick-desc">{d.description}</span>
+              {/* The card stays a card. What is worth reading before choosing
+                  — and the image path, which nothing in the console showed
+                  until now even though a wrong one is what turns into
+                  ImagePullBackOff — waits under a hover. */}
+              <span className="pick-detail">
+                详情
+                <span className="pick-tip" role="tooltip">
+                  <b>{d.displayName}</b>
+                  <span>{d.description}</span>
+                  <code>{d.image}</code>
+                </span>
+              </span>
             </button>
           ))}
         </div>
@@ -186,11 +221,35 @@ export function CellNewPage() {
             </div>
           </>
         )}
-        <label className="field">
-          <span className="lbl">预览命令</span>
-          <input value={f.preview} onChange={set('preview')} placeholder="npm run dev -- --host" />
-          <div className="hint">留空则不起预览。它跑的是仓库里的代码,所以只在预览专用的 origin 上提供服务。</div>
-        </label>
+        {/* No command to type any more. Which server serves this checkout is
+            written in the checkout, and on the day a project is created the
+            repository is usually still empty — so the question had no answer
+            and the preview quietly never existed. */}
+        <div className="form-section-title">预览</div>
+        <div className="seg-row">
+          <label className={`seg ${f.previewMode === 'auto' ? 'on' : ''}`}>
+            <input
+              type="radio"
+              style={{ display: 'none' }}
+              checked={f.previewMode === 'auto'}
+              onChange={() => setF({ ...f, previewMode: 'auto' })}
+            />
+            <div className="seg-title">自动</div>
+            <div className="seg-desc">
+              平台读仓库自己决定怎么起(package.json 的 dev/start、Django、静态页)。认不出来就不起,并说明原因。
+            </div>
+          </label>
+          <label className={`seg ${f.previewMode === 'off' ? 'on' : ''}`}>
+            <input
+              type="radio"
+              style={{ display: 'none' }}
+              checked={f.previewMode === 'off'}
+              onChange={() => setF({ ...f, previewMode: 'off' })}
+            />
+            <div className="seg-title">不要预览</div>
+            <div className="seg-desc">这个项目没有可以跑起来给人看的东西。</div>
+          </label>
+        </div>
 
         <div className="form-section-title">正式区</div>
         <div className="seg-row">
@@ -267,7 +326,7 @@ export function CellNewPage() {
 
         <div className="btn-row" style={{ marginTop: 20 }}>
           <button className="primary" disabled={!ok || create.isPending} onClick={() => create.mutate()}>
-            {create.isPending ? '创建中…' : '创建工作区'}
+            {create.isPending ? '创建中…' : '创建项目'}
           </button>
           <button className="ghost" onClick={() => nav('/cells')}>
             取消

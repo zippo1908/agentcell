@@ -178,9 +178,15 @@ const (
 
 // SessionStatus is the observed state of a Session.
 type SessionStatus struct {
-	Phase     SessionPhase `json:"phase,omitempty"`
-	SessionID string       `json:"sessionID,omitempty"`
-	PodName   string       `json:"podName,omitempty"`
+	Phase SessionPhase `json:"phase,omitempty"`
+	// LibraryVersion is the project's library as this session last received
+	// it. The library used to arrive only in the pod's environment, which is
+	// fixed at creation — so a file uploaded while somebody was working
+	// could not reach them until the session restarted. Comparing this with
+	// the Cell's own marker is what lets a live session be topped up.
+	LibraryVersion string `json:"libraryVersion,omitempty"`
+	SessionID      string `json:"sessionID,omitempty"`
+	PodName        string `json:"podName,omitempty"`
 	// RunnerSessionID names the conversation inside the agent CLI, where that
 	// CLI lets the caller choose one. It is what makes "keep going" continue
 	// the same conversation instead of starting one that has to rediscover

@@ -3,12 +3,17 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { DispatchForm } from '../components/DispatchForm'
-import { PreviewPane } from '../components/PreviewPane'
 import { SessionList } from '../components/SessionList'
+import { Knowledge, Members, ProjectTokens } from '../components/ProjectPanels'
 import { Badge, Confirm, Defs, Spinner, useToast } from '../ui/primitives'
 import { NONE, cellTone } from '../lib/format'
 
-type Tab = 'overview' | 'sessions' | 'preview' | 'settings'
+// The preview is no longer a tab. It was one of six things competing for the
+// same strip while being the one thing that is better looked at full-size in
+// its own window — and the workspace already embeds it. What belongs here is
+// the project's own material: what it knows, who is on it, what it uses to
+// reach its forge.
+type Tab = 'overview' | 'sessions' | 'knowledge' | 'members' | 'tokens' | 'settings'
 
 /**
  * Guidance is computed from live state, not decorative.
@@ -18,10 +23,13 @@ type Tab = 'overview' | 'sessions' | 'preview' | 'settings'
  * the empty states, so it cannot go stale against the actual condition.
  */
 function nextStep(phase: string, sessions: number, hasPreview: boolean, released: boolean) {
-  if (phase === 'Error') return { tone: 'red' as const, text: '这个工作区处于 Error:先看下面的消息,修好之后控制器会自己重试。' }
+  if (phase === 'Error') return { tone: 'red' as const, text: '这个项目处于 Error:先看下面的消息,修好之后控制器会自己重试。' }
   if (phase !== 'Ready') return { tone: 'amber' as const, text: '正在准备:克隆仓库、拉起常驻锚点和预览。通常一两分钟。' }
   if (sessions === 0) return { tone: 'green' as const, text: '第一步:派一单工作给 agent。想边看边改就勾上「常驻会话」。' }
-  if (!hasPreview) return { tone: 'amber' as const, text: '没有配置预览命令,所以看不到跑起来的产品。在设置里补一条即可。' }
+  // Not "go and configure a command" any more: nobody configures one. If
+  // there is still no preview, detection looked and found nothing to serve,
+  // and the reason is in the anchor's log rather than in a form.
+  if (!hasPreview) return { tone: 'amber' as const, text: '还没有可用的预览:平台没在仓库里认出能跑起来的东西(package.json 的 dev/start、Django、静态页)。等代码进来会自动重试。' }
   if (!released) return { tone: 'green' as const, text: '会话在跑。产出满意之后清算 → 批阅 → 发布到正式区。' }
   return { tone: 'green' as const, text: '一切正常。改动经清算和批阅之后,用「发布」推到正式区。' }
 }
@@ -33,8 +41,6 @@ export function CellPage() {
   const [tab, setTab] = useState<Tab>('overview')
   const [desc, setDesc] = useState<string | null>(null)
   const [releasing, setReleasing] = useState(false)
-  const [newMember, setNewMember] = useState('')
-  const [newRole, setNewRole] = useState('member')
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['cell', name],
@@ -44,12 +50,11 @@ export function CellPage() {
   const cell = data?.cell
   const sessions = data?.sessions ?? []
 
-  // Node pools are only needed on the settings tab, and reading them needs a
-  // cluster-scoped permission an operator may not have granted — so a
-  // failure here must degrade to "cannot offer a choice", never break the page.
+  // Placement classes are only needed on the settings tab; a failure here
+  // must degrade to "cannot offer a choice", never break the page.
   const pools = useQuery({
-    queryKey: ['nodepools'],
-    queryFn: () => api.nodePools(),
+    queryKey: ['placementclasses'],
+    queryFn: () => api.placementClasses(),
     enabled: tab === 'settings',
     retry: false,
   })
@@ -57,10 +62,7 @@ export function CellPage() {
 
 
   const savePlacement = useMutation({
-    mutationFn: (label: string) => {
-      const [key, ...rest] = label ? label.split('=') : ['']
-      return api.savePlacement(name, key, rest.join('='))
-    },
+    mutationFn: (className: string) => api.savePlacement(name, className),
     onSuccess: () => {
       toast.success('运行位置已更新,锚点会按新位置重建')
       qc.invalidateQueries({ queryKey: ['cell', name] })
@@ -73,24 +75,6 @@ export function CellPage() {
     onSuccess: () => {
       toast.success('描述已更新')
       setDesc(null)
-      qc.invalidateQueries({ queryKey: ['cell', name] })
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
-  const member = useMutation({
-    mutationFn: (v: { id: string; role: string }) => api.putMember(name, v.id, v.role),
-    onSuccess: () => {
-      setNewMember('')
-      toast.success('成员已更新')
-      qc.invalidateQueries({ queryKey: ['cell', name] })
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-  const removeMember = useMutation({
-    mutationFn: (id: string) => api.removeMember(name, id),
-    onSuccess: () => {
-      toast.success('成员已移除')
       qc.invalidateQueries({ queryKey: ['cell', name] })
     },
     onError: (e) => toast.error((e as Error).message),
@@ -113,7 +97,7 @@ export function CellPage() {
     )
   }
   if (error || !cell) {
-    return <div className="form-error">{(error as Error)?.message ?? '找不到这个工作区'}</div>
+    return <div className="form-error">{(error as Error)?.message ?? '找不到这个项目'}</div>
   }
 
   const step = nextStep(cell.phase, sessions.filter((s) => s.phase === 'Running').length, !!cell.previewPath, !!cell.releaseRef)
@@ -121,17 +105,24 @@ export function CellPage() {
   return (
     <>
       <Link to="/cells" className="back-link">
-        ← 返回工作区
+        ← 返回项目
       </Link>
       <h1 className="page-title">
-        {cell.name}
+        {cell.displayName || cell.name}
         <Badge tone={cellTone(cell.phase)}>{cell.phase || 'Unknown'}</Badge>
         <span className="sub">
           槽位 {cell.activeSessions}/{cell.maxSessions}
         </span>
         <span className="spacer" />
         <span className="btn-row">
-          <button className="small" disabled={!cell.previewPath} onClick={() => setTab('preview')}>
+          {/* Opened, not embedded: the preview serves the agent's unreviewed
+              work from a separate origin (ADR-0007), and it is worth a whole
+              window rather than a card. */}
+          <button
+            className="small"
+            disabled={!cell.previewURL}
+            onClick={() => window.open(cell.previewURL, '_blank', 'noopener')}
+          >
             打开预览
           </button>
           <button className="primary small" disabled={release.isPending} onClick={() => setReleasing(true)}>
@@ -149,8 +140,14 @@ export function CellPage() {
         <button className={tab === 'sessions' ? 'active' : ''} onClick={() => setTab('sessions')}>
           会话 {sessions.length > 0 ? `(${sessions.length})` : ''}
         </button>
-        <button className={tab === 'preview' ? 'active' : ''} onClick={() => setTab('preview')}>
-          预览
+        <button className={tab === 'knowledge' ? 'active' : ''} onClick={() => setTab('knowledge')}>
+          项目知识库
+        </button>
+        <button className={tab === 'members' ? 'active' : ''} onClick={() => setTab('members')}>
+          项目成员管理
+        </button>
+        <button className={tab === 'tokens' ? 'active' : ''} onClick={() => setTab('tokens')}>
+          项目令牌管理
         </button>
         <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>
           设置
@@ -159,6 +156,10 @@ export function CellPage() {
 
       {tab === 'overview' && (
         <>
+          {/* First on the page when it applies: a project with no repository
+              can be looked at but not worked in, and every other card here
+              describes work that cannot start until this is answered. */}
+          {!cell.repoURL && <AttachRepo cell={cell.name} />}
           <div className="card">
             <h3>下一步</h3>
             <div className="row" style={{ alignItems: 'flex-start', gap: 8 }}>
@@ -175,6 +176,7 @@ export function CellPage() {
             <Defs
               items={[
                 ['状态', cell.phase || NONE],
+                ['仓库', cell.repoURL ? `${cell.repoURL} (${cell.repoBranch || 'main'})` : '还没关联'],
                 ['槽位', `${cell.activeSessions} / ${cell.maxSessions}`],
                 ['预览路径', cell.previewPath || NONE],
                 ['正式区路径', cell.productionPath || NONE],
@@ -200,19 +202,18 @@ export function CellPage() {
         </div>
       )}
 
-      {tab === 'preview' && (
-        <div className="card">
-          <h3>预览</h3>
-          <PreviewPane cell={cell} onRelease={() => setReleasing(true)} releasing={release.isPending} />
-        </div>
+      {tab === 'knowledge' && <Knowledge cell={cell.name} />}
+      {tab === 'members' && (
+        <Members cell={cell.name} open={cell.access === 'open'} members={cell.members ?? []} />
       )}
+      {tab === 'tokens' && <ProjectTokens cell={cell} />}
 
       {tab === 'settings' && (
         <>
         <div className="card">
           <h3>运行位置</h3>
           <p className="hint" style={{ marginTop: 0 }}>
-            一个工作区<b>跑在一台机器上</b>——工作区卷是 ReadWriteOnce,所有 pod 跟着锚点走。
+            一个项目<b>跑在一台机器上</b>——项目卷是 ReadWriteOnce,所有 pod 跟着锚点走。
             所以这里选的是「哪一类机器」,也就是这个项目的全部算力上限。
           </p>
 
@@ -237,8 +238,8 @@ export function CellPage() {
 
           {pools.isError ? (
             <p className="hint">
-              读不到节点列表,所以没法在这里选机器。celld 需要 <code className="mono">nodes</code> 的只读权限
-              ——用新版 chart 升级即可。
+              读不到机器池列表,所以没法在这里选机器。celld 需要{' '}
+              <code className="mono">placementclasses</code> 的只读权限 ——用新版 chart 升级即可。
             </p>
           ) : (
             <div className="table-wrap" style={{ marginTop: 10 }}>
@@ -248,28 +249,29 @@ export function CellPage() {
                     <th>机器池</th>
                     <th>节点</th>
                     <th>单机可用(最大)</th>
-                    <th>污点</th>
+                    <th>类型</th>
                     <th style={{ width: 90 }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {(pools.data ?? []).map((p) => {
-                    const current = cell.pool === p.label
+                    const current = cell.pool === p.selector
                     return (
-                      <tr key={p.label}>
-                        <td className="mono">{p.label}</td>
-                        <td>{p.nodes}</td>
-                        <td className="mono">
-                          {p.schedulable ? `${p.freeCPU} / ${p.freeMemory}` : <span className="faint">不可调度</span>}
+                      <tr key={p.name}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{p.displayName || p.name}</div>
+                          <div className="mono faint">{p.selector}</div>
                         </td>
-                        <td className="faint mono" style={{ fontSize: 11 }}>
-                          {p.taints.length ? p.taints.join(' ') : NONE}
+                        <td>{p.nodes}</td>
+                        <td className="mono">{p.free || <span className="faint">{NONE}</span>}</td>
+                        <td>
+                          {p.tolerated ? <Badge tone="amber">专用</Badge> : <Badge tone="gray">共享</Badge>}
                         </td>
                         <td>
                           <button
                             className="ghost small"
                             disabled={current || savePlacement.isPending}
-                            onClick={() => savePlacement.mutate(p.label)}
+                            onClick={() => savePlacement.mutate(p.name)}
                           >
                             {current ? '当前' : '放这里'}
                           </button>
@@ -296,73 +298,10 @@ export function CellPage() {
             </div>
           )}
           <p className="hint">
-            改动会让锚点重建,这个工作区会短暂中断;正在跑的会话会被清算。
+            改动会让锚点重建,这个项目会短暂中断;正在跑的会话会被清算。
           </p>
         </div>
 
-        <div className="card">
-          <h3>访问</h3>
-          {cell.access === 'open' ? (
-            <div className="note">
-              这个工作区<b>对所有登录用户开放</b>——任何人都能在里面干活、批阅、发布到正式区。
-              添加第一个成员就会切换为按成员授权。
-            </div>
-          ) : (
-            <p className="hint" style={{ marginTop: 0 }}>
-              只有下面列出的人有权限。<code className="mono">maintainer</code> 才能发布和改设置。
-            </p>
-          )}
-          <div className="table-wrap" style={{ marginTop: 10 }}>
-            <table className="data">
-              <tbody>
-                {(cell.members ?? []).map((m) => (
-                  <tr key={m.userID}>
-                    <td className="mono">{m.userID}</td>
-                    <td style={{ width: 150 }}>
-                      <select
-                        value={m.role}
-                        onChange={(e) => member.mutate({ id: m.userID, role: e.target.value })}
-                      >
-                        <option value="viewer">viewer</option>
-                        <option value="member">member</option>
-                        <option value="maintainer">maintainer</option>
-                      </select>
-                    </td>
-                    <td style={{ width: 80 }}>
-                      <button className="ghost small" onClick={() => removeMember.mutate(m.userID)}>
-                        移除
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {(cell.members ?? []).length === 0 && (
-                  <tr>
-                    <td className="faint">还没有成员</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="row" style={{ marginTop: 10 }}>
-            <input
-              value={newMember}
-              placeholder="用户 id(形如 u-1a2b3c4d,在对方的账号里可见)"
-              onChange={(e) => setNewMember(e.target.value)}
-            />
-            <select value={newRole} onChange={(e) => setNewRole(e.target.value)} style={{ width: 150 }}>
-              <option value="viewer">viewer</option>
-              <option value="member">member</option>
-              <option value="maintainer">maintainer</option>
-            </select>
-            <button
-              className="small"
-              disabled={!newMember.trim() || member.isPending}
-              onClick={() => member.mutate({ id: newMember.trim(), role: newRole })}
-            >
-              添加
-            </button>
-          </div>
-        </div>
         <div className="card">
           <h3>产品描述</h3>
           <p className="hint" style={{ marginTop: 0 }}>
@@ -411,5 +350,70 @@ export function CellPage() {
         />
       )}
     </>
+  )
+}
+
+/**
+ * Pointing a project at its repository, after the fact.
+ *
+ * Creating a project no longer demands a URL, because a project is usually
+ * agreed on before somebody creates the GitLab repository for it. What was
+ * left behind was a project that looks fine and quietly cannot do anything:
+ * no checkout, so no worktree, so nothing for an agent to work on. This card
+ * exists to say that out loud and to fix it in one step.
+ */
+function AttachRepo({ cell }: { cell: string }) {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [url, setUrl] = useState('')
+  const [branch, setBranch] = useState('main')
+  const [secretName, setSecretName] = useState('')
+
+  const opts = useQuery({ queryKey: ['new-project-options'], queryFn: () => api.newProjectOptions() })
+
+  const attach = useMutation({
+    mutationFn: () => api.attachRepo(cell, url.trim(), branch.trim(), secretName),
+    onSuccess: () => {
+      toast.success('仓库已关联,工作区会重新拉取')
+      qc.invalidateQueries({ queryKey: ['cell', cell] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  return (
+    <div className="card">
+      <h3>还没有关联仓库</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        这个项目建起来了,但还没有代码。关联之后 agent 才有东西可以干活,
+        产出会推成 <code className="mono">session/&lt;id&gt;</code> 分支等你批阅。
+      </p>
+      <label className="field">
+        <span>仓库地址</span>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://git.tinci.com/team/shop.git" />
+      </label>
+      <div className="row">
+        <label className="field" style={{ flex: 1 }}>
+          <span>基线分支</span>
+          <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+        </label>
+        <label className="field" style={{ flex: 1 }}>
+          <span>git 凭据</span>
+          <select value={secretName} onChange={(e) => setSecretName(e.target.value)}>
+            <option value="">不需要(公开仓库)</option>
+            {(opts.data?.gitCredentials ?? []).map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <div className="hint">在「我的凭据」里绑定过 GitLab 令牌的话,它就在这个列表里。</div>
+        </label>
+      </div>
+      <div className="btn-row" style={{ marginTop: 12 }}>
+        <button className="primary" disabled={!url.trim() || attach.isPending} onClick={() => attach.mutate()}>
+          {attach.isPending ? '关联中…' : '关联仓库'}
+        </button>
+      </div>
+    </div>
   )
 }

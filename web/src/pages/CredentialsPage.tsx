@@ -47,6 +47,8 @@ export function CredentialsPage() {
         <span className="sub">模型 API key,只有你能用</span>
       </h1>
       <KimiAccount />
+      <Lending />
+      <ForgeToken />
 
       <div className="card">
         <h3>已有凭据</h3>
@@ -212,6 +214,269 @@ function KimiAccount() {
           </button>
           {state?.message && <span className="faint">{state.message}</span>}
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Your own GitLab (or GitHub) token.
+ *
+ * Until now a project could only use a forge credential somebody had created
+ * by hand as a Kubernetes Secret, which meant onboarding a colleague ended
+ * with "ask an administrator to make you one". Bound here, it shows up in
+ * the credential picker on the project forms as your own.
+ *
+ * It is never shared and never lent. A commit pushed with somebody else's
+ * token is that person's commit as far as GitLab is concerned, and an audit
+ * trail that attributes work to the wrong human is worse than none.
+ */
+function ForgeToken() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [provider, setProvider] = useState('gitlab')
+  const [username, setUsername] = useState('')
+  const [token, setToken] = useState('')
+
+  const bound = useQuery({ queryKey: ['git-identities'], queryFn: api.gitIdentities })
+
+  const bind = useMutation({
+    mutationFn: () => api.bindGitIdentity(provider, username.trim(), token.trim()),
+    onSuccess: () => {
+      setUsername('')
+      setToken('')
+      toast.success('令牌已绑定,新建项目时可以直接选它')
+      qc.invalidateQueries({ queryKey: ['git-identities'] })
+      // The project forms list credentials; a freshly bound one has to
+      // appear there without a reload, or it reads as not having worked.
+      qc.invalidateQueries({ queryKey: ['new-project-options'] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const unbind = useMutation({
+    mutationFn: (p: string) => api.unbindGitIdentity(p),
+    onSuccess: () => {
+      toast.success('已解绑')
+      qc.invalidateQueries({ queryKey: ['git-identities'] })
+      qc.invalidateQueries({ queryKey: ['new-project-options'] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const list = bound.data?.identities ?? []
+
+  return (
+    <div className="card">
+      <h3>我的代码仓库令牌</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        绑定后,新建项目和关联仓库时可以直接选「我的令牌」,不用再找管理员建凭据。
+        令牌只属于你 —— 它推出去的提交,在 GitLab 那边算你的。
+      </p>
+
+      {list.length > 0 && (
+        <table className="grid" style={{ marginTop: 8, marginBottom: 12 }}>
+          <thead>
+            <tr>
+              <th>平台</th>
+              <th>用户名</th>
+              <th>凭据名</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((g) => (
+              <tr key={g.provider}>
+                <td>
+                  <Tag>{g.provider}</Tag>
+                </td>
+                <td>{g.username}</td>
+                <td className="mono faint">{g.secretName}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="ghost small"
+                    disabled={unbind.isPending}
+                    onClick={() => unbind.mutate(g.provider)}
+                  >
+                    解绑
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+          <option value="gitlab">GitLab</option>
+          <option value="github">GitHub</option>
+        </select>
+        <input
+          placeholder="用户名"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          style={{ minWidth: 160 }}
+        />
+        <input
+          type="password"
+          placeholder="访问令牌"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          style={{ minWidth: 260 }}
+          autoComplete="new-password"
+        />
+        <button disabled={!username.trim() || !token.trim() || bind.isPending} onClick={() => bind.mutate()}>
+          {bind.isPending ? '保存中…' : list.some((g) => g.provider === provider) ? '替换' : '绑定'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 借出凭据 — hand a colleague a long-lived key so they can start working.
+ *
+ * A new colleague cannot do anything at all until they can pay for a turn:
+ * dispatch refuses before it even looks at the project. "Add your own key" and
+ * "connect your own account" are both fine answers and both a wall on
+ * somebody's first afternoon.
+ *
+ * A connected OAuth account is deliberately not lendable — its refresh token
+ * rotates, so two people holding it knock each other offline. The server
+ * refuses and says why; this list simply never offers one.
+ */
+function Lending() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [credential, setCredential] = useState('')
+  const [email, setEmail] = useState('')
+
+  const grants = useQuery({ queryKey: ['grants'], queryFn: api.grants })
+  const mine = grants.data?.lendable ?? []
+  const chosen = mine.find((c) => c.name === credential) ?? mine[0]
+  // Sharing a rotating login is a different decision from lending a static
+  // key, so it gets a different button and a sentence rather than a silent
+  // success.
+  const isAccount = chosen?.kind === 'kimi-oauth'
+
+  const done = () => {
+    qc.invalidateQueries({ queryKey: ['grants'] })
+    qc.invalidateQueries({ queryKey: ['credentials'] })
+  }
+  const lend = useMutation({
+    mutationFn: () => api.lendCredential(chosen?.name ?? '', email.trim(), isAccount),
+    onSuccess: () => {
+      setEmail('')
+      toast.success('借出了。对方现在可以派工了')
+      done()
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const revoke = useMutation({
+    mutationFn: (v: { credential: string; who: string }) => api.revokeGrant(v.credential, v.who),
+    onSuccess: () => {
+      toast.success('已收回')
+      done()
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const lent = grants.data?.lent ?? []
+  const borrowed = grants.data?.borrowed ?? []
+
+  return (
+    <div className="card">
+      <h3>借出凭据</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        把你的一把 key 借给同事,他就能在项目里派工——花的是<b>你的</b>额度,所以借给谁是件要想一下的事。
+        随时可以收回。
+      </p>
+
+      {borrowed.length > 0 && (
+        <div className="note" style={{ marginTop: 10 }}>
+          <b>别人借给你的:</b>
+          {borrowed.map((b) => (
+            <div key={b.credential} className="mono" style={{ marginTop: 4 }}>
+              {b.credential} {b.hint && <span className="faint">{b.hint}</span>}
+              <span className="faint"> —— 来自 {b.from}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {lent.length > 0 && (
+        <table className="grid" style={{ marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th>key</th>
+              <th>借给了</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {lent.map((g) => (
+              <tr key={g.credential + g.email}>
+                <td className="mono">{g.credential}</td>
+                <td>
+                  {g.name ? `${g.name} ` : ''}
+                  <span className="mono faint">{g.email}</span>
+                  {g.unknown && <span className="faint"> (查无此人)</span>}
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="ghost small"
+                    disabled={revoke.isPending}
+                    onClick={() => revoke.mutate({ credential: g.credential, who: g.email })}
+                  >
+                    收回
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {mine.length === 0 ? (
+        <p className="hint">你还没有可以借出去的 key。上面先加一把。</p>
+      ) : (
+        <div className="row" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+          <select value={chosen?.name ?? ''} onChange={(e) => setCredential(e.target.value)}>
+            {mine.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.kind === 'kimi-oauth' ? `${c.name}(已连接的账号)` : `${c.name} ${c.hint ?? ''}`}
+              </option>
+            ))}
+          </select>
+          <input
+            type="email"
+            placeholder="借给谁(邮箱)"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={{ minWidth: 240 }}
+          />
+          <button
+            disabled={!email.trim() || lend.isPending}
+            onClick={() => lend.mutate()}
+          >
+            {lend.isPending ? '借出中…' : isAccount ? '共享这个账号' : '借出'}
+          </button>
+        </div>
+      )}
+      {/* Said here rather than only in the server's refusal: somebody looking
+          for a way to share their Kimi login should find the answer before
+          they try it, not after. */}
+      {isAccount ? (
+        <p className="hint">
+          借的是<b>已连接的账号</b>:对方名下会放一份拷贝(会话控制器只认按自己名字命名的那一份,
+          光记一笔账等于没借)。两边之后各自刷新、各走各的令牌链 —— 2026-08-19 实测过,
+          Kimi 换发新令牌<b>不会作废旧的</b>,所以这不影响使用。借出去的那份记着是谁借的,
+          万一哪天真有人被登出,原因能一眼看出来。
+        </p>
+      ) : (
+        <p className="hint">
+          静态 API key 每次都是同一个字符串,借出去不会互相影响。
+        </p>
       )}
     </div>
   )

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -68,11 +69,22 @@ func runSession() error {
 	// pod for as long as it is the followed one.
 	var previewArgv []string
 	if raw := os.Getenv(runtimeapi.EnvPreviewCmd); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &previewArgv); err == nil && len(previewArgv) > 0 {
-			stop := make(chan os.Signal, 1)
-			signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-			go supervisePreview(previewArgv, wt, stop)
+		_ = json.Unmarshal([]byte(raw), &previewArgv)
+	}
+	var previewEnv []string
+	if len(previewArgv) == 0 {
+		// Same rule as the anchor: an unconfigured preview is one to work
+		// out from the checkout, not one to skip silently.
+		plan := detectPreview(wt, anchorPreviewPort())
+		previewArgv, previewEnv = plan.Argv, plan.Env
+		if len(previewArgv) == 0 {
+			fmt.Println("session: 不启动预览 —", plan.Why)
 		}
+	}
+	if len(previewArgv) > 0 {
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+		go supervisePreview(previewArgv, wt, previewEnv, stop)
 	}
 
 	if err := writeAgentConfig(); err != nil {
@@ -146,9 +158,19 @@ func writeAgentConfig() error {
 //
 // This is what makes "connect your Kimi account once" mean every session,
 // rather than every session asking for a key. The tar arrives by Secret
-// reference, so it was never in the pod spec; it lands under the session's
-// own state directory, 0700, which is where the CLI looks and where nothing
-// belonging to another user can reach.
+// reference, so it was never in the pod spec.
+//
+// It lands in the PERSON's directory, not the session's, and the session's
+// own credentials directory is a symlink to it. A login belongs to a human
+// being; a conversation belongs to a session. Pointing KIMI_CODE_HOME at the
+// session made a copy of the login per session, and since the provider
+// issues a new refresh token on every renewal, those copies drifted into
+// separate lineages that the control plane then had to reconcile. One
+// directory means one lineage and nothing to reconcile.
+//
+// Symlinking the DIRECTORY rather than the file is deliberate: the CLI
+// rewrites the credential with a temp file and a rename, which would replace
+// a symlinked FILE and quietly break the sharing on the first refresh.
 func writeAccountCredential() error {
 	blob := os.Getenv(runtimeapi.EnvAccount)
 	if blob == "" {
@@ -163,10 +185,28 @@ func writeAccountCredential() error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}
-	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(home))
-	cmd.Stdin = strings.NewReader(blob)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("account credential: %v: %s", err, out)
+	shared := ids.AccountCredentialDir(int64(os.Getuid()))
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		return err
+	}
+	// Unpack into the person's directory. Only when it holds nothing yet:
+	// the live file is newer than anything the control plane stored, and a
+	// second session starting must not roll its sibling back to the copy the
+	// Secret happens to hold.
+	if empty, err := dirEmpty(shared); err == nil && empty {
+		cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(home))
+		cmd.Stdin = strings.NewReader(blob)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("account credential: %v: %s", err, out)
+		}
+		// The tar carries a credentials/ directory and a device_id; move the
+		// credential itself to where every session of this person reads it.
+		if err := moveInto(filepath.Join(home, "credentials"), shared); err != nil {
+			return err
+		}
+	}
+	if err := linkSharedCredentials(home, shared); err != nil {
+		return err
 	}
 	// Set the modes here rather than trusting the ones the tar carries. A tar
 	// preserves whatever it captured, so the permissions of a live login
@@ -174,7 +214,7 @@ func writeAccountCredential() error {
 	// three steps away — a place nobody thinks about when reasoning about
 	// who can read a credential. Deciding them at the point of use makes the
 	// answer readable in one file.
-	if err := tighten(filepath.Join(home, "credentials")); err != nil {
+	if err := tighten(shared); err != nil {
 		return err
 	}
 	// The device identity is part of the credential; it is read back on
@@ -194,33 +234,79 @@ func writeAccountCredential() error {
 // no lookup API to remember, and `grep -r` over the specification works
 // the way anybody would expect.
 //
-// Written fresh on every window open rather than synced: the library is
-// small, the console is the source of truth, and a stale copy of a
-// specification is worse than no copy — an agent quoting last week's
-// requirement is confidently wrong, which is the failure mode with the
-// highest cost here.
+// Written fresh rather than merged: the console is the source of truth, and
+// a stale copy of a specification is worse than no copy — an agent quoting
+// last week's requirement is confidently wrong, which is the failure mode
+// with the highest cost here.
 func writeLibrary(dir string) error {
 	blob := os.Getenv(runtimeapi.EnvLibrary)
 	if blob == "" {
 		return nil
 	}
-	dest := filepath.Join(dir, ".agentcell", "library")
-	if err := os.RemoveAll(dest); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(dest))
-	cmd.Stdin = strings.NewReader(blob)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := unpackLibrary(dir, strings.NewReader(blob)); err != nil {
 		// Not fatal. A session that cannot start because a document failed
 		// to unpack is a worse outcome than a session without the
 		// documents, and the agent can be told.
-		fmt.Printf("session: 项目文件没能展开(%v: %s)\n", err, out)
+		fmt.Printf("session: 项目文件没能展开(%v)\n", err)
 		return nil
 	}
 	fmt.Println("session: 项目文件在 .agentcell/library/")
+	return nil
+}
+
+// unpackLibrary replaces the library directory from a base64 tar.
+func unpackLibrary(dir string, blob io.Reader) error {
+	dest := filepath.Join(dir, ".agentcell", "library")
+	// Into a sibling first, then swap. Replacing in place would leave the
+	// agent reading a half-empty directory for as long as the untar takes —
+	// and an agent that reads a specification mid-write quotes half of it.
+	tmp := dest + ".incoming"
+	if err := os.RemoveAll(tmp); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(tmp))
+	cmd.Stdin = blob
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	old := dest + ".old"
+	_ = os.RemoveAll(old)
+	if err := os.Rename(dest, old); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		// Put the old one back rather than leaving the agent with nothing.
+		_ = os.Rename(old, dest)
+		return err
+	}
+	_ = os.RemoveAll(old)
+	return nil
+}
+
+// runLibraryWrite refreshes a LIVE session's library from stdin.
+//
+// The library used to travel in an environment variable, which is fixed when
+// the pod is created — so a file uploaded while somebody was working could
+// not reach them until the session was restarted. Uploading a specification
+// and then having to explain to the agent that it cannot see it yet is the
+// opposite of what the library is for.
+func runLibraryWrite(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("library-write: need <session-id>")
+	}
+	uid := int64(os.Getuid())
+	wt := ids.WorktreePath(uid, args[0])
+	if _, err := os.Stat(wt); err != nil {
+		return fmt.Errorf("library-write: no worktree for %s", args[0])
+	}
+	if err := unpackLibrary(wt, os.Stdin); err != nil {
+		return fmt.Errorf("library-write: %w", err)
+	}
+	fmt.Println("library updated")
 	return nil
 }
 
@@ -654,8 +740,11 @@ func branchesOf(dir, base, repoName string) error {
 // says whether the server is already up, and a second one would fight for
 // the port.
 func runPreviewStart(args []string) error {
-	if len(args) < 3 {
-		return fmt.Errorf("preview-start: need <session-id> <port> <argv...>")
+	// argv is optional: with none, the checkout is inspected and the command
+	// worked out here (see preview_detect.go), which is what "预览默认开着"
+	// means in practice — nobody types a command for the common cases.
+	if len(args) < 2 {
+		return fmt.Errorf("preview-start: need <session-id> <port> [argv...]")
 	}
 	id, portArg, argv := args[0], args[1], args[2:]
 	port, err := strconv.Atoi(portArg)
@@ -680,6 +769,19 @@ func runPreviewStart(args []string) error {
 	if _, err := os.Stat(wt); err != nil {
 		return fmt.Errorf("preview-start: no worktree for %s yet", id)
 	}
+	var extraEnv []string
+	if len(argv) == 0 {
+		plan := detectPreview(wt, port)
+		if len(plan.Argv) == 0 {
+			// Not an error: plenty of repositories have nothing to serve, and
+			// failing the reconcile over it would be worse than saying so.
+			// The sentence goes to stdout so it reaches whoever asked.
+			fmt.Println("preview not started —", plan.Why)
+			return nil
+		}
+		argv, extraEnv = plan.Argv, plan.Env
+		fmt.Printf("preview auto-detected: %v\n", argv)
+	}
 	logFile := filepath.Join(ids.UserHome(uid), "preview-"+id+".log")
 	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -688,6 +790,9 @@ func runPreviewStart(args []string) error {
 	defer func() { _ = lf.Close() }()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = wt
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	cmd.Stdout, cmd.Stderr = lf, lf
 	cmd.Stdin = nil
 	// Its own process group: it outlives this exec, and killing it later
@@ -702,4 +807,49 @@ func runPreviewStart(args []string) error {
 	go func() { _ = cmd.Wait() }()
 	fmt.Printf("preview serving %s (pid %d)\n", wt, cmd.Process.Pid)
 	return nil
+}
+
+// dirEmpty reports whether a directory holds nothing.
+func dirEmpty(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
+}
+
+// moveInto moves a directory's contents into another, then removes it.
+func moveInto(from, to string) error {
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if err := os.Rename(filepath.Join(from, e.Name()), filepath.Join(to, e.Name())); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(from)
+}
+
+// linkSharedCredentials points this session's credentials directory at the
+// person's one.
+//
+// Replaces whatever is there — an older session left a real directory, and
+// leaving it would mean this session quietly kept refreshing its own copy
+// while believing it shared.
+func linkSharedCredentials(home, shared string) error {
+	link := filepath.Join(home, "credentials")
+	if target, err := os.Readlink(link); err == nil {
+		if target == shared {
+			return nil
+		}
+	}
+	if err := os.RemoveAll(link); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(shared, link)
 }

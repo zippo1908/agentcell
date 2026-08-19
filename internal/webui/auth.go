@@ -140,7 +140,7 @@ func (a *Authenticator) resolve(r *http.Request, presented string) (identity.Pri
 	// email carries. Checked before the static token because the static
 	// token is the break-glass path, not the normal one.
 	if a.Accounts != nil {
-		if p, ok := a.Accounts.FromCookie(r.Context(), presented); ok {
+		if p, ok, _ := a.Accounts.fromCookie(r.Context(), presented); ok {
 			return p, true
 		}
 	}
@@ -308,6 +308,19 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 		token, viaCookie := credential(r)
 		principal, ok := a.resolve(r, token)
+		// Slide the session forward while somebody is using it.
+		//
+		// Absolute expiry logged everybody out on a fixed clock — in the
+		// middle of a working afternoon, with a terminal open. Re-issuing
+		// once the cookie is past halfway means an active person is never
+		// asked again, and an untouched session still lapses on its own.
+		if ok && viaCookie && a.Accounts != nil {
+			if _, valid, stale := a.Accounts.fromCookie(r.Context(), token); valid && stale {
+				if fresh, err := a.Accounts.Mint(r.Context(), principal.Email); err == nil {
+					a.setSessionCookie(w, r, fresh, int(sessionTTL.Seconds()))
+				}
+			}
+		}
 		if !ok {
 			// A browser navigation gets redirected to the login form; an
 			// API/CLI caller gets a clean 401.

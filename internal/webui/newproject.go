@@ -48,9 +48,9 @@ type newProjectOptions struct {
 func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
 	out := newProjectOptions{GitCredentials: []string{}, PlacementClasses: []placementClassView{}}
 
-	if d, err := access.LoadDevboxes(); err == nil {
-		out.Devboxes = d
-	}
+	// From the handler, not from the built-in table: whatever the operator
+	// overlaid at startup is what gets offered here.
+	out.Devboxes = h.Devboxes
 	out.Runners, out.Providers = h.Registry.Catalogue()
 	// The deployment's default pairing, offered preselected. It is a
 	// deployment-wide choice rather than a hardcoded one: a team that has a
@@ -74,9 +74,11 @@ func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
 			if sec.Type != corev1.SecretTypeBasicAuth {
 				continue
 			}
-			// An unowned credential is the platform's own, offered to
-			// everyone; anything with an owner is offered only to them.
-			if owner := sec.Labels[OwnerLabel]; owner != "" && !p.Owns(owner) {
+			// The same predicate the create path enforces. Listing and
+			// using used to be two rules, and a form that offered something
+			// the API then refused is how somebody ends up unable to create
+			// a project by following the form exactly.
+			if !mayUseCredentialSecret(p, sec) {
 				continue
 			}
 			out.GitCredentials = append(out.GitCredentials, sec.Name)

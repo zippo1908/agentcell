@@ -21,21 +21,30 @@ import (
 
 // Keeping a connected account alive across sessions.
 //
-// The bug this exists for: a Kimi access token lives about fifteen minutes
-// and is renewed with a refresh token that the provider ROTATES — using it
-// mints a new one and invalidates the old. The platform was handing every
-// session its own COPY of that credential, so the first session to refresh
-// rotated the token out from under every other copy, including the one in
-// the Secret. A few sessions later the account was dead and the person was
-// told to log in again for no reason they could see:
+// What this exists for: a Kimi access token lives about fifteen minutes and
+// is renewed with a refresh token, and the provider issues a NEW refresh
+// token each time. Every session holds its own copy of the credential file,
+// so those copies drift into separate refresh lineages — and the copy in the
+// Secret, which is what the next session starts from, would otherwise stay
+// at whatever it was on the day it was written.
 //
-//	Error: [internal] Stored token for "kimi-code" was rejected;
-//	re-login required.
+// MEASURED, 2026-08-19, against api.kimi.com: issuing a new refresh token
+// does NOT invalidate the old one. Two runtimes were given the same
+// credential; both refreshed from the same old token, minutes apart, and
+// both succeeded. So drift between copies is waste, not breakage — an
+// earlier version of this comment claimed the copies killed each other, and
+// that claim was never tested. It was wrong.
 //
-// So the credential has to have ONE owner. It cannot be the platform alone:
-// the CLI refreshes on its own schedule, inside the pod, and there is no
-// way to stop it. It therefore becomes the platform's job to keep up — to
-// read back what the session now holds and store that as the truth.
+// The waste is still worth removing: a credential belongs to a PERSON, and
+// per-session copies of it exist only because KIMI_CODE_HOME points at one
+// directory that holds both the login and the conversation state. Pointing
+// `credentials_path` at a per-user file would give one lineage per person
+// and make most of this file unnecessary.
+//
+// Until then, the stored copy has to keep up with the live one: the CLI
+// refreshes on its own schedule, inside the pod, and there is no way to stop
+// it. So the platform reads back what the session now holds and stores that
+// as the truth.
 //
 // The direction matters. Session pods hold no API credential (ADR-0005), so
 // they cannot push anything to the control plane; the control plane reaches
@@ -55,11 +64,18 @@ func (r *SessionReconciler) syncAccountCredential(ctx context.Context, sess *acv
 	if sess.Status.PodName == "" {
 		return
 	}
+	// Read the PERSON's credential, not the session's.
+	//
+	// Every session of theirs now shares one directory (the session's own is
+	// a symlink to it), so there is one lineage to store rather than several
+	// to choose between. -h follows the link in case an older session is
+	// still running with a real directory in place.
 	home := ids.SessionStateDir(uid, id)
+	shared := ids.AccountCredentialDir(uid)
 	out, err := r.Exec(ctx, ns, sess.Status.PodName, []string{"sh", "-c",
-		`[ -d ` + shellQuoteArg(home) + `/credentials ] && ` +
-			`tar czf - -C ` + shellQuoteArg(home) + ` credentials ` +
-			`$([ -f ` + shellQuoteArg(home) + `/device_id ] && echo device_id) | base64 -w0`}, nil)
+		`[ -d ` + shellQuoteArg(shared) + ` ] && ` +
+			`tar czhf - -C ` + shellQuoteArg(ids.UserHome(uid)) + ` credentials ` +
+			`$([ -f ` + shellQuoteArg(home) + `/device_id ] && echo -C ` + shellQuoteArg(home) + ` device_id) | base64 -w0`}, nil)
 	if err != nil || strings.TrimSpace(out) == "" {
 		return
 	}
@@ -152,7 +168,9 @@ func shellQuoteArg(s string) string { return "'" + strings.ReplaceAll(s, "'", `'
 // worktree and can therefore serve it. Only one session per Cell is followed
 // at a time, so at most one runtime carries the label for that Cell.
 func (r *SessionReconciler) servePreviewFrom(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64) {
-	if r.Exec == nil || cell == nil || len(cell.Spec.Preview.Command) == 0 {
+	// An empty command no longer means "no preview" — it means the runtime
+	// works one out from the worktree. Only an explicit "off" skips.
+	if r.Exec == nil || cell == nil || !cell.Spec.Preview.PreviewEnabled() {
 		return
 	}
 	if cell.Spec.Preview.FollowSession != id {
@@ -190,4 +208,44 @@ func previewArgv(cell *acv1.Cell) []string {
 		return []string{"sh", "-c", cmd[0]}
 	}
 	return cmd
+}
+
+// syncLibrary tops up a LIVE session's copy of the project's files.
+//
+// The library reaches a session through its pod environment, which is fixed
+// when the pod is created. So a file uploaded while somebody was working
+// could not reach them at all: they had to restart the session, and until
+// they knew that, the agent simply could not see the specification they had
+// just been told to read.
+//
+// The Cell carries a marker that changes whenever its files change; a
+// session records what it last received. Different means push, which happens
+// on the next reconcile — seconds, not a restart.
+//
+// Best effort, like the credential sync: failing to top up a library must
+// never fail a reconcile. The worst case is an agent working from the
+// previous version, which is exactly where it was before this existed.
+func (r *SessionReconciler) syncLibrary(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) {
+	if r.Exec == nil || cell == nil || sess.Status.PodName == "" {
+		return
+	}
+	want := cell.Annotations[acv1.LibraryVersionAnnotation]
+	if want == "" || want == sess.Status.LibraryVersion {
+		return
+	}
+	blob := r.libraryBlob(ctx, cell.Name)
+	if blob == "" {
+		// Nothing readable in the project. Record the version anyway, or
+		// every reconcile from now on rebuilds an empty tar.
+		sess.Status.LibraryVersion = want
+		_ = r.Status().Update(ctx, sess)
+		return
+	}
+	if _, err := r.Exec(ctx, ns, sess.Status.PodName,
+		[]string{runtimeapi.RuntimeBin, "library-write", id},
+		strings.NewReader(blob)); err != nil {
+		return
+	}
+	sess.Status.LibraryVersion = want
+	_ = r.Status().Update(ctx, sess)
 }

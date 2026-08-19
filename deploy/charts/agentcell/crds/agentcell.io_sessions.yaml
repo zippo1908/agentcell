@@ -222,6 +222,14 @@ spec:
                   slot reclaimed is an idle one and never one in use.
                 format: date-time
                 type: string
+              libraryVersion:
+                description: |-
+                  LibraryVersion is the project's library as this session last received
+                  it. The library used to arrive only in the pod's environment, which is
+                  fixed at creation — so a file uploaded while somebody was working
+                  could not reach them until the session restarted. Comparing this with
+                  the Cell's own marker is what lets a live session be topped up.
+                type: string
               message:
                 type: string
               outputs:

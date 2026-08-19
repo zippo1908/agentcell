@@ -6,6 +6,8 @@ package ids
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -122,6 +124,27 @@ func SessionStateDir(uid int64, id string) string {
 	return UserHome(uid) + "/state/" + id
 }
 
+// AccountCredentialDir is where a PERSON's connected-account login lives —
+// once, not once per session.
+//
+// A CLI's home directory holds two different things: the login, which
+// belongs to the person, and the conversation state, which belongs to the
+// session. Pointing KIMI_CODE_HOME at the session's directory made a copy of
+// the login per session, and the provider issues a new refresh token on
+// every renewal — so the copies drifted into separate lineages, each
+// refreshing independently, and the control plane had to read one of them
+// back and guess which was current.
+//
+// One directory per person removes the guessing: every session of theirs
+// reads and writes the same file, so there is one lineage and nothing to
+// reconcile. The session's own credentials directory becomes a symlink to
+// this one, which is a shape the CLI explicitly supports — its safety check
+// resolves symlinks "so containerized deployments that mount the credential
+// as a symlink" keep working.
+func AccountCredentialDir(uid int64) string {
+	return UserHome(uid) + "/credentials"
+}
+
 // UserRepoPath is a user's own repository: its own refs and its own object
 // store, with the project's published history shared read-only underneath
 // through git alternates (ADR-0012).
@@ -188,4 +211,49 @@ func UserRepoDirFor(uid int64, path string) string {
 		return UserRepoPath(uid)
 	}
 	return UserRepoPath(uid) + "-" + strings.ReplaceAll(path, "/", "-")
+}
+
+// SlugCellName turns whatever somebody typed into a name the platform can
+// actually use.
+//
+// The rules are real — the name becomes a Kubernetes namespace and a DNS
+// label in a preview host — but making a PERSON satisfy them is not. Asking
+// for "lowercase letters, digits and dashes" and then refusing 「平台运维组」
+// with "is not a lowercase DNS-1123 label" is a form arguing with somebody
+// about an implementation detail they never asked to know.
+//
+// So the typed name is kept as the project's display name and this derives
+// the technical one. A name with nothing usable in it — which every purely
+// Chinese name is — gets a stable id from its own hash rather than an error:
+// two people typing the same name get the same slug, and the collision is
+// then a real one that the API reports honestly.
+func SlugCellName(typed string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(typed)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case r == '-' || r == '_' || r == ' ' || r == '.' || r == '/':
+			// Collapse runs: "my  project" and "my-project" are the same name
+			// to a person, so they should be the same name here.
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if len(slug) > MaxCellName {
+		slug = strings.Trim(slug[:MaxCellName], "-")
+	}
+	// A DNS label cannot start with a digit-only... it can, but a namespace
+	// that reads as a number is a poor label; more importantly an empty slug
+	// needs something.
+	if slug == "" {
+		sum := sha256.Sum256([]byte(strings.TrimSpace(typed)))
+		return "p-" + hex.EncodeToString(sum[:3])
+	}
+	return slug
 }

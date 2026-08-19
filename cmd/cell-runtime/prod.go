@@ -89,6 +89,8 @@ func runProdServe() error {
 	go reapZombies()
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	supervisePreview(argv, runtimeapi.ProdRepoPath, stop)
+	// Production runs a command somebody stated at release time, so there is
+	// nothing to detect and no port to inject.
+	supervisePreview(argv, runtimeapi.ProdRepoPath, nil, stop)
 	return nil
 }

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 
 import './styles.css'
+import { initTheme } from './lib/theme'
 import { Shell } from './components/Shell'
 import { CellsPage } from './pages/CellsPage'
 import { CellNewPage } from './pages/CellNewPage'
@@ -45,6 +46,10 @@ const router = createBrowserRouter([
     ],
   },
 ])
+
+// Before createRoot, so the very first paint already carries the right
+// theme — a post-render apply would flash the wrong palette for a frame.
+initTheme()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

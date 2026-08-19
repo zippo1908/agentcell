@@ -1,5 +1,33 @@
 # 权限
 
+## 三层,别混成一层
+
+授权在这里分三层。混淆它们是最常见的困惑来源——尤其是三样都叫「令牌」的东西。
+
+```mermaid
+flowchart TD
+    subgraph ACC["账号层 —— 跟着人走,和任何项目无关"]
+        A1["可以创建项目<br/>(在邀请上给出)"]
+        A2["个人 forge 令牌<br/>你的提交算你的,从不出借"]
+        A3["模型 key / 已连接的账号<br/>你的会话由它买单"]
+    end
+    subgraph PRJ["项目层 —— 成员名单就是全部范围"]
+        P1["viewer 看"]
+        P2["member 派工、跑会话、批阅"]
+        P3["maintainer 发布、改设置、管成员"]
+        P4["项目令牌<br/>这个项目 clone/push 用哪份凭据"]
+    end
+    subgraph SES["会话层 —— 角色跨不过去的边界"]
+        S1["只有 owner 能开终端<br/>maintainer 也不行"]
+    end
+    ACC -->|"有授权才能新开"| PRJ
+    PRJ -->|"能派工才有会话"| SES
+```
+
+**读法**:账号层回答「这个人是谁、他花谁的钱」;项目层回答「他在这个项目里能做
+什么」;会话层是**角色跨不过去**的那条线——项目 maintainer 也打不开你的终端,因为
+socket 在你的私有目录里,**它本身就是权限**。
+
 ## 三个角色,八个动作
 
 | 角色 | 能做 |
@@ -22,6 +50,47 @@
 无法表达,而那恰恰是团队需要有的例外。 -->
 
 **点名第一个人就把项目关上。** 一份空名单意味着对所有登录用户开放;写下第一个名字,门就存在了。
+
+## 建项目是一项单独的授权
+
+三个角色说的是**在一个已有项目里**能做什么。「能不能新开一个项目」是另一回事,
+它不在项目上,在账号上。
+
+**这项授权长在邀请上**:请人进来的时候勾一下「可以创建项目」,兑换出来的账号就
+有。理由是它该由做决定的那个人在做决定的那一刻给出,而不是变成一道要事后记得补
+的手续 —— 否则新同事登录进来,发现按钮点了没反应,还得回头找人。
+
+管理员天然有这项授权,不用另外勾。
+
+**升级不会静默降权。** 在这项授权存在之前,任何有账号的人都能建项目;升级时把它
+拿走会是一次没人通知、界面上也无从解释的降级。所以已有账号一律保留,新人则只在
+邀请写明时才有。
+
+> 建项目在这套系统里意味着一个命名空间、一份 checkout、一个常驻 runtime —— 都是
+> 部署要一直扛着的东西,所以它值得是一个显式的决定。
+
+这项授权只对**账号体系里的人**生效。OIDC 用户和静态令牌没有承载它的地方,悄悄收走
+那些部署现在就在做的事,会是一次把人打断的升级。
+
+## 借出凭据
+
+新同事在能为一轮对话付账之前,什么都做不了——派工在看项目之前就先要求调用者
+自己有凭据。所以一把 key 可以**借**:在「我的凭据」里选一把、填对方邮箱,他就能
+在项目里派工,花的是**你的**额度。随时收回。
+
+**已连接的账号也能借**,只是多一步:会话控制器只认「按会话 owner 命名的那份 Secret」,
+所以借账号会在对方名下真的放一份拷贝——光记一笔账等于什么都没借。
+
+两份拷贝之后各自刷新,走各自的令牌链。**2026-08-19 实测**(api.kimi.com):换发新的
+refresh token **不会作废旧的**——两个运行时先后拿同一个旧令牌刷新,都成功了。所以
+分叉是浪费,不是故障。
+
+> 这条曾经被当成「借不了」的理由写进代码和文档,而那个说法从没被验证过。它是错的。
+
+更彻底的做法是**一个人一份凭据、所有会话共用**,不同 session 只做上下文隔离——Kimi
+自己文档里 session 就是上下文概念。现在之所以按会话各存一份,是因为 `KIMI_CODE_HOME`
+一个变量同时决定了「按人的登录」和「按会话的上下文」两件事。CLI 支持用
+`credentials_path` 单独指定凭据位置,所以这条路是通的。
 
 ## 有些边界不是角色能跨的
 
@@ -54,6 +123,15 @@ puts code in front of users.
 entry naming you on the project wins, whether it raises your role or lowers
 it — otherwise "a viewer on this one project" would be unsayable, and that is
 exactly the exception a team needs to have. -->
+
+**Creating a project is a separate grant**, carried on the invitation rather
+than on any project: the three roles say what you may do *inside* one. It is
+given by whoever decides to bring somebody in, at the moment they decide,
+rather than as a second act somebody has to remember afterwards. Admins have
+it by definition. Accounts that predate the grant keep it — withdrawing it
+during an upgrade would be a silent demotion with nothing on screen to explain
+it — and it applies only to account holders, since an OIDC user or a static
+token has no row to carry it.
 
 **Some boundaries are not role-shaped.** Only a session's owner can open its
 terminal — not even a project maintainer — because the socket lives in that

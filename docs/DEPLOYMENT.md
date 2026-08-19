@@ -202,11 +202,13 @@ kubectl -n agentcell-system create configmap provider-overrides \
 `agentcell-system`).
 
 ```sh
-# A project Cell with a resident preview
+# A project Cell. The preview is on by default and needs no command: the
+# runtime reads the checkout and works one out (package.json dev/start,
+# Django, a static page). Pass --preview only to override that, and
+# --preview-mode off for a project with nothing to serve. See ADR-0014.
 cellctl cell create shop \
   --repo https://github.com/you/shop.git --image ghcr.io/agentcell/devbox \
   --secret git-cred \
-  --preview "npm run dev -- --host" --preview-port 5173 \
   --description "极简电商:商品列表 + 购物车"
 
 cellctl cells                      # watch it reach Ready
@@ -305,7 +307,8 @@ namespaces.
 | celld pod not Ready, logs "refusing to expose an unauthenticated control plane" | No `celld-tokens` secret — create it (§5a) and restart. |
 | `cellctl` errors on create | Your kubeconfig lacks RBAC to `agentcell.io`, or wrong `--namespace`. |
 | Cell stuck `Pending` | Anchor not Ready — `kubectl -n cell-<name> logs sts/anchor -c anchor`; often a clone failure (bad `git-cred`, repo URL, or blocked egress). |
-| Preview / `/app` returns 502 | Upstream not serving yet. Check `kubectl -n cell-<name> get pods,endpoints`; confirm the preview command actually binds `--preview-port`. Readiness probes gate this, so a persistent 502 means the dev server is crashing. |
+| Preview / `/app` returns 502 | Upstream not serving yet. Check `kubectl -n cell-<name> get pods,endpoints`. **Read `logs sts/anchor` first** — it prints either the command detection chose (`anchor: 自动判定预览命令 …`) or the reason it chose none (`anchor: 不启动预览 — …`). A dev server bound to loopback, or to its own default port instead of `--preview-port`, looks exactly like one that is crashing. |
+| Anchor `NotReady` forever, preview never binds | A stated `preview.command` that cannot start. Only a *stated* command is gated by the readiness probe (auto mode is not, because it cannot promise a preview). Before v0.1.0-alpha.7 a one-element command was exec'd as a filename by the anchor — upgrade, or split the command into a real argv. |
 | Session stuck `Queued` | All slots busy — raise `spec.maxSessions`, or a prior session leaked a lease (the controller sweeps stale leases each reconcile). |
 | Session `Settled` but no branch on remote | It produced no commits (Discarded), or push failed and the settle job is retrying — `kubectl -n cell-<name> logs job/settle-<id>`. |
 | Namespace stuck `Terminating` on delete | A protected PVC is finalizing; the Cell finalizer intentionally waits. Give it a moment; check for stuck PVs. |

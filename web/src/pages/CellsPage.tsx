@@ -16,11 +16,11 @@ export function CellsPage() {
   return (
     <>
       <h1 className="page-title">
-        工作区
+        项目
         <span className="spacer" />
         <span className="btn-row">
           <Link to="/cells/new" style={{ borderBottom: 'none' }}>
-            <button className="primary small">新建工作区</button>
+            <button className="primary small">新建项目</button>
           </Link>
         </span>
       </h1>
@@ -33,11 +33,11 @@ export function CellsPage() {
           <SkeletonTable rows={4} cols={6} />
         ) : (cells ?? []).length === 0 ? (
           <EmptyState
-            title="还没有工作区"
-            hint="一个工作区是一个项目:常驻的代码检出、一个预览,和一组会话槽位。建好之后打开它就能干活。"
+            title="还没有项目"
+            hint="项目 = 常驻的代码检出、一个预览,和一组会话槽位。建好之后打开它就能干活。"
             action={
               <Link to="/cells/new" style={{ borderBottom: 'none' }}>
-                <button className="primary small">新建工作区</button>
+                <button className="primary small">新建项目</button>
               </Link>
             }
           />
@@ -59,8 +59,14 @@ export function CellsPage() {
                 {(cells ?? []).map((c) => (
                   <tr key={c.name} className="clickable" onClick={() => nav(`/cells/${c.name}`)}>
                     <td>
-                      <div style={{ fontWeight: 600 }}>{c.name}</div>
-                      <div className="mono faint">{c.followSession ? `跟随 ${c.followSession.slice(0, 8)}` : ''}</div>
+                      <div style={{ fontWeight: 600 }}>{c.displayName || c.name}</div>
+                      {/* The address, shown small: it is what appears in URLs
+                          and namespaces, so it has to be findable — but it is
+                          not what the project is called. */}
+                      <div className="mono faint">
+                        {c.displayName && c.displayName !== c.name ? c.name : ''}
+                        {c.followSession ? ` 跟随 ${c.followSession.slice(0, 8)}` : ''}
+                      </div>
                     </td>
                     <td>
                       <Badge tone={cellTone(c.phase)}>{c.phase || 'Unknown'}</Badge>
