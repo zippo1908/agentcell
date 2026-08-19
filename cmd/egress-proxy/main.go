@@ -165,9 +165,16 @@ func (p *proxy) decide(r *http.Request, host string, port int) (egress.Verdict, 
 	var attr egress.Attribution
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if p.resolver != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer cancel()
-		attr = p.resolver.Attribute(ctx, ip)
+		var err error
+		attr, err = p.resolver.Attribute(ctx, ip)
+		if err != nil {
+			// Said out loud. An audit log full of unattributed lines that
+			// nobody can explain is worse than one that reports it cannot
+			// identify the caller and why.
+			p.log.Warn("could not attribute an egress request", "ip", ip, "err", err)
+		}
 	} else {
 		attr = egress.Attribution{IP: ip}
 	}
@@ -175,9 +182,17 @@ func (p *proxy) decide(r *http.Request, host string, port int) (egress.Verdict, 
 }
 
 // record writes the audit line. One line per attempt, allowed or not.
-func (p *proxy) record(v egress.Verdict, a egress.Attribution, host string, port int, bytesUp, bytesDown int64) {
+//
+// failure is kept SEPARATE from the verdict rather than replacing it. A
+// destination that policy permitted and that then failed to connect must
+// still read as permitted, because the thing an operator learns from these
+// lines in observe mode is which destinations are being reached — and a
+// connection error recorded as `allow=false` teaches the opposite.
+func (p *proxy) record(v egress.Verdict, a egress.Attribution, method, host string, port int, bytesUp, bytesDown int64, failure string) {
 	p.log.Info("egress",
 		"allow", v.Allow,
+		"method", method,
+		"error", failure,
 		"observed", v.Observed,
 		"rule", v.Rule,
 		"reason", v.Reason,
@@ -205,14 +220,14 @@ func (p *proxy) connect(w http.ResponseWriter, r *http.Request) {
 
 	v, attr := p.decide(r, host, port)
 	if !v.Allow {
-		p.record(v, attr, host, port, 0, 0)
+		p.record(v, attr, "CONNECT", host, port, 0, 0, "")
 		http.Error(w, "egress refused: "+v.Reason, http.StatusForbidden)
 		return
 	}
 
 	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(host, portS), 10*time.Second)
 	if err != nil {
-		p.record(egress.Verdict{Allow: false, Rule: v.Rule, Reason: "拨号失败: " + err.Error()}, attr, host, port, 0, 0)
+		p.record(v, attr, "CONNECT", host, port, 0, 0, err.Error())
 		http.Error(w, "egress: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -233,7 +248,7 @@ func (p *proxy) connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	up, downBytes := splice(down, upstream)
-	p.record(v, attr, host, port, up, downBytes)
+	p.record(v, attr, "CONNECT", host, port, up, downBytes, "")
 }
 
 // splice copies in both directions and reports how much moved.
@@ -264,6 +279,21 @@ func (p *proxy) plain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "egress: this is a proxy; use an absolute URL or CONNECT", http.StatusBadRequest)
 		return
 	}
+	// A plain-HTTP proxy request for an https:// URL is asking this proxy to
+	// FETCH the resource — to terminate TLS on the client's behalf and hand
+	// back the plaintext. Refused, and not as an oversight: doing it would
+	// make the proxy able to read everything an agent sends, which is the
+	// decision ADR-0017 explicitly declined. The client should use CONNECT.
+	//
+	// busybox wget is the tool that does this, and it is why the refusal
+	// says which one to use rather than just failing.
+	if r.URL.Scheme == "https" {
+		http.Error(w,
+			"egress: this proxy does not terminate TLS; use CONNECT for https "+
+				"(busybox wget cannot — use curl, or set only http_proxy)",
+			http.StatusBadRequest)
+		return
+	}
 	host := r.URL.Hostname()
 	port := 80
 	if s := r.URL.Port(); s != "" {
@@ -271,7 +301,7 @@ func (p *proxy) plain(w http.ResponseWriter, r *http.Request) {
 	}
 	v, attr := p.decide(r, host, port)
 	if !v.Allow {
-		p.record(v, attr, host, port, 0, 0)
+		p.record(v, attr, r.Method, host, port, 0, 0, "")
 		http.Error(w, "egress refused: "+v.Reason, http.StatusForbidden)
 		return
 	}
@@ -280,7 +310,7 @@ func (p *proxy) plain(w http.ResponseWriter, r *http.Request) {
 	out.RequestURI = ""
 	resp, err := http.DefaultTransport.RoundTrip(out)
 	if err != nil {
-		p.record(egress.Verdict{Rule: v.Rule, Reason: "上游失败: " + err.Error()}, attr, host, port, 0, 0)
+		p.record(v, attr, r.Method, host, port, 0, 0, err.Error())
 		http.Error(w, "egress: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -292,5 +322,5 @@ func (p *proxy) plain(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	n, _ := io.Copy(w, resp.Body)
-	p.record(v, attr, host, port, 0, n)
+	p.record(v, attr, r.Method, host, port, 0, n, "")
 }

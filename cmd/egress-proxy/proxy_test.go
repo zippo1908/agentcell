@@ -194,3 +194,83 @@ func TestThePolicyFileShapeRoundTrips(t *testing.T) {
 		t.Fatalf("round trip lost something: %+v", out)
 	}
 }
+
+// A destination policy PERMITTED that then fails to connect must still be
+// recorded as permitted.
+//
+// This is an audit-quality property, not a functional one, and it is the
+// kind that goes wrong silently. In observe mode the entire purpose of the
+// log is to reveal which destinations are being reached so the allowlist can
+// be written from evidence. A connection error recorded as `allow=false`
+// teaches the reader that policy stopped it — the opposite of what happened
+// — and the destination never makes it onto the list.
+func TestAConnectionFailureIsNotRecordedAsARefusal(t *testing.T) {
+	var buf strings.Builder
+	p := &proxy{log: slog.New(slog.NewJSONHandler(&buf, nil))}
+	// Allowed by name, but nothing is listening there.
+	p.policy.Store(&egress.Policy{Rules: []egress.Rule{{Host: "localhost", Port: 9}}})
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+
+	code, c := connect(t, srv.URL, "localhost:9")
+	defer c.Close()
+	if code == http.StatusForbidden {
+		t.Fatal("an allowed destination was refused by policy")
+	}
+
+	var line map[string]any
+	for _, s := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(s), &m) == nil && m["msg"] == "egress" {
+			line = m
+		}
+	}
+	if line == nil {
+		t.Fatal("no audit line was written for a failed connection")
+	}
+	if line["allow"] != true {
+		t.Errorf("policy permitted this destination but the audit line says allow=%v — "+
+			"a reader would conclude the allowlist stopped it", line["allow"])
+	}
+	if line["error"] == "" || line["error"] == nil {
+		t.Error("the connection failure was not recorded at all")
+	}
+}
+
+// Asking the proxy to FETCH an https URL is refused.
+//
+// That request means "terminate TLS for me and hand back the plaintext",
+// which would make the proxy able to read everything an agent sends. ADR-0017
+// declined that deliberately, so this has to be a refusal rather than
+// something that quietly works — a proxy that sometimes sees plaintext is
+// worse than one that never does, because nobody can say which it did.
+func TestTheProxyRefusesToFetchHTTPSOnTheClientsBehalf(t *testing.T) {
+	srv := newProxy(t, egress.Policy{Observe: true, Rules: []egress.Rule{{Host: "example.com"}}})
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Absolute-form request for an https resource, the way busybox wget does.
+	req.URL, _ = req.URL.Parse(srv.URL)
+	raw, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := io.WriteString(raw,
+		"GET https://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(raw), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400 — the proxy agreed to fetch an https URL itself", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "CONNECT") {
+		t.Errorf("the refusal does not tell the client what to do instead: %q", b)
+	}
+}

@@ -2,6 +2,8 @@ package egress
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +50,13 @@ type entry struct {
 }
 
 // Attribute identifies the owner of a connection from ip.
-func (r *Resolver) Attribute(ctx context.Context, ip string) Attribution {
+//
+// The error is returned rather than swallowed: an attribution that fails
+// quietly produces a log full of unattributed lines that look like traffic
+// from outside the platform, and nothing anywhere says the lookup is broken.
+// The Attribution is still usable when this returns an error — it carries
+// the address, which is evidence even when nothing else resolved.
+func (r *Resolver) Attribute(ctx context.Context, ip string) (Attribution, error) {
 	ttl := r.TTL
 	if ttl <= 0 {
 		ttl = 30 * time.Second
@@ -58,29 +66,36 @@ func (r *Resolver) Attribute(ctx context.Context, ip string) Attribution {
 	r.mu.Lock()
 	if e, ok := r.cache[ip]; ok && now.Sub(e.at) < ttl {
 		r.mu.Unlock()
-		return e.attr
+		return e.attr, nil
 	}
 	r.mu.Unlock()
 
-	attr := r.lookup(ctx, ip)
+	attr, err := r.lookup(ctx, ip)
 
 	r.mu.Lock()
 	if r.cache == nil {
 		r.cache = map[string]entry{}
 	}
+	// A failed lookup is cached only briefly — long enough to stop a
+	// hot loop hammering the API server, short enough that a transient
+	// error does not blind the audit log for a whole TTL.
+	if err != nil {
+		r.mu.Unlock()
+		return attr, err
+	}
 	r.cache[ip] = entry{at: now, attr: attr}
 	r.mu.Unlock()
-	return attr
+	return attr, nil
 }
 
-func (r *Resolver) lookup(ctx context.Context, ip string) Attribution {
+func (r *Resolver) lookup(ctx context.Context, ip string) (Attribution, error) {
 	attr := Attribution{IP: ip}
 	if r.Client == nil {
-		return attr
+		return attr, errors.New("no kubernetes client")
 	}
 	var pods corev1.PodList
 	if err := r.Client.List(ctx, &pods); err != nil {
-		return attr
+		return attr, fmt.Errorf("list pods: %w", err)
 	}
 	var pod *corev1.Pod
 	for i := range pods.Items {
@@ -91,7 +106,7 @@ func (r *Resolver) lookup(ctx context.Context, ip string) Attribution {
 		}
 	}
 	if pod == nil {
-		return attr
+		return attr, fmt.Errorf("no pod in a cell namespace has address %s (%d pods seen)", ip, len(pods.Items))
 	}
 	attr.Pod = pod.Name
 	attr.Cell = pod.Labels[ids.CellLabelKey]
@@ -100,7 +115,9 @@ func (r *Resolver) lookup(ctx context.Context, ip string) Attribution {
 	}
 	attr.Session = pod.Labels[ids.SessionLabelKey]
 	if attr.Session == "" {
-		return attr
+		// An anchor or preview pod: it belongs to the project rather than
+		// to one person, which is a real answer and not a failure.
+		return attr, nil
 	}
 	// The session is what carries the owner: a runtime pod belongs to one
 	// person, and spec.ownerUserID is the principal that pays for it and is
@@ -108,11 +125,11 @@ func (r *Resolver) lookup(ctx context.Context, ip string) Attribution {
 	var sess acv1.Session
 	if err := r.Client.Get(ctx,
 		client.ObjectKey{Namespace: r.ControlNS, Name: attr.Session}, &sess); err != nil {
-		return attr
+		return attr, fmt.Errorf("get session %s: %w", attr.Session, err)
 	}
 	attr.PrincipalID = sess.Spec.OwnerUserID
 	if attr.Cell == "" {
 		attr.Cell = sess.Spec.Cell
 	}
-	return attr
+	return attr, nil
 }
