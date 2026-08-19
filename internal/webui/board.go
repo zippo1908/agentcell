@@ -195,8 +195,15 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 
 	// Addressing the agent no longer needs a name. One board, one project,
 	// one agent — so calling it is just saying so.
+	askID := ""
 	if hasBotAlias(text) {
 		h.dispatchFromBoard(r.Context(), t.Name, t.Name, text, p)
+		// Register the ask so the asker can watch the answer form over SSE
+		// (board_ask.go). Same mention-stripping as dispatchFromBoard: the
+		// streamed task must be the task that was actually dispatched.
+		if task := strings.TrimSpace(mentionRe.ReplaceAllString(text, "")); task != "" {
+			askID = h.asks.put(askEntry{Cell: t.Name, Task: task, Asker: p.ID()})
+		}
 	}
 
 	// The rule at the top of this file, finally applied to people too: an @
@@ -208,7 +215,11 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 			"没找到这些人:@"+strings.Join(miss, " @")+" —— 只能 @ 这个项目的成员。输入 @ 会列出可选的人。",
 			t.Name)
 	}
-	writeJSON(w, 201, map[string]any{"id": post.ID})
+	resp := map[string]any{"id": post.ID}
+	if askID != "" {
+		resp["ask"] = askID
+	}
+	writeJSON(w, 201, resp)
 }
 
 // appendPost adds a post under optimistic concurrency. Two people typing at
