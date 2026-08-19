@@ -144,6 +144,38 @@ gitBroker:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 500m, memory: 256Mi}
 
+# Egress: the one way out of a cell namespace.
+#
+# Ships OBSERVING. Every destination is allowed and every one is recorded,
+# so the allowlist can be discovered from a real working week rather than
+# guessed. Turning `observe` off is the moment every outbound call starts
+# depending on the list being complete — and a wrong list does not degrade
+# gracefully, it stops model calls.
+#
+# Forcing traffic through the proxy (NetworkPolicy: egress only to it) is a
+# separate step and deliberately not automatic. See docs/adr/0017.
+egress:
+  enabled: true
+  replicas: 1
+  observe: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  # The file the proxy reads. `observe` here overrides the flag, so the mode
+  # sits next to the list it applies to.
+  policy:
+    observe: true
+    allow:
+      - {host: "api.moonshot.cn", note: "Kimi 模型 API"}
+      - {host: "api.anthropic.com", note: "Claude 模型 API"}
+      - {host: "api.openai.com", note: "OpenAI 模型 API"}
+      - {host: "github.com", note: "代码托管"}
+      - {host: "*.githubusercontent.com", note: "raw / release 资源"}
+      - {host: "registry.npmjs.org", note: "npm"}
+      - {host: "pypi.org", note: "pip"}
+      - {host: "files.pythonhosted.org", note: "pip 包体"}
+      - {host: "proxy.golang.org", note: "Go module proxy"}
+
 ingress:
   enabled: false
   className: ""

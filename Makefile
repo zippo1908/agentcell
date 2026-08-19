@@ -5,7 +5,7 @@ LDFLAGS  := -s -w \
   -X github.com/zippo1908/agentcell/internal/version.Version=$(VERSION) \
   -X github.com/zippo1908/agentcell/internal/version.Commit=$(COMMIT)
 
-BINARIES := celld git-broker cell-runtime cellctl
+BINARIES := celld git-broker cell-runtime cellctl egress-proxy
 
 .PHONY: all build $(BINARIES) test vet fmt-check lint clean web web-install
 

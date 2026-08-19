@@ -200,7 +200,7 @@ self-service linking flow. Until it exists, an existing person signing in
 through SSO becomes a new principal — correctly, since matching on email
 alone would let whoever controls the IdP take over any account here.
 
-### P1 — Egress that is denied by default and attributed
+### P1 — Egress that is denied by default and attributed 🟡 observing
 
 Every pod in a cell namespace may currently reach any host on 443. That is
 not gratuitous — model APIs, git, and package mirrors all need to go out —
@@ -218,6 +218,19 @@ worth more than a firewall — attribution back to principal, cell and session,
 so the record reads `user → session → agent → destination`. That is the audit
 trail an enterprise agent platform actually needs, and it composes with the
 identity work above rather than duplicating it.
+[ADR-0017](adr/0017-egress-is-a-named-door.md).
+
+**Shipped observing**: the proxy runs, decides by FQDN, refuses literal
+addresses outright, and records every attempt with the principal that made
+it. Two steps remain and neither is automatic, because their order is the
+difference between a control and an outage:
+
+1. Narrow `allow-egress` from "anywhere on 443" to "the proxy on 3128".
+2. Set `observe: false`.
+
+The allowlist is meant to be discovered from a real working week of audit
+lines first. Doing (1) against a list that is still incomplete stops every
+agent's model call.
 
 ### P1 — Separate the control and runtime fault domains
 
