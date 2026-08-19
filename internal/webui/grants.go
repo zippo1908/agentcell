@@ -80,7 +80,12 @@ type borrowedView struct {
 func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 	db := h.accountsDB()
 	if db == nil {
-		writeJSON(w, 200, map[string]any{"lent": []lentView{}, "borrowed": []borrowedView{}})
+		// Same shape as the normal branch. A response that drops a field on
+		// one path is how a client ends up reading undefined and showing an
+		// empty list that looks like data.
+		writeJSON(w, 200, map[string]any{
+			"lent": []lentView{}, "borrowed": []borrowedView{}, "lendable": []lendableView{},
+		})
 		return
 	}
 	p := identity.FromContext(r.Context())

@@ -186,8 +186,11 @@ export const api = {
   diff: (session: string) => req<Diff>(`/api/sessions/${session}/diff`),
 
   /** The project's knowledge base: what people put there for the agent. */
+  // A bare array, which is what the handler writes. Declaring it wrapped in
+  // an object made every library look empty: the request succeeded, the
+  // response was right, and `data.files` was undefined.
   files: (cell: string) =>
-    req<{ files: { path: string; size: number; mime: string; readable: boolean; uploadedBy?: string; created: number }[] }>(
+    req<{ path: string; size: number; mime: string; readable: boolean; uploadedBy?: string; created: number }[]>(
       `/api/cells/${cell}/files`),
   uploadFile: async (cell: string, file: File) => {
     const form = new FormData()
@@ -199,7 +202,7 @@ export const api = {
     return res.json() as Promise<{ path: string }>
   },
   deleteFile: (cell: string, path: string) =>
-    req<{ deleted: string }>(`/api/cells/${cell}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
+    req<{ ok: string }>(`/api/cells/${cell}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
       method: 'DELETE',
     }),
   fileURL: (cell: string, path: string) =>

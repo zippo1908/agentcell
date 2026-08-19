@@ -55,7 +55,7 @@ export function Knowledge({ cell }: { cell: string }) {
     }
   }
 
-  const list = files.data?.files ?? []
+  const list = files.data ?? []
 
   return (
     <div className="card">
