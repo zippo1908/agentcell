@@ -166,3 +166,18 @@ func TestARealArgvIsLeftAlone(t *testing.T) {
 		t.Fatalf("want %v unchanged, got %v", in, got)
 	}
 }
+
+// A project with no repository must still be able to open a terminal.
+//
+// The anchor was taught to tolerate a project created before its GitLab repo
+// existed; the session was not, so opening a terminal died with
+// `repository '/workspace/repo' does not exist` — a message about git for
+// somebody who never asked for git. A knowledge-base project is a legitimate
+// thing to have here.
+func TestRepoPresentIsAboutTheCheckoutNotTheConfiguration(t *testing.T) {
+	// There is no checkout in a test environment, so this is the shape the
+	// repo-less case takes: nothing on disk means no worktree to make.
+	if repoPresent("no-such-project-path") {
+		t.Fatal("a path with no checkout must not be reported as a repository")
+	}
+}

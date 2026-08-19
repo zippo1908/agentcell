@@ -472,12 +472,27 @@ func prepareWorktreeFor(wt, id, base, path string) error {
 		if err := os.MkdirAll(filepath.Dir(wt), 0o700); err != nil {
 			return err
 		}
-		repo, err := ensureUserRepoFor(int64(os.Getuid()), path)
-		if err != nil {
-			return err
-		}
-		if err := git(repo, "worktree", "add", "-b", branch, wt, "origin/"+base); err != nil {
-			return fmt.Errorf("worktree add: %w", err)
+		// A project may have no repository — created before its GitLab repo
+		// existed, or never meant to have one (a knowledge base is a
+		// legitimate project here). There is nothing to make a worktree
+		// from, so the session gets a plain directory instead of failing.
+		//
+		// Without this the anchor tolerated the missing repo and the session
+		// did not, so opening a terminal died with
+		// `repository '/workspace/repo' does not exist` — a message about
+		// git for somebody who never asked for git.
+		if !repoPresent(path) {
+			if err := os.MkdirAll(wt, 0o700); err != nil {
+				return err
+			}
+		} else {
+			repo, err := ensureUserRepoFor(int64(os.Getuid()), path)
+			if err != nil {
+				return err
+			}
+			if err := git(repo, "worktree", "add", "-b", branch, wt, "origin/"+base); err != nil {
+				return fmt.Errorf("worktree add: %w", err)
+			}
 		}
 	}
 	_ = os.MkdirAll(filepath.Join(wt, ".agentcell"), 0o755)
@@ -516,4 +531,25 @@ func holderDir() string {
 		return ids.RepoDir(repos[0].Path)
 	}
 	return "/workspace"
+}
+
+// repoPresent reports whether the anchor actually cloned something here.
+//
+// The check is the checkout on disk rather than the configured URL: a
+// project that has just been pointed at a repository has a URL before it has
+// a clone, and a session starting in that window must not fail — it gets a
+// plain directory now and a worktree the next time it starts.
+func repoPresent(path string) bool {
+	dir := ids.RepoPath
+	if path != "" {
+		dir = filepath.Join(ids.RepoPath, path)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	// A bare mirror is a directory of git internals, not a .git inside it.
+	if _, err := os.Stat(filepath.Join(dir, "HEAD")); err == nil {
+		return true
+	}
+	return false
 }
