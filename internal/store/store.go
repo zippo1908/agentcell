@@ -278,12 +278,41 @@ type User struct {
 // sets of credentials and two halves of the same person's work.
 func NormalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
+// CreateUser writes the account AND the principal it is a login for.
+//
+// One transaction, because a user with no principal is not a valid state: on
+// their next request authentication would resolve their login, find no
+// binding, and allocate a fresh id — so the account would answer to one id
+// during sign-up and a different one forever after. Doing it here rather
+// than at each call site means the two callers (redeeming an invitation and
+// bootstrapping the first administrator) cannot disagree.
+//
+// The principal adopts the id the caller computed, exactly as the backfill
+// adopts existing ones, so an account created today and an account migrated
+// from before this change are indistinguishable.
 func (db *DB) CreateUser(ctx context.Context, id, email, name, passwordHash string, admin, canCreate bool) error {
-	_, err := db.sql.ExecContext(ctx,
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO users (id, email, name, password, is_admin, can_create_projects, created_at)
 		 VALUES (?,?,?,?,?,?,?)`,
-		id, NormalizeEmail(email), name, passwordHash, boolInt(admin), boolInt(canCreate), time.Now().Unix())
-	return err
+		id, NormalizeEmail(email), name, passwordHash, boolInt(admin), boolInt(canCreate), now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO principals (id, created_at) VALUES (?,?)`, id, now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO identity_bindings (provider, subject, principal_id, created_at)
+		 VALUES ('user', ?, ?, ?)`, "user:"+NormalizeEmail(email), id, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetCanCreate grants or withdraws the right to start projects.

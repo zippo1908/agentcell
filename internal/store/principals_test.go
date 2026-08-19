@@ -244,3 +244,63 @@ func TestAllocatedIDsLookLikeAdoptedOnes(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// A brand-new account is bound at creation, not at first login.
+//
+// Otherwise the account answers to the id written into `users` while it is
+// being created, and to a freshly allocated one from its first request
+// onwards — because resolution would find no binding and issue a new id.
+// Two ids for one account, with the changeover happening invisibly between
+// the sign-up response and the next click.
+func TestANewAccountIsBoundWhenItIsCreated(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id := derivedID("user:new@tinci.com")
+	if err := db.CreateUser(ctx, id, "New@tinci.com", "新人", "h", false, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// No backfill, no restart: resolution must already find it.
+	got, err := db.PrincipalFor(ctx, "user", "user:new@tinci.com")
+	if err != nil {
+		t.Fatalf("a freshly created account has no binding: %v", err)
+	}
+	if got != id {
+		t.Fatalf("the new account was bound to %q, want the id it was created with (%q)", got, id)
+	}
+
+	// And resolving does not mint a second one.
+	again, err := db.ResolveOrCreatePrincipal(ctx, "user", "user:new@tinci.com")
+	if err != nil || again != id {
+		t.Fatalf("first login allocated a different id: %q %v", again, err)
+	}
+}
+
+// A failed account creation leaves no principal behind.
+func TestAFailedCreateLeavesNoOrphanPrincipal(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id := derivedID("user:dup@tinci.com")
+	if err := db.CreateUser(ctx, id, "dup@tinci.com", "", "h", false, false); err != nil {
+		t.Fatal(err)
+	}
+	// Same address again: the unique index refuses it.
+	other, _ := NewPrincipalID()
+	if err := db.CreateUser(ctx, other, "dup@tinci.com", "", "h", false, false); err == nil {
+		t.Fatal("a duplicate address was accepted")
+	}
+	var n int
+	if err := db.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM principals WHERE id = ?`, other).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Error("the failed create left a principal with no account behind")
+	}
+}
