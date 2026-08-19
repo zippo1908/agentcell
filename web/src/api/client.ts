@@ -99,8 +99,10 @@ export const api = {
   board: (cell: string) =>
     req<{ posts: Post[]; latest: number }>(`/api/cells/${cell}/board`),
 
+  // Mentioning the robot returns an ask id alongside the post id; the
+  // answer itself streams from GET .../board/ask/{ask} as SSE.
   postToBoard: (cell: string, body: string) =>
-    req<{ id: number }>(`/api/cells/${cell}/board`, {
+    req<{ id: number; ask?: string }>(`/api/cells/${cell}/board`, {
       method: 'POST',
       body: JSON.stringify({ body }),
     }),
