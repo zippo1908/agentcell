@@ -202,3 +202,43 @@ func previewArgv(cell *acv1.Cell) []string {
 	}
 	return cmd
 }
+
+// syncLibrary tops up a LIVE session's copy of the project's files.
+//
+// The library reaches a session through its pod environment, which is fixed
+// when the pod is created. So a file uploaded while somebody was working
+// could not reach them at all: they had to restart the session, and until
+// they knew that, the agent simply could not see the specification they had
+// just been told to read.
+//
+// The Cell carries a marker that changes whenever its files change; a
+// session records what it last received. Different means push, which happens
+// on the next reconcile — seconds, not a restart.
+//
+// Best effort, like the credential sync: failing to top up a library must
+// never fail a reconcile. The worst case is an agent working from the
+// previous version, which is exactly where it was before this existed.
+func (r *SessionReconciler) syncLibrary(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string) {
+	if r.Exec == nil || cell == nil || sess.Status.PodName == "" {
+		return
+	}
+	want := cell.Annotations[acv1.LibraryVersionAnnotation]
+	if want == "" || want == sess.Status.LibraryVersion {
+		return
+	}
+	blob := r.libraryBlob(ctx, cell.Name)
+	if blob == "" {
+		// Nothing readable in the project. Record the version anyway, or
+		// every reconcile from now on rebuilds an empty tar.
+		sess.Status.LibraryVersion = want
+		_ = r.Status().Update(ctx, sess)
+		return
+	}
+	if _, err := r.Exec(ctx, ns, sess.Status.PodName,
+		[]string{runtimeapi.RuntimeBin, "library-write", id},
+		strings.NewReader(blob)); err != nil {
+		return
+	}
+	sess.Status.LibraryVersion = want
+	_ = r.Status().Update(ctx, sess)
+}

@@ -46,11 +46,24 @@ type Accounts struct {
 }
 
 const (
-	// sessionTTL is how long a login lasts: long enough that a working day
-	// does not interrupt itself, short enough that a forgotten laptop stops
-	// being a way in within the week.
-	sessionTTL = 12 * time.Hour
-	inviteTTL  = 7 * 24 * time.Hour
+	// sessionTTL is how long a login lasts WITHOUT USE.
+	//
+	// It used to be twelve hours absolute, and the comment here said the
+	// point was that a forgotten laptop stops being a way in within the
+	// week. Absolute expiry does not achieve that — it logs everybody out
+	// every twelve hours whether they are working or not, which is a daily
+	// interruption for the people who are here and no additional protection
+	// against the laptop that is not.
+	//
+	// Sliding achieves the stated goal directly: somebody using the console
+	// is never asked again, and a session nobody has touched for a week is
+	// gone. A password change still ends every session instantly, because
+	// the signature covers the hash.
+	sessionTTL = 7 * 24 * time.Hour
+	// renewWithin re-issues a cookie once it is past halfway, so the common
+	// request does no extra work and an active session never runs out.
+	renewWithin = sessionTTL / 2
+	inviteTTL   = 7 * 24 * time.Hour
 	// minPassword is a length, not a character-class rule. Length is what
 	// actually resists guessing; the rules mostly produce Password1! and a
 	// sticky note.
@@ -150,6 +163,13 @@ func (a *Accounts) sign(body, pwHash string) string {
 // verify: expired, tampered with, or signed against a password that has
 // since changed.
 func (a *Accounts) FromCookie(ctx context.Context, value string) (identity.Principal, bool) {
+	p, ok, _ := a.fromCookie(ctx, value)
+	return p, ok
+}
+
+// fromCookie also reports when the cookie is old enough to be worth
+// re-issuing, so the caller can slide the window forward.
+func (a *Accounts) fromCookie(ctx context.Context, value string) (identity.Principal, bool, bool) {
 	// Split at the LAST dot, not the first: the body starts with an email
 	// address and every address anybody actually has contains dots, so
 	// cutting at the first one shredded the value and refused every cookie
@@ -157,25 +177,28 @@ func (a *Accounts) FromCookie(ctx context.Context, value string) (identity.Princ
 	// none, which is what makes the last dot unambiguous.
 	i := strings.LastIndexByte(value, '.')
 	if i < 0 {
-		return identity.Principal{}, false
+		return identity.Principal{}, false, false
 	}
 	body, sig := value[:i], value[i+1:]
 	email, expS, ok := strings.Cut(body, "|")
 	if !ok {
-		return identity.Principal{}, false
+		return identity.Principal{}, false, false
 	}
 	exp, err := strconv.ParseInt(expS, 10, 64)
 	if err != nil || time.Now().Unix() > exp {
-		return identity.Principal{}, false
+		return identity.Principal{}, false, false
 	}
 	u, hash, err := a.DB.UserByEmail(ctx, email)
 	if err != nil || u.Disabled {
-		return identity.Principal{}, false
+		return identity.Principal{}, false, false
 	}
 	if subtle.ConstantTimeCompare([]byte(sig), []byte(a.sign(body, hash))) != 1 {
-		return identity.Principal{}, false
+		return identity.Principal{}, false, false
 	}
-	return principalOf(u), true
+	// Past halfway: worth sliding the window forward. Before halfway the
+	// request costs nothing extra, which is most of them.
+	stale := time.Until(time.Unix(exp, 0)) < renewWithin
+	return principalOf(u), true, stale
 }
 
 // --- invitations -----------------------------------------------------

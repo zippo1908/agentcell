@@ -62,6 +62,11 @@ type PreviewSpec struct {
 	FollowSession string `json:"followSession,omitempty"`
 }
 
+// LibraryVersionAnnotation marks when a project's files last changed, so a
+// running session can be topped up instead of having to be restarted. Any
+// value that changes will do; the console writes a timestamp.
+const LibraryVersionAnnotation = "agentcell.io/library-version"
+
 // PreviewMode selects between letting the platform decide and switching the
 // preview off. There is deliberately no "on": "on" without a command is
 // exactly what auto already is.

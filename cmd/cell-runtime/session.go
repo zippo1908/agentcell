@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -205,33 +206,79 @@ func writeAccountCredential() error {
 // no lookup API to remember, and `grep -r` over the specification works
 // the way anybody would expect.
 //
-// Written fresh on every window open rather than synced: the library is
-// small, the console is the source of truth, and a stale copy of a
-// specification is worse than no copy — an agent quoting last week's
-// requirement is confidently wrong, which is the failure mode with the
-// highest cost here.
+// Written fresh rather than merged: the console is the source of truth, and
+// a stale copy of a specification is worse than no copy — an agent quoting
+// last week's requirement is confidently wrong, which is the failure mode
+// with the highest cost here.
 func writeLibrary(dir string) error {
 	blob := os.Getenv(runtimeapi.EnvLibrary)
 	if blob == "" {
 		return nil
 	}
-	dest := filepath.Join(dir, ".agentcell", "library")
-	if err := os.RemoveAll(dest); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(dest))
-	cmd.Stdin = strings.NewReader(blob)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := unpackLibrary(dir, strings.NewReader(blob)); err != nil {
 		// Not fatal. A session that cannot start because a document failed
 		// to unpack is a worse outcome than a session without the
 		// documents, and the agent can be told.
-		fmt.Printf("session: 项目文件没能展开(%v: %s)\n", err, out)
+		fmt.Printf("session: 项目文件没能展开(%v)\n", err)
 		return nil
 	}
 	fmt.Println("session: 项目文件在 .agentcell/library/")
+	return nil
+}
+
+// unpackLibrary replaces the library directory from a base64 tar.
+func unpackLibrary(dir string, blob io.Reader) error {
+	dest := filepath.Join(dir, ".agentcell", "library")
+	// Into a sibling first, then swap. Replacing in place would leave the
+	// agent reading a half-empty directory for as long as the untar takes —
+	// and an agent that reads a specification mid-write quotes half of it.
+	tmp := dest + ".incoming"
+	if err := os.RemoveAll(tmp); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(tmp))
+	cmd.Stdin = blob
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	old := dest + ".old"
+	_ = os.RemoveAll(old)
+	if err := os.Rename(dest, old); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		// Put the old one back rather than leaving the agent with nothing.
+		_ = os.Rename(old, dest)
+		return err
+	}
+	_ = os.RemoveAll(old)
+	return nil
+}
+
+// runLibraryWrite refreshes a LIVE session's library from stdin.
+//
+// The library used to travel in an environment variable, which is fixed when
+// the pod is created — so a file uploaded while somebody was working could
+// not reach them until the session was restarted. Uploading a specification
+// and then having to explain to the agent that it cannot see it yet is the
+// opposite of what the library is for.
+func runLibraryWrite(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("library-write: need <session-id>")
+	}
+	uid := int64(os.Getuid())
+	wt := ids.WorktreePath(uid, args[0])
+	if _, err := os.Stat(wt); err != nil {
+		return fmt.Errorf("library-write: no worktree for %s", args[0])
+	}
+	if err := unpackLibrary(wt, os.Stdin); err != nil {
+		return fmt.Errorf("library-write: %w", err)
+	}
+	fmt.Println("library updated")
 	return nil
 }
 

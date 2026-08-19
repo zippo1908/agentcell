@@ -654,6 +654,7 @@ func (r *SessionReconciler) observeRunning(ctx context.Context, sess *acv1.Sessi
 			if uid, uerr := r.ownerUID(ctx, sess); uerr == nil {
 				r.syncAccountCredential(ctx, sess, ns, id, uid)
 				r.servePreviewFrom(ctx, sess, cell, ns, id, uid)
+				r.syncLibrary(ctx, sess, cell, ns, id)
 			}
 		}
 		// A deadline somebody SET is still a deadline. Only an explicit

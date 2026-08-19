@@ -132,6 +132,32 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: WorkView) => voi
   const toast = useToast()
   const [text, setText] = useState('')
   const [view, setViewRaw] = useState<WorkView>('terminal')
+  // Dropping a file on the terminal puts it in the project's library, which
+  // is the directory the agent already reads. Uploading used to mean leaving
+  // the terminal, finding the right tab, and coming back — and then the file
+  // still could not be seen until the session restarted.
+  const [dropping, setDropping] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function takeFiles(list: FileList | null) {
+    if (!list?.length) return
+    setUploading(true)
+    try {
+      for (const f of Array.from(list)) await api.uploadFile(cell, f)
+      qc.invalidateQueries({ queryKey: ['files', cell] })
+      toast.success(
+        list.length > 1
+          ? `已上传 ${list.length} 个文件,agent 几秒后就能读到`
+          : `已上传 ${list[0].name},agent 几秒后就能读到`,
+      )
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
   const setView = (v: WorkView) => {
     setViewRaw(v)
     onView(v)
@@ -227,9 +253,45 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: WorkView) => voi
         <button className={`ws-tab ${view === 'tokens' ? 'on' : ''}`} onClick={() => setView('tokens')}>
           令牌
         </button>
+        <span className="spacer" />
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => takeFiles(e.target.files)}
+        />
+        <button className="ws-tab" disabled={uploading} onClick={() => fileRef.current?.click()}>
+          {uploading ? '上传中…' : '＋ 文件'}
+        </button>
       </div>
 
-      <div className="ws-term" hidden={view !== 'terminal'}>
+      <div
+        className={`ws-term ${dropping ? 'dropping' : ''}`}
+        hidden={view !== 'terminal'}
+        onDragOver={(e) => {
+          // Both are required, or the browser navigates to the file instead
+          // of letting the page have it.
+          e.preventDefault()
+          setDropping(true)
+        }}
+        onDragLeave={(e) => {
+          // Only when the pointer actually left the pane: dragging over a
+          // child fires dragleave for the parent and the hint flickers.
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false)
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDropping(false)
+          takeFiles(e.dataTransfer.files)
+        }}
+      >
+        {dropping && (
+          <div className="ws-drop">
+            <p>松手就传进这个项目的知识库</p>
+            <p className="hint">agent 在 .agentcell/library/ 里直接读得到,不用重开会话</p>
+          </div>
+        )}
         {live ? (
           <TerminalDeck session={live.name} />
         ) : (

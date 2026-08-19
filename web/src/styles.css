@@ -762,6 +762,25 @@ body.resizing { cursor: col-resize; user-select: none; }
 .ws-term .term-slot[hidden] { display: none; }
 .ws-gutter { min-width: 0; }
 
+/* Dropping a file onto the terminal. The pane keeps its layout — the hint
+   sits on top rather than replacing the terminal, so letting go over the
+   wrong place cannot lose what is on screen. */
+.ws-term { position: relative; }
+.ws-term.dropping::after {
+  content: '';
+  position: absolute; inset: 0; z-index: 4;
+  border: 2px dashed var(--accent); border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, .82);
+  pointer-events: none;
+}
+.ws-drop {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; text-align: center; pointer-events: none;
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+.ws-drop .hint { margin: 0; font-weight: 400; }
+
 /* Projects in the navigation. */
 .nav-projects-label { display: flex; align-items: center; justify-content: space-between; }
 .nav-projects { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }

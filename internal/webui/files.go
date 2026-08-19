@@ -11,9 +11,11 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
 	"github.com/zippo1908/agentcell/internal/identity"
@@ -138,6 +140,7 @@ func (h *Handler) uploadFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
+	h.markLibraryChanged(r, cell)
 	writeJSON(w, 200, map[string]any{
 		"path": dest, "size": len(body), "readable": text != "",
 		"message": readableNote(text != ""),
@@ -252,6 +255,7 @@ func (h *Handler) deleteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, errNotFound)
 		return
 	}
+	h.markLibraryChanged(r, cell)
 	writeJSON(w, 200, map[string]string{"ok": "deleted"})
 }
 
@@ -388,4 +392,29 @@ func xmlText(data []byte) string {
 		}
 	}
 	return strings.TrimSpace(out.String())
+}
+
+// markLibraryChanged tells the control plane a project's files moved.
+//
+// A running session holds the library it was given when its pod was created,
+// so without this an upload reaches nobody until they restart — and nothing
+// says so. The reconciler compares this marker with what each session last
+// received and tops up the ones that are behind.
+//
+// Best effort: the upload has already succeeded and the bytes are stored.
+// Failing the request now would tell somebody their file did not arrive when
+// it did.
+func (h *Handler) markLibraryChanged(r *http.Request, cell *acv1.Cell) {
+	_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var live acv1.Cell
+		if err := h.Client.Get(r.Context(),
+			types.NamespacedName{Namespace: h.Namespace, Name: cell.Name}, &live); err != nil {
+			return err
+		}
+		if live.Annotations == nil {
+			live.Annotations = map[string]string{}
+		}
+		live.Annotations[acv1.LibraryVersionAnnotation] = strconv.FormatInt(time.Now().UnixNano(), 10)
+		return h.Client.Update(r.Context(), &live)
+	})
 }
