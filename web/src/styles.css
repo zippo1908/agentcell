@@ -819,6 +819,15 @@ body.resizing { cursor: col-resize; user-select: none; }
 .ws-tab:disabled { opacity: .45; cursor: default; }
 .ws-tabs .small { margin-left: auto; }
 
+/* The project's own panels, where the preview tab used to be. They hold
+   cards and tables rather than one full-bleed frame, so this scrolls on its
+   own instead of pushing the workspace layout around. */
+.ws-panel {
+  flex: 1; min-height: 0; overflow-y: auto;
+  margin-top: 10px; padding-right: 4px;
+}
+.ws-panel > .card:first-child { margin-top: 0; }
+
 .ws-preview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ws-preview iframe {
   flex: 1; min-height: 0; width: 100%;

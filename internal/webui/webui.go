@@ -33,6 +33,11 @@ type Handler struct {
 	Client    client.Client
 	Namespace string // control namespace holding Cell/Session CRs
 	Registry  *access.Registry
+	// Devboxes is the image catalogue the create-a-project form offers,
+	// resolved once at startup so an operator's overlay actually reaches it.
+	// It used to be re-read from the built-in table on every request, which
+	// meant an overlay directory could never change what people saw.
+	Devboxes []access.Devbox
 	// Forge serves diffs through the broker (ADR-0006); nil/disabled makes
 	// the diff endpoint report 501 and review purely informational.
 	Forge *forge.Client

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { Branch } from '../api/types'
 import { TerminalDeck } from '../components/TerminalDeck'
+import { Knowledge, Members, ProjectTokens } from '../components/ProjectPanels'
 import { SessionControls } from '../components/SessionControls'
 import { Splitter, usePaneWidth } from '../components/Splitter'
 import { Badge, Spinner, useToast } from '../ui/primitives'
@@ -31,7 +32,9 @@ export function WorkspacePage() {
   const [showTree, setShowTree] = useState(true)
   // Which pane the middle is showing. The parent needs to know because a
   // preview takes the branch column's width as well.
-  const [mainView, setMainView] = useState<'terminal' | 'preview'>('terminal')
+  // Which pane the workspace is showing. The preview is no longer one of
+  // them — it opens in its own window from the header.
+  const [mainView, setMainView] = useState<WorkView>('terminal')
   const root = useRef<HTMLDivElement>(null)
   // Both side columns are draggable and both remember their width. The
   // middle takes whatever is left, because the middle is the terminal.
@@ -122,25 +125,16 @@ export function WorkspacePage() {
 }
 
 /** The middle column: this project's session, its terminal, and one input. */
-function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'preview') => void }) {
+type WorkView = 'terminal' | 'knowledge' | 'members' | 'tokens'
+
+function CellWork({ cell, onView }: { cell: string; onView: (v: WorkView) => void }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [text, setText] = useState('')
-  const [view, setViewRaw] = useState<'terminal' | 'preview'>('terminal')
-  // The preview URL is taken ONCE and then left alone.
-  //
-  // Its ticket is single-use by design, and the project query refetches
-  // every few seconds with a freshly minted one — so binding the iframe to
-  // the live value re-pointed it constantly, and any reload that reused an
-  // already-spent ticket came back "preview session required". One ticket,
-  // exchanged for the preview cookie on first load, is the whole flow.
-  const [previewSrc, setPreviewSrc] = useState('')
-  const setView = (v: 'terminal' | 'preview') => {
+  const [view, setViewRaw] = useState<WorkView>('terminal')
+  const setView = (v: WorkView) => {
     setViewRaw(v)
     onView(v)
-    if (v === 'preview' && !previewSrc && detail.data?.cell?.previewURL) {
-      setPreviewSrc(detail.data.cell.previewURL)
-    }
   }
 
   const detail = useQuery({
@@ -154,11 +148,10 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
     (s) => s.phase === 'Running' || s.phase === 'Queued' || s.phase === 'Dormant',
   )
 
-  // Opening a project means going to your terminal in it. Waiting for
-  // somebody to think of a first instruction before anything exists is what
-  // made this screen open onto nothing.
+  // Switching project lands you in its terminal, not wherever you happened
+  // to be looking in the last one.
   useEffect(() => {
-    setPreviewSrc('')
+    setViewRaw('terminal')
   }, [cell])
 
   const opening = useRef('')
@@ -222,19 +215,18 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
         <button className={`ws-tab ${view === 'terminal' ? 'on' : ''}`} onClick={() => setView('terminal')}>
           终端
         </button>
-        <button
-          className={`ws-tab ${view === 'preview' ? 'on' : ''}`}
-          onClick={() => setView('preview')}
-          disabled={!detail.data?.cell?.previewURL}
-          title={detail.data?.cell?.previewURL ? '看这个项目现在长什么样' : '这个项目还没配预览'}
-        >
-          预览
+        {/* The preview left this strip: it is better as a whole window than
+            as a pane beside a terminal, and the button for it is in the header
+            above. What takes its place is what a project actually owns. */}
+        <button className={`ws-tab ${view === 'knowledge' ? 'on' : ''}`} onClick={() => setView('knowledge')}>
+          知识库
         </button>
-        {view === 'preview' && detail.data?.cell?.previewURL && (
-          <a className="small" href={detail.data.cell.previewURL} target="_blank" rel="noreferrer">
-            在新标签页打开 ↗
-          </a>
-        )}
+        <button className={`ws-tab ${view === 'members' ? 'on' : ''}`} onClick={() => setView('members')}>
+          成员
+        </button>
+        <button className={`ws-tab ${view === 'tokens' ? 'on' : ''}`} onClick={() => setView('tokens')}>
+          令牌
+        </button>
       </div>
 
       <div className="ws-term" hidden={view !== 'terminal'}>
@@ -248,25 +240,17 @@ function CellWork({ cell, onView }: { cell: string; onView: (v: 'terminal' | 'pr
         )}
       </div>
 
-      {view === 'preview' && (
-        <div className="ws-preview">
-          {previewSrc ? (
-            // A different ORIGIN, deliberately (ADR-0007): the page in here
-            // is agent-written and unreviewed, so the browser must keep it
-            // away from the console's session. An iframe across origins is
-            // exactly that boundary — it can draw, and it can reach nothing
-            // of ours.
-            <iframe
-              title="预览"
-              src={previewSrc}
-              referrerPolicy="no-referrer"
+      {view !== 'terminal' && (
+        <div className="ws-panel">
+          {view === 'knowledge' && <Knowledge cell={cell} />}
+          {view === 'members' && detail.data?.cell && (
+            <Members
+              cell={cell}
+              open={detail.data.cell.access === 'open'}
+              members={detail.data.cell.members ?? []}
             />
-          ) : (
-            <div className="ws-empty">
-              <p>这个项目还没配预览。</p>
-              <p className="hint">在项目设置里给它一条启动命令,agent 写完就能在这里看到。</p>
-            </div>
           )}
+          {view === 'tokens' && detail.data?.cell && <ProjectTokens cell={detail.data.cell} />}
         </div>
       )}
 

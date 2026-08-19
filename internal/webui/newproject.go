@@ -48,9 +48,9 @@ type newProjectOptions struct {
 func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
 	out := newProjectOptions{GitCredentials: []string{}, PlacementClasses: []placementClassView{}}
 
-	if d, err := access.LoadDevboxes(); err == nil {
-		out.Devboxes = d
-	}
+	// From the handler, not from the built-in table: whatever the operator
+	// overlaid at startup is what gets offered here.
+	out.Devboxes = h.Devboxes
 	out.Runners, out.Providers = h.Registry.Catalogue()
 	// The deployment's default pairing, offered preselected. It is a
 	// deployment-wide choice rather than a hardcoded one: a team that has a
