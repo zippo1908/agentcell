@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/zippo1908/agentcell/internal/identity"
@@ -88,34 +89,93 @@ func TestAGrantForADeletedKeyIsNotOffered(t *testing.T) {
 	}
 }
 
-// A connected OAuth account must not be lendable.
+// A connected OAuth account is lendable, but never by accident.
 //
 // Its refresh token rotates: using it mints a new one and invalidates the
-// old, so two runtimes holding the same account kill each other's login.
-// That is the bug internal/controller/account_sync.go exists to stop, and
-// lending would reintroduce it deliberately.
-func TestAConnectedAccountCannotBeLent(t *testing.T) {
+// old, so the lender and the borrower can knock each other offline. Sharing
+// one team account is a thing people genuinely want, so this is allowed —
+// but only from a caller that says it knew.
+func TestLendingAConnectedAccountNeedsSayingSo(t *testing.T) {
 	oauth := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Namespace: ns, Name: "alice-kimi",
 		Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: alice.ID()},
 	}}
+	oauth.Data = map[string][]byte{kimiCredKey: []byte("packed-credential")}
 	h := lendingFixture(t, oauth)
 	if err := h.Auth.Accounts.DB.CreateUser(t.Context(), bob.ID(), "bob@tinci.com", "Bob", "h", false, false); err != nil {
 		t.Fatal(err)
 	}
 
-	body := `{"credential":"alice-kimi","email":"bob@tinci.com"}`
-	req := asUser(httptest.NewRequest(http.MethodPost, "/api/me/grants", strings.NewReader(body)), alice)
+	post := func(body string) *httptest.ResponseRecorder {
+		req := asUser(httptest.NewRequest(http.MethodPost, "/api/me/grants", strings.NewReader(body)), alice)
+		rec := httptest.NewRecorder()
+		h.createGrant(rec, req)
+		return rec
+	}
+
+	rec := post(`{"credential":"alice-kimi","email":"bob@tinci.com"}`)
+	if rec.Code != 409 {
+		t.Fatalf("lending a rotating account without acknowledging = %d, want 409: %s", rec.Code, rec.Body)
+	}
+	// The refusal has to explain, not just refuse: somebody asking this is
+	// trying to solve a real problem and needs to know what they are taking on.
+	if !strings.Contains(rec.Body.String(), "轮换") {
+		t.Errorf("the refusal does not say why: %s", rec.Body)
+	}
+
+	if rec = post(`{"credential":"alice-kimi","email":"bob@tinci.com","acknowledge":true}`); rec.Code != 201 {
+		t.Fatalf("acknowledged lend = %d, want 201: %s", rec.Code, rec.Body)
+	}
+
+	// The borrower needs the account under THEIR OWN name: the session
+	// controller looks for a Secret named after the session's owner, so a
+	// grant row alone would have lent nothing at all.
+	var got corev1.Secret
+	// The id an account has is derived from its address — Redeem does the
+	// same — so the borrower's Secret is named after that, not after whatever
+	// principal happened to be logged in.
+	name := strings.TrimPrefix(idOf("bob@tinci.com"), "u-") + KimiCredentialSuffix
+	if err := h.Client.Get(t.Context(),
+		types.NamespacedName{Namespace: ns, Name: name}, &got); err != nil {
+		t.Fatalf("no account under the borrower's name: %v", err)
+	}
+	if string(got.Data[kimiCredKey]) != "packed-credential" {
+		t.Errorf("the borrower's copy is not the lender's credential: %q", got.Data[kimiCredKey])
+	}
+	if got.Labels["agentcell.io/lent-by"] != alice.ID() {
+		t.Errorf("a borrowed login must record who lent it, got %q", got.Labels["agentcell.io/lent-by"])
+	}
+}
+
+// Somebody's own connected account must never be overwritten by a borrowed
+// one: they would be logged out of their own login by a colleague's gift.
+func TestLendingDoesNotClobberSomebodyElsesOwnLogin(t *testing.T) {
+	lender := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: "alice-kimi",
+		Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: alice.ID()},
+	}}
+	lender.Data = map[string][]byte{kimiCredKey: []byte("alice-credential")}
+	own := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: strings.TrimPrefix(bob.ID(), "u-") + KimiCredentialSuffix,
+		Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: bob.ID()},
+	}}
+	own.Data = map[string][]byte{kimiCredKey: []byte("bobs-own-credential")}
+	h := lendingFixture(t, lender, own)
+	if err := h.Auth.Accounts.DB.CreateUser(t.Context(), bob.ID(), "bob@tinci.com", "Bob", "h", false, false); err != nil {
+		t.Fatal(err)
+	}
+
+	req := asUser(httptest.NewRequest(http.MethodPost, "/api/me/grants",
+		strings.NewReader(`{"credential":"alice-kimi","email":"bob@tinci.com","acknowledge":true}`)), alice)
 	rec := httptest.NewRecorder()
 	h.createGrant(rec, req)
 
-	if rec.Code != 400 {
-		t.Fatalf("lending a rotating account = %d, want a refusal: %s", rec.Code, rec.Body)
+	var got corev1.Secret
+	if err := h.Client.Get(t.Context(), types.NamespacedName{Namespace: ns, Name: own.Name}, &got); err != nil {
+		t.Fatal(err)
 	}
-	// The refusal has to explain, not just refuse: somebody asking this is
-	// trying to solve a real problem and needs to be pointed somewhere.
-	if !strings.Contains(rec.Body.String(), "轮换") {
-		t.Errorf("the refusal does not say why: %s", rec.Body)
+	if string(got.Data[kimiCredKey]) != "bobs-own-credential" {
+		t.Fatal("Bob's own login was replaced by a borrowed one")
 	}
 }
 

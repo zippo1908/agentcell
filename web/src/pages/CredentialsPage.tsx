@@ -351,15 +351,20 @@ function Lending() {
   const [credential, setCredential] = useState('')
   const [email, setEmail] = useState('')
 
-  const { data: creds } = useQuery({ queryKey: ['credentials'], queryFn: api.credentials })
   const grants = useQuery({ queryKey: ['grants'], queryFn: api.grants })
+  const mine = grants.data?.lendable ?? []
+  const chosen = mine.find((c) => c.name === credential) ?? mine[0]
+  // Sharing a rotating login is a different decision from lending a static
+  // key, so it gets a different button and a sentence rather than a silent
+  // success.
+  const isAccount = chosen?.kind === 'kimi-oauth'
 
   const done = () => {
     qc.invalidateQueries({ queryKey: ['grants'] })
     qc.invalidateQueries({ queryKey: ['credentials'] })
   }
   const lend = useMutation({
-    mutationFn: () => api.lendCredential(credential || (creds ?? [])[0]?.name || '', email.trim()),
+    mutationFn: () => api.lendCredential(chosen?.name ?? '', email.trim(), isAccount),
     onSuccess: () => {
       setEmail('')
       toast.success('借出了。对方现在可以派工了')
@@ -376,7 +381,6 @@ function Lending() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const mine = creds ?? []
   const lent = grants.data?.lent ?? []
   const borrowed = grants.data?.borrowed ?? []
 
@@ -437,10 +441,10 @@ function Lending() {
         <p className="hint">你还没有可以借出去的 key。上面先加一把。</p>
       ) : (
         <div className="row" style={{ marginTop: 12, flexWrap: 'wrap' }}>
-          <select value={credential || mine[0].name} onChange={(e) => setCredential(e.target.value)}>
+          <select value={chosen?.name ?? ''} onChange={(e) => setCredential(e.target.value)}>
             {mine.map((c) => (
               <option key={c.name} value={c.name}>
-                {c.name} {c.hint}
+                {c.kind === 'kimi-oauth' ? `${c.name}(已连接的账号)` : `${c.name} ${c.hint ?? ''}`}
               </option>
             ))}
           </select>
@@ -451,18 +455,30 @@ function Lending() {
             onChange={(e) => setEmail(e.target.value)}
             style={{ minWidth: 240 }}
           />
-          <button disabled={!email.trim() || lend.isPending} onClick={() => lend.mutate()}>
-            {lend.isPending ? '借出中…' : '借出'}
+          <button
+            className={isAccount ? 'danger' : ''}
+            disabled={!email.trim() || lend.isPending}
+            onClick={() => lend.mutate()}
+          >
+            {lend.isPending ? '借出中…' : isAccount ? '仍然共享这个账号' : '借出'}
           </button>
         </div>
       )}
       {/* Said here rather than only in the server's refusal: somebody looking
           for a way to share their Kimi login should find the answer before
           they try it, not after. */}
-      <p className="hint">
-        「已连接的账号」借不了 —— 它的刷新令牌是轮换的,两个人同时用会互相把对方踢下线。
-        要共享就借一把 API key,或者让对方自己连一次账号(三十秒)。
-      </p>
+      {isAccount ? (
+        <p className="hint" style={{ color: 'var(--red, #c0392b)' }}>
+          <b>这是一个已连接的账号,不是静态 key。</b>它的刷新令牌是<b>轮换</b>的:一边刷新,
+          另一边那份就作废了 —— 你们可能互相把对方踢下线,而被踢的一方只会看到「请重新登录」。
+          借出去的那份会记上是谁借的,真出问题时能一眼看出原因。
+          想稳一点就借一把 API key,或者让对方自己连一次账号(三十秒)。
+        </p>
+      ) : (
+        <p className="hint">
+          静态 API key 每次都是同一个字符串,借出去不会互相影响 —— 这才是它能被借的原因。
+        </p>
+      )}
     </div>
   )
 }

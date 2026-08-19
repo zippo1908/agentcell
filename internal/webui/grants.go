@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -26,12 +28,17 @@ import (
 // So a key can be lent. The `grants` table has existed since the first
 // release with full CRUD and no callers; this is what it was for.
 //
-// What is deliberately NOT lendable is a connected OAuth account. Its refresh
-// token ROTATES: using it mints a new one and invalidates the old, so two
-// runtimes holding the same account kill each other's login — which is the
-// exact bug internal/controller/account_sync.go exists to stop, and lending
-// would reintroduce it on purpose. A static API key has no such problem: it
-// is the same string every time, which is what makes it lendable at all.
+// A static API key is the easy case: the same string every time, so a grant
+// row is all it takes and a borrower spends it exactly as an owner would.
+//
+// A connected OAuth account is the hard one, and it is lendable only on
+// purpose. Its refresh token ROTATES — using it mints a new one and
+// invalidates the old — so two runtimes holding the same account can knock
+// each other out, which is the failure internal/controller/account_sync.go
+// exists to contain. It is allowed because sharing one team account is a
+// thing people genuinely want; it requires an explicit acknowledgement, and
+// the copy is labelled with who lent it, so that when somebody IS logged out
+// the reason is readable from the object instead of guessed at.
 
 type grantInput struct {
 	// Credential is the Secret's name — which key, not which vendor.
@@ -40,6 +47,10 @@ type grantInput struct {
 	// what scripts written before accounts existed already send.
 	Email  string `json:"email"`
 	UserID string `json:"userID"`
+	// Acknowledge is required to lend a connected account, whose refresh
+	// token rotates. It exists so that sharing something not designed to be
+	// shared is a decision somebody made, not one they fell into.
+	Acknowledge bool `json:"acknowledge"`
 }
 
 type lentView struct {
@@ -103,7 +114,52 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(lent, func(i, j int) bool { return lent[i].Credential < lent[j].Credential })
 	sort.Slice(borrowed, func(i, j int) bool { return borrowed[i].Credential < borrowed[j].Credential })
-	writeJSON(w, 200, map[string]any{"lent": lent, "borrowed": borrowed})
+	writeJSON(w, 200, map[string]any{
+		"lent": lent, "borrowed": borrowed, "lendable": h.lendable(r, p),
+	})
+}
+
+type lendableView struct {
+	Name string `json:"name"`
+	// Kind is "model" or "kimi-oauth". The UI needs it because lending the
+	// second kind is a different decision, not a different button.
+	Kind string `json:"kind"`
+	Hint string `json:"hint,omitempty"`
+}
+
+// lendable lists what this person could hand to a colleague.
+//
+// The connected account is included rather than hidden. Hiding it would make
+// the commonest question — "can I just share my login?" — unanswerable from
+// the page, and people would go and copy the Secret by hand instead, which
+// is the same hazard with none of the warning.
+func (h *Handler) lendable(r *http.Request, p identity.Principal) []lendableView {
+	var list corev1.SecretList
+	out := []lendableView{}
+	if err := h.Client.List(r.Context(), &list, client.InNamespace(h.Namespace)); err != nil {
+		return out
+	}
+	for i := range list.Items {
+		s := &list.Items[i]
+		kind := s.Labels[credLabel]
+		if kind != credKindModel && kind != credKindKimi {
+			continue
+		}
+		if !p.Owns(s.Labels[OwnerLabel]) {
+			continue
+		}
+		// A borrowed account is not yours to lend on.
+		if s.Labels["agentcell.io/lent-by"] != "" {
+			continue
+		}
+		v := lendableView{Name: s.Name, Kind: kind}
+		if kind == credKindModel {
+			v.Hint = hint(s.Data["key"])
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // grantsToMe returns the credentials lent to this caller, or nothing on a
@@ -150,13 +206,23 @@ func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, errNotFound)
 		return
 	}
-	if sec.Labels[credLabel] != credKindModel {
-		// The connected-account case, said in full rather than as a refusal:
-		// somebody asking this is trying to solve a real problem.
-		writeErr(w, 400, fmt.Errorf(
-			"已连接的账号借不了。它的刷新令牌是轮换的——一边用掉,另一边就失效了,"+
-				"两个人同时跑会互相把对方踢下线。要借的话借一把 API key,"+
-				"或者让对方自己连一次账号(三十秒)。"))
+	kind := sec.Labels[credLabel]
+	if kind != credKindModel && kind != credKindKimi {
+		writeErr(w, 404, errNotFound)
+		return
+	}
+	// Lending a connected account is allowed but never by accident.
+	//
+	// Its refresh token rotates — using it mints a new one and invalidates
+	// the old — so the lender and the borrower are sharing something that is
+	// not designed to be shared, and either may find themselves logged out
+	// with no explanation they could have arrived at alone. The caller has to
+	// say it knew that.
+	if kind == credKindKimi && !in.Acknowledge {
+		writeErr(w, 409, fmt.Errorf(
+			"这是一个已连接的账号,不是静态 key。它的刷新令牌是轮换的:"+
+				"一边刷新,另一边那份就作废了,你们可能互相把对方踢下线。"+
+				"确认要借的话再来一次并带上 acknowledge。"))
 		return
 	}
 
@@ -175,7 +241,17 @@ func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"credential": in.Credential, "grantee": to})
+	// A model key is chosen per dispatch, so a grant row is enough. A
+	// connected account is not chosen at all — the session controller looks
+	// for a Secret named after the SESSION'S OWNER — so for the borrower to
+	// have one, they need their own copy under their own name.
+	if kind == credKindKimi {
+		if err := h.projectAccount(r, sec, to, p.ID()); err != nil {
+			writeErr(w, 500, fmt.Errorf("借出记下了,但没能把账号交到对方名下:%w", err))
+			return
+		}
+	}
+	writeJSON(w, 201, map[string]any{"credential": in.Credential, "grantee": to, "kind": kind})
 }
 
 func (h *Handler) deleteGrant(w http.ResponseWriter, r *http.Request) {
@@ -281,4 +357,46 @@ func (h *Handler) spendableCredentials(ctx context.Context, p identity.Principal
 		out = append(out, g.Credential)
 	}
 	return out
+}
+
+// projectAccount copies a connected account under the borrower's own name,
+// which is where the session controller looks for it.
+//
+// It is a COPY, and that is the whole hazard: the provider rotates the
+// refresh token, so the two copies drift apart the moment either side
+// refreshes, and the loser is told only "re-login required". The copy is
+// labelled with who lent it so that when this happens, the reason is
+// readable from the object rather than reconstructed from memory.
+func (h *Handler) projectAccount(r *http.Request, from corev1.Secret, toUserID, lender string) error {
+	name := strings.TrimPrefix(toUserID, "u-") + KimiCredentialSuffix
+	var existing corev1.Secret
+	err := h.Client.Get(r.Context(),
+		types.NamespacedName{Namespace: h.Namespace, Name: name}, &existing)
+	labels := map[string]string{
+		credLabel:  credKindKimi,
+		OwnerLabel: toUserID,
+		// Not decoration: a borrowed login that stops working is diagnosed by
+		// knowing it was borrowed.
+		"agentcell.io/lent-by": lender,
+	}
+	if apierrors.IsNotFound(err) {
+		return h.Client.Create(r.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: h.Namespace, Name: name, Labels: labels},
+			Data:       map[string][]byte{kimiCredKey: from.Data[kimiCredKey]},
+		})
+	}
+	if err != nil {
+		return err
+	}
+	// Never overwrite somebody's OWN connected account with a borrowed one:
+	// they would be logged out of their own login by a colleague's gift.
+	if existing.Labels["agentcell.io/lent-by"] == "" {
+		return fmt.Errorf("对方已经自己连了账号,不覆盖")
+	}
+	existing.Labels = labels
+	if existing.Data == nil {
+		existing.Data = map[string][]byte{}
+	}
+	existing.Data[kimiCredKey] = from.Data[kimiCredKey]
+	return h.Client.Update(r.Context(), &existing)
 }

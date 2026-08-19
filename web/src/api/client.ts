@@ -126,11 +126,12 @@ export const api = {
     req<{
       lent: { credential: string; email: string; name?: string; unknown?: boolean }[]
       borrowed: { credential: string; from: string; hint?: string }[]
+      lendable: { name: string; kind: string; hint?: string }[]
     }>('/api/me/grants'),
-  lendCredential: (credential: string, email: string) =>
-    req<{ credential: string }>('/api/me/grants', {
+  lendCredential: (credential: string, email: string, acknowledge = false) =>
+    req<{ credential: string; kind?: string }>('/api/me/grants', {
       method: 'POST',
-      body: JSON.stringify({ credential, email }),
+      body: JSON.stringify({ credential, email, acknowledge }),
     }),
   revokeGrant: (credential: string, who: string) =>
     req<{ revoked: string }>(
