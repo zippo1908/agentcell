@@ -236,6 +236,10 @@ above, not the other way round.
 
 ### P3 — Role / Permission / RoleBinding as data
 
+> How roles work *today* — how they are administered and how they reach an
+> action inside a project — is documented with diagrams in
+> [AUTHORIZATION.md](AUTHORIZATION.md).
+
 The authorization control plane proper: policy that changes without a
 deploy, a scope hierarchy, and a global view of who holds what. The seams
 (`can`, `canPlatform`, `Decision`) exist for this and no caller changes when
