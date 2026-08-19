@@ -74,9 +74,11 @@ func (h *Handler) newProjectOptions(w http.ResponseWriter, r *http.Request) {
 			if sec.Type != corev1.SecretTypeBasicAuth {
 				continue
 			}
-			// An unowned credential is the platform's own, offered to
-			// everyone; anything with an owner is offered only to them.
-			if owner := sec.Labels[OwnerLabel]; owner != "" && !p.Owns(owner) {
+			// The same predicate the create path enforces. Listing and
+			// using used to be two rules, and a form that offered something
+			// the API then refused is how somebody ends up unable to create
+			// a project by following the form exactly.
+			if !mayUseCredentialSecret(p, sec) {
 				continue
 			}
 			out.GitCredentials = append(out.GitCredentials, sec.Name)

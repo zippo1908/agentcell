@@ -104,8 +104,9 @@ func visible(ctx context.Context, s *acv1.Session) bool {
 // have it injected into a session they control — which is a credential theft
 // primitive, not merely an authorization gap.
 //
-// An unlabelled Secret is treated as belonging to the operator: it predates
-// ownership, and only the static-token principal may use it.
+// An unlabelled MODEL key is treated as belonging to the operator: it
+// predates ownership, and spending somebody's budget is not something to
+// infer. An unlabelled FORGE credential is the opposite — see mayUseCredential.
 func (h *Handler) checkCredentialOwnership(r *http.Request, secretName string) error {
 	if secretName == "" {
 		return nil
@@ -115,8 +116,36 @@ func (h *Handler) checkCredentialOwnership(r *http.Request, secretName string) e
 		types.NamespacedName{Namespace: h.Namespace, Name: secretName}, &sec); err != nil {
 		return errNotFound
 	}
-	if !identity.FromContext(r.Context()).Owns(sec.Labels[OwnerLabel]) {
+	if !mayUseCredentialSecret(identity.FromContext(r.Context()), &sec) {
 		return errNotFound
 	}
 	return nil
+}
+
+// mayUseCredentialSecret is the ONE rule for whether somebody may point
+// something at a credential.
+//
+// It exists because there were two, and they disagreed. The create-a-project
+// form offers every unowned basic-auth Secret to everybody — an operator
+// creating a shared forge credential is exactly what that is for — while the
+// check on the way in treated unowned as "operator only". So the form
+// preselected the platform's own git credential (it was the only one the
+// person could see), and creating the project answered 404 "not found",
+// naming nothing. Somebody following the form exactly could not create a
+// project at all.
+//
+// The rules by kind, stated once:
+//
+//   - A FORGE credential with no owner is the platform's, offered to
+//     everyone. An operator put it there deliberately and it is scoped to
+//     its own repository.
+//   - A MODEL key with no owner stays operator-only. It is somebody's
+//     budget, and "unlabelled" is not consent to spend it.
+//   - Anything WITH an owner is that person's, whatever kind it is.
+func mayUseCredentialSecret(p identity.Principal, sec *corev1.Secret) bool {
+	owner := sec.Labels[OwnerLabel]
+	if owner == "" && sec.Type == corev1.SecretTypeBasicAuth {
+		return true
+	}
+	return p.Owns(owner)
 }

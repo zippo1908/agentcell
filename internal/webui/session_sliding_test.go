@@ -2,6 +2,8 @@ package webui
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -107,5 +109,40 @@ func TestADisabledAccountCannotRenew(t *testing.T) {
 
 	if _, ok, _ := a.fromCookie(t.Context(), cookie); ok {
 		t.Fatal("a disabled account kept a live session")
+	}
+}
+
+// The cookie must outlive the browser window, or "remembered" means
+// "remembered until you close the tab".
+func TestTheLoginCookieIsPersistentAndNotSecureOverPlainHTTP(t *testing.T) {
+	a := fixtureWithUser(t, "boss@tinci.com")
+	value, err := a.Mint(t.Context(), "boss@tinci.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://console.example/login", nil)
+
+	auth := &Authenticator{Accounts: a}
+	auth.setSessionCookie(rec, req, value, int(sessionTTL.Seconds()))
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("want one cookie, got %v", cookies)
+	}
+	c := cookies[0]
+	if c.MaxAge != int(sessionTTL.Seconds()) {
+		t.Errorf("Max-Age = %d, want %d — a session cookie dies with the browser", c.MaxAge, int(sessionTTL.Seconds()))
+	}
+	if c.MaxAge < 24*3600 {
+		t.Errorf("Max-Age = %d: that is not being remembered", c.MaxAge)
+	}
+	// Over plain HTTP the Secure flag would make the browser drop the cookie
+	// silently — the login would appear to work and never stick.
+	if c.Secure {
+		t.Error("a Secure cookie over plain HTTP is discarded by the browser")
+	}
+	if !c.HttpOnly {
+		t.Error("the session cookie must not be readable by scripts")
 	}
 }
