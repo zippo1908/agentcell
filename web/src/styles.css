@@ -616,7 +616,7 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 
 @media (prefers-reduced-motion: reduce) {
   .card, .toast, .modal, .modal-mask { animation: none; }
-  .badge.amber .dot { animation: none; }
+  .badge.amber .dot, .stream-caret { animation: none; }
 }
 
 /* ── The board ────────────────────────────────────────────────────────────
@@ -660,6 +660,41 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 .post-link { margin-left: auto; font-size: 11px; }
 .post-text { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .post.system .post-text { color: var(--text-dim); }
+
+/* The streaming answer's caret. In-flight work pulses amber everywhere in
+   this UI (badge.amber, .note) — the caret is the same state, one glyph tall. */
+.stream-caret {
+  display: inline-block; width: 1px; height: 1em; margin-left: 2px;
+  vertical-align: -0.12em; background: var(--amber);
+  animation: caret-breathe 1.1s ease-in-out infinite;
+}
+@keyframes caret-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.12; } }
+
+/* Who you are talking to, in the board header: chips for the first few, the
+   full list one click away — most days nobody needs more than a glance. */
+.board-members { position: relative; margin-left: auto; }
+.board-members-toggle {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px; background: transparent; border: 0; cursor: pointer;
+  border-radius: var(--r-pill);
+}
+.board-members-toggle:hover { background: var(--panel-2); }
+.member-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 8px 1px 1px; border: 1px solid var(--border); border-radius: var(--r-pill);
+  font-size: 11px; color: var(--text-dim); background: var(--panel);
+}
+.member-chip .post-mark { flex-basis: 18px; height: 18px; font-size: 8px; }
+.member-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  min-width: 230px; max-height: 280px; overflow-y: auto; padding: 4px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--panel-raised, var(--panel));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .34);
+}
+.member-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; font-size: 12px; }
+.member-row .member-name { font-weight: 500; }
+.member-row .mention-sub { margin-left: auto; }
 
 .board-composer { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; position: relative; }
 .board-composer textarea { flex: 1; resize: vertical; min-height: 44px; }
@@ -848,6 +883,21 @@ body.resizing { cursor: col-resize; user-select: none; }
 
 /* Projects in the navigation. */
 .nav-projects-label { display: flex; align-items: center; justify-content: space-between; }
+.nav-label-group { display: flex; align-items: center; gap: 3px; }
+/* A quieter sibling of .nav-fold: it sits inside the label row, so it gets
+   no border of its own — the label is already the quietest text on screen. */
+.nav-group-fold {
+  background: transparent; border: 0; color: var(--text-faint);
+  width: 16px; height: 16px; padding: 0; border-radius: 2px;
+  font-size: 9px; line-height: 1; cursor: pointer;
+}
+.nav-group-fold:hover { color: var(--text); background: var(--panel-2); }
+/* The closed state only applies where the label (and its chevron) exists:
+   the folded sidebar is an icon rail with its own rules, and on a phone the
+   labels are hidden — hiding the list there too would leave it unreachable. */
+@media (min-width: 761px) {
+  .sidebar:not(.folded) .nav-group-closed { display: none; }
+}
 .nav-projects { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
 .nav-project {
   display: flex; align-items: center; gap: 8px;

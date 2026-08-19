@@ -38,6 +38,16 @@ export function Shell() {
   useEffect(() => {
     localStorage.setItem('ws-nav', navOpen ? 'open' : 'closed')
   }, [navOpen])
+  // Each group folds on its own, and stays folded across reloads — tidying
+  // the nav away once should not have to be redone every visit.
+  const [projectsOpen, setProjectsOpen] = useState(() => localStorage.getItem('ws-nav-projects') !== 'closed')
+  useEffect(() => {
+    localStorage.setItem('ws-nav-projects', projectsOpen ? 'open' : 'closed')
+  }, [projectsOpen])
+  const [manageOpen, setManageOpen] = useState(() => localStorage.getItem('ws-nav-manage') !== 'closed')
+  useEffect(() => {
+    localStorage.setItem('ws-nav-manage', manageOpen ? 'open' : 'closed')
+  }, [manageOpen])
   const { data: reviews } = useQuery({ queryKey: ['reviews'], queryFn: () => api.reviews() })
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: 60_000, retry: false })
   const pending = reviews?.filter((r) => r.state === 'Pending').length ?? 0
@@ -91,12 +101,24 @@ export function Shell() {
             projects inside the page meant the same choice existed twice and
             cost a column of the terminal's width. */}
         <div className="nav-label nav-projects-label">
-          项目
+          <span className="nav-label-group">
+            <button
+              type="button"
+              className="nav-group-fold"
+              onClick={() => setProjectsOpen(!projectsOpen)}
+              aria-expanded={projectsOpen}
+              aria-label={projectsOpen ? '收起项目列表' : '展开项目列表'}
+              title={projectsOpen ? '收起项目列表' : '展开项目列表'}
+            >
+              {projectsOpen ? '▾' : '▸'}
+            </button>
+            项目
+          </span>
           <Link to="/cells/new" className="ws-new" title="新建项目" aria-label="新建项目">
             +
           </Link>
         </div>
-        <div className="nav-projects">
+        <div className={`nav-projects ${projectsOpen ? '' : 'nav-group-closed'}`}>
           {(cells ?? []).map((c) => (
             <NavLink
               key={c.name}
@@ -119,8 +141,20 @@ export function Shell() {
             configure the platform rather than to use it, so they get their
             own group at the bottom of the nav instead of competing with the
             daily loop above. */}
-        <div className="nav-label">管理</div>
-        <nav className="nav-manage">
+        <div className="nav-label nav-label-group">
+          <button
+            type="button"
+            className="nav-group-fold"
+            onClick={() => setManageOpen(!manageOpen)}
+            aria-expanded={manageOpen}
+            aria-label={manageOpen ? '收起管理列表' : '展开管理列表'}
+            title={manageOpen ? '收起管理列表' : '展开管理列表'}
+          >
+            {manageOpen ? '▾' : '▸'}
+          </button>
+          管理
+        </div>
+        <nav className={`nav-manage ${manageOpen ? '' : 'nav-group-closed'}`}>
           <NavLink to="/dashboard" className={link}>
             {IconHome} 概览
           </NavLink>
