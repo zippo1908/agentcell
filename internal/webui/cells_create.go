@@ -61,7 +61,36 @@ type createCellRequest struct {
 // something whose whole point is that a team works in it together. Anyone
 // who can authenticate can create one; the creator is recorded, because
 // "who brought this project in" is the first question asked later.
+// mayCreateProjects reports whether this caller may bring a new project onto
+// the platform.
+//
+// Only account holders are checked. An OIDC user or a static token predates
+// this grant and has no row to carry it, and quietly withdrawing something
+// those deployments already do would be an upgrade that breaks them.
+func (h *Handler) mayCreateProjects(r *http.Request) error {
+	db := h.accountsDB()
+	if db == nil {
+		return nil
+	}
+	p := identity.FromContext(r.Context())
+	if p.Kind != identity.KindUser {
+		return nil
+	}
+	u, _, err := db.UserByEmail(r.Context(), p.Email)
+	if err != nil {
+		return nil
+	}
+	if u.Admin || u.CanCreate {
+		return nil
+	}
+	return fmt.Errorf("你的账号还没有开通「创建项目」;找管理员开通,或者请项目维护者把你加进已有项目")
+}
+
 func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
+	if err := h.mayCreateProjects(r); err != nil {
+		writeErr(w, 403, err)
+		return
+	}
 	var req createCellRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err)

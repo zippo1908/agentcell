@@ -144,7 +144,42 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("schema step %d: %w", i, err)
 		}
 	}
+	// Columns added after the first release. Separate from the steps above
+	// because ALTER TABLE is not idempotent and these run on every start.
+	//
+	// can_create_projects defaults to 1 on users and 0 on invites, and the
+	// difference is deliberate: everybody who already has an account could
+	// create projects when they got it, and taking that away during an
+	// upgrade would be a silent demotion nobody asked for. New people get it
+	// only when the invitation says so.
+	for _, c := range []struct{ table, column, decl string }{
+		{"users", "can_create_projects", "INTEGER NOT NULL DEFAULT 1"},
+		{"invites", "can_create_projects", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := db.addColumn(c.table, c.column, c.decl); err != nil {
+			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
+		}
+	}
 	return nil
+}
+
+// addColumn adds a column unless it is already there.
+//
+// Asking first rather than running the ALTER and forgiving the error: "is
+// this column present" is a question with an answer, and swallowing errors
+// from a schema change hides the ones that are not about duplication.
+func (db *DB) addColumn(table, column, decl string) error {
+	var n int
+	err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err = db.sql.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl)
+	return err
 }
 
 // --- users -----------------------------------------------------------
@@ -155,6 +190,12 @@ type User struct {
 	Name     string
 	Admin    bool
 	Disabled bool
+	// CanCreate is the right to bring a new project onto the platform and own
+	// it. Separate from Admin because the two are genuinely different: an
+	// admin runs the deployment, whereas this is somebody trusted to start
+	// work — which on this platform means a namespace, a checkout and a
+	// runtime that the deployment then carries.
+	CanCreate bool
 }
 
 // NormalizeEmail folds the case-insensitive parts of an address, so
@@ -162,20 +203,35 @@ type User struct {
 // sets of credentials and two halves of the same person's work.
 func NormalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
-func (db *DB) CreateUser(ctx context.Context, id, email, name, passwordHash string, admin bool) error {
+func (db *DB) CreateUser(ctx context.Context, id, email, name, passwordHash string, admin, canCreate bool) error {
 	_, err := db.sql.ExecContext(ctx,
-		`INSERT INTO users (id, email, name, password, is_admin, created_at) VALUES (?,?,?,?,?,?)`,
-		id, NormalizeEmail(email), name, passwordHash, boolInt(admin), time.Now().Unix())
+		`INSERT INTO users (id, email, name, password, is_admin, can_create_projects, created_at)
+		 VALUES (?,?,?,?,?,?,?)`,
+		id, NormalizeEmail(email), name, passwordHash, boolInt(admin), boolInt(canCreate), time.Now().Unix())
 	return err
+}
+
+// SetCanCreate grants or withdraws the right to start projects.
+func (db *DB) SetCanCreate(ctx context.Context, email string, can bool) error {
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE users SET can_create_projects = ? WHERE email = ?`, boolInt(can), NormalizeEmail(email))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (db *DB) UserByEmail(ctx context.Context, email string) (User, string, error) {
 	row := db.sql.QueryRowContext(ctx,
-		`SELECT id, email, name, password, is_admin, disabled_at IS NOT NULL FROM users WHERE email = ?`,
+		`SELECT id, email, name, password, is_admin, can_create_projects, disabled_at IS NOT NULL
+		 FROM users WHERE email = ?`,
 		NormalizeEmail(email))
 	var u User
 	var hash string
-	if err := row.Scan(&u.ID, &u.Email, &u.Name, &hash, &u.Admin, &u.Disabled); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.Name, &hash, &u.Admin, &u.CanCreate, &u.Disabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, "", ErrNotFound
 		}
@@ -198,7 +254,8 @@ func (db *DB) SetPassword(ctx context.Context, email, hash string) error {
 
 func (db *DB) Users(ctx context.Context) ([]User, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT id, email, name, is_admin, disabled_at IS NOT NULL FROM users ORDER BY email`)
+		`SELECT id, email, name, is_admin, can_create_projects, disabled_at IS NOT NULL
+		 FROM users ORDER BY email`)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +263,7 @@ func (db *DB) Users(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Admin, &u.Disabled); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Admin, &u.CanCreate, &u.Disabled); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -242,18 +299,24 @@ func (db *DB) SetDisabled(ctx context.Context, email string, disabled bool) erro
 // --- invites ---------------------------------------------------------
 
 type Invite struct {
-	Email   string
-	Name    string
-	Admin   bool
-	By      string
-	Expires int64
+	Email string
+	Name  string
+	Admin bool
+	// CanCreate is carried on the invitation itself so the grant is made by
+	// whoever decided to bring the person in, at the moment they decide it —
+	// rather than being a second, separate act somebody has to remember
+	// after the person has already logged in and found they cannot start
+	// anything.
+	CanCreate bool
+	By        string
+	Expires   int64
 }
 
 func (db *DB) CreateInvite(ctx context.Context, tokenHash string, in Invite) error {
 	_, err := db.sql.ExecContext(ctx,
-		`INSERT INTO invites (token_hash, email, name, is_admin, invited_by, expires_at, created_at)
-		 VALUES (?,?,?,?,?,?,?)`,
-		tokenHash, NormalizeEmail(in.Email), in.Name, boolInt(in.Admin), in.By,
+		`INSERT INTO invites (token_hash, email, name, is_admin, can_create_projects, invited_by, expires_at, created_at)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		tokenHash, NormalizeEmail(in.Email), in.Name, boolInt(in.Admin), boolInt(in.CanCreate), in.By,
 		in.Expires, time.Now().Unix())
 	return err
 }
@@ -261,10 +324,11 @@ func (db *DB) CreateInvite(ctx context.Context, tokenHash string, in Invite) err
 // Invite looks up an unexpired invitation.
 func (db *DB) Invite(ctx context.Context, tokenHash string) (Invite, error) {
 	row := db.sql.QueryRowContext(ctx,
-		`SELECT email, name, is_admin, invited_by, expires_at FROM invites WHERE token_hash = ?`,
+		`SELECT email, name, is_admin, can_create_projects, invited_by, expires_at
+		 FROM invites WHERE token_hash = ?`,
 		tokenHash)
 	var in Invite
-	if err := row.Scan(&in.Email, &in.Name, &in.Admin, &in.By, &in.Expires); err != nil {
+	if err := row.Scan(&in.Email, &in.Name, &in.Admin, &in.CanCreate, &in.By, &in.Expires); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Invite{}, ErrNotFound
 		}
@@ -286,7 +350,7 @@ func (db *DB) DeleteInvite(ctx context.Context, tokenHash string) error {
 // same person twice.
 func (db *DB) PendingInvites(ctx context.Context) ([]Invite, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT email, name, is_admin, invited_by, expires_at FROM invites
+		`SELECT email, name, is_admin, can_create_projects, invited_by, expires_at FROM invites
 		 WHERE expires_at > ? ORDER BY created_at DESC`, time.Now().Unix())
 	if err != nil {
 		return nil, err
@@ -295,7 +359,7 @@ func (db *DB) PendingInvites(ctx context.Context) ([]Invite, error) {
 	var out []Invite
 	for rows.Next() {
 		var in Invite
-		if err := rows.Scan(&in.Email, &in.Name, &in.Admin, &in.By, &in.Expires); err != nil {
+		if err := rows.Scan(&in.Email, &in.Name, &in.Admin, &in.CanCreate, &in.By, &in.Expires); err != nil {
 			return nil, err
 		}
 		out = append(out, in)

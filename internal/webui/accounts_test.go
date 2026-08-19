@@ -58,7 +58,7 @@ func TestCookieCannotBeEditedIntoSomebodyElse(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash, _ := hashPassword("another-long-password")
-	if err := a.DB.CreateUser(ctx, "u2", "li@tinci.com", "Li", hash, false); err != nil {
+	if err := a.DB.CreateUser(ctx, "u2", "li@tinci.com", "Li", hash, false, false); err != nil {
 		t.Fatal(err)
 	}
 	cookie, err := a.Mint(ctx, "li@tinci.com")
@@ -82,7 +82,7 @@ func TestCookieCannotBeEditedIntoSomebodyElse(t *testing.T) {
 func TestInviteCannotBeRedeemedTwice(t *testing.T) {
 	a := accountsFixture(t)
 	ctx := t.Context()
-	tok, err := a.Invite(ctx, "new@tinci.com", "New", "boss@tinci.com", false)
+	tok, err := a.Invite(ctx, "new@tinci.com", "New", "boss@tinci.com", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestInviteCannotBeRedeemedTwice(t *testing.T) {
 func TestRedeemerCannotMakeThemselvesAdmin(t *testing.T) {
 	a := accountsFixture(t)
 	ctx := t.Context()
-	tok, err := a.Invite(ctx, "new@tinci.com", "", "boss@tinci.com", false)
+	tok, err := a.Invite(ctx, "new@tinci.com", "", "boss@tinci.com", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestRedeemerCannotMakeThemselvesAdmin(t *testing.T) {
 // A short password is refused at the point it is set, not reported later.
 func TestShortPasswordIsRefused(t *testing.T) {
 	a := accountsFixture(t)
-	tok, err := a.Invite(t.Context(), "new@tinci.com", "", "boss@tinci.com", false)
+	tok, err := a.Invite(t.Context(), "new@tinci.com", "", "boss@tinci.com", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

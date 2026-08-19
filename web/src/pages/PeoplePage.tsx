@@ -18,13 +18,17 @@ export function PeoplePage() {
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
   const [admin, setAdmin] = useState(false)
+  // Granted at the moment of inviting, because the alternative is a second
+  // act somebody has to remember after the person has already logged in and
+  // found they cannot start anything.
+  const [canCreate, setCanCreate] = useState(false)
   const [link, setLink] = useState('')
 
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const people = useQuery({ queryKey: ['people'], queryFn: api.people })
 
   const invite = useMutation({
-    mutationFn: () => api.createInvite(email.trim(), name.trim(), admin),
+    mutationFn: () => api.createInvite(email.trim(), name.trim(), admin, canCreate),
     onSuccess: (r) => {
       // Shown once, and only here. Nothing stores the token: a copy sitting
       // in the database would be a second way into the platform.
@@ -32,6 +36,7 @@ export function PeoplePage() {
       setEmail('')
       setName('')
       setAdmin(false)
+      setCanCreate(false)
       qc.invalidateQueries({ queryKey: ['people'] })
     },
     onError: (e: Error) => toast.error(e.message),
@@ -61,6 +66,15 @@ export function PeoplePage() {
               onChange={(e) => setName(e.target.value)}
               style={{ minWidth: 160 }}
             />
+            <label className="row" style={{ gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={canCreate || admin}
+                disabled={admin}
+                onChange={(e) => setCanCreate(e.target.checked)}
+              />
+              <span className="hint" style={{ margin: 0 }}>可以创建项目</span>
+            </label>
             <label className="row" style={{ gap: 6 }}>
               <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />
               <span className="hint" style={{ margin: 0 }}>设为管理员</span>
@@ -107,8 +121,12 @@ export function PeoplePage() {
                 <td>{p.name || '—'}</td>
                 <td>
                   {p.admin && <Tag>管理员</Tag>}
+                  {/* Shown for non-admins only: an admin can create by
+                      definition, and a second badge saying so would make the
+                      list harder to scan for the thing that varies. */}
+                  {!p.admin && p.canCreate && <Tag>可建项目</Tag>}
                   {p.disabled && <Tag>已停用</Tag>}
-                  {!p.admin && !p.disabled && <span className="faint">成员</span>}
+                  {!p.admin && !p.disabled && !p.canCreate && <span className="faint">成员</span>}
                 </td>
               </tr>
             ))}

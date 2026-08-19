@@ -188,7 +188,7 @@ func inviteHash(tok string) string {
 // Invite records an invitation and returns the one-time token that redeems
 // it. The token itself is never stored: a copy sitting in the database
 // would be a second way into the platform for anyone who can read it.
-func (a *Accounts) Invite(ctx context.Context, email, name, by string, admin bool) (string, error) {
+func (a *Accounts) Invite(ctx context.Context, email, name, by string, admin, canCreate bool) (string, error) {
 	if _, err := mail.ParseAddress(email); err != nil {
 		return "", fmt.Errorf("邮箱地址看起来不对")
 	}
@@ -202,7 +202,11 @@ func (a *Accounts) Invite(ctx context.Context, email, name, by string, admin boo
 	tok := base64.RawURLEncoding.EncodeToString(raw)
 	err := a.DB.CreateInvite(ctx, inviteHash(tok), store.Invite{
 		Email: email, Name: name, Admin: admin, By: by,
-		Expires: time.Now().Add(inviteTTL).Unix(),
+		// An administrator can always create; recording it explicitly keeps
+		// the invitation a full description of what was granted, rather than
+		// something that has to be re-derived from a role later.
+		CanCreate: canCreate || admin,
+		Expires:   time.Now().Add(inviteTTL).Unix(),
 	})
 	if err != nil {
 		return "", err
@@ -227,7 +231,7 @@ func (a *Accounts) Redeem(ctx context.Context, tok, name, pw string) (identity.P
 		name = in.Name
 	}
 	uid := identity.Principal{Subject: identity.UserSubject(in.Email)}.ID()
-	if err := a.DB.CreateUser(ctx, uid, in.Email, name, hash, in.Admin); err != nil {
+	if err := a.DB.CreateUser(ctx, uid, in.Email, name, hash, in.Admin, in.CanCreate); err != nil {
 		return identity.Principal{}, fmt.Errorf("这个邮箱已经有账号了")
 	}
 	// Consume AFTER the account exists. The other order loses the
@@ -258,7 +262,7 @@ func (a *Accounts) Bootstrap(ctx context.Context, email, pw string) error {
 		return err
 	}
 	uid := identity.Principal{Subject: identity.UserSubject(email)}.ID()
-	return a.DB.CreateUser(ctx, uid, email, "", hash, true)
+	return a.DB.CreateUser(ctx, uid, email, "", hash, true, true)
 }
 
 // --- HTTP ------------------------------------------------------------
@@ -405,12 +409,15 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 		Name  string `json:"name"`
 		Admin bool   `json:"admin"`
+		// CanCreate grants the right to start projects, at the moment of
+		// invitation rather than as a separate act afterwards.
+		CanCreate bool `json:"canCreate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	tok, err := h.Auth.Accounts.Invite(r.Context(), body.Email, body.Name, p.Email, body.Admin)
+	tok, err := h.Auth.Accounts.Invite(r.Context(), body.Email, body.Name, p.Email, body.Admin, body.CanCreate)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -441,10 +448,17 @@ func (h *Handler) listPeople(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name,omitempty"`
 		Admin    bool   `json:"admin,omitempty"`
 		Disabled bool   `json:"disabled,omitempty"`
+		// CanCreate is on the list because an access list that does not show
+		// a grant is one nobody audits: "who here can start projects" has to
+		// be answerable by looking.
+		CanCreate bool `json:"canCreate,omitempty"`
 	}
 	out := make([]view, 0, len(users))
 	for _, u := range users {
-		out = append(out, view{Email: u.Email, Name: u.Name, Admin: u.Admin, Disabled: u.Disabled})
+		out = append(out, view{
+			Email: u.Email, Name: u.Name, Admin: u.Admin, Disabled: u.Disabled,
+			CanCreate: u.CanCreate || u.Admin,
+		})
 	}
 	writeJSON(w, 200, out)
 }
