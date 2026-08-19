@@ -60,6 +60,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - "--control-namespace={{ .Values.controlNamespace }}"
+            {{- if .Values.egress.enabled }}
+            - "--egress-proxy-url=http://egress-proxy.{{ .Values.controlNamespace }}.svc:3128"
+            {{- end }}
             {{- with (include "agentcell.brokerURL" .) }}
             - "--git-broker-url={{ . }}"
             {{- end }}

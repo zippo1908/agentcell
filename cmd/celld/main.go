@@ -51,6 +51,8 @@ func main() {
 			"directory of agent-CLI preset overlays (*.yaml); a CLI's flags change faster than releases do")
 		devboxesDir = flag.String("devboxes-dir", "/etc/agentcell/devboxes.d",
 			"directory of devbox catalogue overlays (*.yaml); the built-in list names images on ghcr.io, which a private cluster cannot pull")
+		egressProxyURL = flag.String("egress-proxy-url", os.Getenv("AGENTCELL_EGRESS_PROXY"),
+			"point workload outbound HTTP at this proxy; empty leaves it unrestricted")
 		gitBrokerURL = flag.String("git-broker-url", os.Getenv("AGENTCELL_GIT_BROKER"),
 			"git-broker base URL; when set, workloads route git through it and hold no forge token (ADR-0005)")
 		imagePullSecret = flag.String("image-pull-secret", os.Getenv("AGENTCELL_IMAGE_PULL_SECRET"),
@@ -149,6 +151,7 @@ func main() {
 	if err := (&controller.CellReconciler{
 		Client:           mgr.GetClient(),
 		GitBrokerURL:     *gitBrokerURL,
+		EgressProxyURL:   *egressProxyURL,
 		ControlNamespace: *controlNS,
 		ImagePullSecret:  *imagePullSecret,
 	}).SetupWithManager(mgr); err != nil {
@@ -164,6 +167,7 @@ func main() {
 	sessionReconciler := &controller.SessionReconciler{
 		Client: mgr.GetClient(), Registry: registry,
 		GitBrokerURL: *gitBrokerURL, Forge: forgeClient,
+		EgressProxyURL: *egressProxyURL,
 		// Resident sessions are windows in a user's runtime pod, which holds
 		// no API credential of its own — so the control plane reaches in.
 		Exec: webui.ExecIn(mgr.GetConfig(), kubeClient),

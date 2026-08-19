@@ -32,6 +32,11 @@ const cellFinalizer = "agentcell.io/cleanup"
 // resident product preview) and preview Service.
 type CellReconciler struct {
 	client.Client
+	// EgressProxyURL, when set, points workload outbound HTTP at the egress
+	// proxy — the only route out that can name what it allows and record
+	// who used it. Empty leaves the previous behaviour: straight out to
+	// anywhere on 443.
+	EgressProxyURL string
 	// GitBrokerURL, when set, routes workload git through the broker so no
 	// pod holds a forge credential (ADR-0005).
 	GitBrokerURL string
@@ -408,6 +413,35 @@ func (r *CellReconciler) ensureNetworkPolicies(ctx context.Context, cell *acv1.C
 		return err
 	}
 
+	// Reaching the egress proxy. Without this rule the namespace's
+	// default-deny stops workloads at the proxy's door — it listens on
+	// 3128, not 443 — and every outbound call fails in a way that looks
+	// like the proxy is broken rather than unreachable.
+	if r.EgressProxyURL != "" {
+		proxyPort := intstr.FromInt(3128)
+		epol := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "allow-egress-proxy"}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, epol, func() error {
+			epol.Spec = netv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{},
+				PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+				Egress: []netv1.NetworkPolicyEgressRule{{
+					To: []netv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": controlNS},
+						},
+						PodSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"app": "egress-proxy"},
+						},
+					}},
+					Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &proxyPort}},
+				}},
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+
 	// Broker egress is granted ONLY to pods labeled broker-client
 	// (anchor/settle/prod). Session pods lack the label and have no token,
 	// so they cannot reach the broker at all (ADR-0005 hardening).
@@ -593,6 +627,7 @@ func (r *CellReconciler) ensureAnchor(ctx context.Context, cell *acv1.Cell, ns s
 	if cell.Spec.Repo.SecretName != "" {
 		env = append(env, gitWorkloadEnv(r.GitBrokerURL, cell.Name, ids.GitSecretName)...)
 	}
+	env = append(env, egressEnv(r.EgressProxyURL)...)
 
 	selector := map[string]string{
 		ids.CellLabelKey:      cell.Name,
