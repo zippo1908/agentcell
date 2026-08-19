@@ -177,9 +177,12 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 	// script: a quote in the question is a quote, not a second command. The
 	// paths are platform-derived (digits and hex), so interpolating THEM is
 	// safe — and they are the only thing interpolated.
+	// No -y/--auto: the CLI refuses them in prompt mode ("Cannot combine
+	// --prompt with --yolo") — prompt mode is already the non-interactive
+	// one, and a rejected flag was the whole run dying on exit code 1.
 	script := "export HOME=" + home + " KIMI_CODE_HOME=" + state +
 		"; cd " + worktree + " 2>/dev/null || cd " + home +
-		`; TASK="$1"; exec kimi -p "$TASK" --output-format stream-json -y`
+		`; TASK="$1"; exec kimi -p "$TASK" --output-format stream-json`
 	argv := []string{"sh", "-c", script, "sh", e.Task}
 
 	ns := ids.WorkloadNamespace(t.Name)
