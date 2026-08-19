@@ -862,15 +862,6 @@ func runPreviewStart(args []string) error {
 	return nil
 }
 
-// dirEmpty reports whether a directory holds nothing.
-func dirEmpty(dir string) (bool, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) == 0, nil
-}
-
 // moveInto moves a directory's contents into another, then removes it.
 func moveInto(from, to string) error {
 	entries, err := os.ReadDir(from)

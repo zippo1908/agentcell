@@ -284,7 +284,7 @@ func (h *Handler) resolveMentions(ctx context.Context, t *acv1.Cell, body string
 	byName := map[string]string{}
 	ambiguous := map[string]bool{}
 	for _, u := range h.accountsForMentions(ctx) {
-		id := identity.Principal{Subject: identity.UserSubject(u.email)}.ID()
+		id := principalIDFor(ctx, h.accountsDB(), u.email)
 		if !member[id] {
 			continue
 		}
@@ -345,7 +345,7 @@ func (h *Handler) unresolvedMentions(ctx context.Context, t *acv1.Cell, body str
 	}
 	byName := map[string]bool{}
 	for _, u := range h.accountsForMentions(ctx) {
-		id := identity.Principal{Subject: identity.UserSubject(u.email)}.ID()
+		id := principalIDFor(ctx, h.accountsDB(), u.email)
 		if !member[id] {
 			continue
 		}
@@ -615,7 +615,7 @@ func (h *Handler) displayOwner(ctx context.Context, id string) string {
 		return id
 	}
 	for _, u := range users {
-		if (identity.Principal{Subject: identity.UserSubject(u.Email)}).ID() == id {
+		if principalIDFor(ctx, h.accountsDB(), u.Email) == id {
 			if u.Name != "" {
 				return u.Name
 			}

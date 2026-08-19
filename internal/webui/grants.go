@@ -296,7 +296,7 @@ func (h *Handler) granteeID(r *http.Request, in grantInput) (string, error) {
 		if _, _, err := db.UserByEmail(r.Context(), who); err != nil {
 			return "", fmt.Errorf("平台上没有这个人——先邀请 %s", who)
 		}
-		return identity.Principal{Subject: identity.UserSubject(who)}.ID(), nil
+		return principalIDFor(r.Context(), db, who), nil
 	}
 	return who, nil
 }

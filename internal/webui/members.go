@@ -86,7 +86,7 @@ func (h *Handler) accountsByID(r *http.Request) map[string]accountLite {
 		return out
 	}
 	for _, u := range users {
-		out[identity.Principal{Subject: identity.UserSubject(u.Email)}.ID()] = accountLite{u.Email, u.Name}
+		out[principalIDFor(r.Context(), h.accountsDB(), u.Email)] = accountLite{u.Email, u.Name}
 	}
 	return out
 }
@@ -122,7 +122,7 @@ func (h *Handler) memberID(r *http.Request, req memberRequest) (string, error) {
 	if _, _, err := h.Auth.Accounts.DB.UserByEmail(r.Context(), req.Email); err != nil {
 		return "", fmt.Errorf("平台上没有这个人——先邀请 %s", req.Email)
 	}
-	return identity.Principal{Subject: identity.UserSubject(req.Email)}.ID(), nil
+	return principalIDFor(r.Context(), h.accountsDB(), req.Email), nil
 }
 
 // putMember adds or changes a member.
@@ -184,7 +184,7 @@ func (h *Handler) deleteMember(w http.ResponseWriter, r *http.Request) {
 	// The path may carry an email now. An id is hex with a "u-" prefix, so
 	// an "@" is unambiguous.
 	if strings.Contains(user, "@") {
-		user = identity.Principal{Subject: identity.UserSubject(user)}.ID()
+		user = principalIDFor(r.Context(), h.accountsDB(), user)
 	}
 	h.updateMembers(w, r, func(cell *acv1.Cell) error {
 		out := cell.Spec.Members[:0]
