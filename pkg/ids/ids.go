@@ -124,6 +124,27 @@ func SessionStateDir(uid int64, id string) string {
 	return UserHome(uid) + "/state/" + id
 }
 
+// AccountCredentialDir is where a PERSON's connected-account login lives —
+// once, not once per session.
+//
+// A CLI's home directory holds two different things: the login, which
+// belongs to the person, and the conversation state, which belongs to the
+// session. Pointing KIMI_CODE_HOME at the session's directory made a copy of
+// the login per session, and the provider issues a new refresh token on
+// every renewal — so the copies drifted into separate lineages, each
+// refreshing independently, and the control plane had to read one of them
+// back and guess which was current.
+//
+// One directory per person removes the guessing: every session of theirs
+// reads and writes the same file, so there is one lineage and nothing to
+// reconcile. The session's own credentials directory becomes a symlink to
+// this one, which is a shape the CLI explicitly supports — its safety check
+// resolves symlinks "so containerized deployments that mount the credential
+// as a symlink" keep working.
+func AccountCredentialDir(uid int64) string {
+	return UserHome(uid) + "/credentials"
+}
+
 // UserRepoPath is a user's own repository: its own refs and its own object
 // store, with the project's published history shared read-only underneath
 // through git alternates (ADR-0012).

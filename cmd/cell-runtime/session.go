@@ -158,9 +158,19 @@ func writeAgentConfig() error {
 //
 // This is what makes "connect your Kimi account once" mean every session,
 // rather than every session asking for a key. The tar arrives by Secret
-// reference, so it was never in the pod spec; it lands under the session's
-// own state directory, 0700, which is where the CLI looks and where nothing
-// belonging to another user can reach.
+// reference, so it was never in the pod spec.
+//
+// It lands in the PERSON's directory, not the session's, and the session's
+// own credentials directory is a symlink to it. A login belongs to a human
+// being; a conversation belongs to a session. Pointing KIMI_CODE_HOME at the
+// session made a copy of the login per session, and since the provider
+// issues a new refresh token on every renewal, those copies drifted into
+// separate lineages that the control plane then had to reconcile. One
+// directory means one lineage and nothing to reconcile.
+//
+// Symlinking the DIRECTORY rather than the file is deliberate: the CLI
+// rewrites the credential with a temp file and a rename, which would replace
+// a symlinked FILE and quietly break the sharing on the first refresh.
 func writeAccountCredential() error {
 	blob := os.Getenv(runtimeapi.EnvAccount)
 	if blob == "" {
@@ -175,10 +185,28 @@ func writeAccountCredential() error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}
-	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(home))
-	cmd.Stdin = strings.NewReader(blob)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("account credential: %v: %s", err, out)
+	shared := ids.AccountCredentialDir(int64(os.Getuid()))
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		return err
+	}
+	// Unpack into the person's directory. Only when it holds nothing yet:
+	// the live file is newer than anything the control plane stored, and a
+	// second session starting must not roll its sibling back to the copy the
+	// Secret happens to hold.
+	if empty, err := dirEmpty(shared); err == nil && empty {
+		cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(home))
+		cmd.Stdin = strings.NewReader(blob)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("account credential: %v: %s", err, out)
+		}
+		// The tar carries a credentials/ directory and a device_id; move the
+		// credential itself to where every session of this person reads it.
+		if err := moveInto(filepath.Join(home, "credentials"), shared); err != nil {
+			return err
+		}
+	}
+	if err := linkSharedCredentials(home, shared); err != nil {
+		return err
 	}
 	// Set the modes here rather than trusting the ones the tar carries. A tar
 	// preserves whatever it captured, so the permissions of a live login
@@ -186,7 +214,7 @@ func writeAccountCredential() error {
 	// three steps away — a place nobody thinks about when reasoning about
 	// who can read a credential. Deciding them at the point of use makes the
 	// answer readable in one file.
-	if err := tighten(filepath.Join(home, "credentials")); err != nil {
+	if err := tighten(shared); err != nil {
 		return err
 	}
 	// The device identity is part of the credential; it is read back on
@@ -779,4 +807,49 @@ func runPreviewStart(args []string) error {
 	go func() { _ = cmd.Wait() }()
 	fmt.Printf("preview serving %s (pid %d)\n", wt, cmd.Process.Pid)
 	return nil
+}
+
+// dirEmpty reports whether a directory holds nothing.
+func dirEmpty(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
+}
+
+// moveInto moves a directory's contents into another, then removes it.
+func moveInto(from, to string) error {
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if err := os.Rename(filepath.Join(from, e.Name()), filepath.Join(to, e.Name())); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(from)
+}
+
+// linkSharedCredentials points this session's credentials directory at the
+// person's one.
+//
+// Replaces whatever is there — an older session left a real directory, and
+// leaving it would mean this session quietly kept refreshing its own copy
+// while believing it shared.
+func linkSharedCredentials(home, shared string) error {
+	link := filepath.Join(home, "credentials")
+	if target, err := os.Readlink(link); err == nil {
+		if target == shared {
+			return nil
+		}
+	}
+	if err := os.RemoveAll(link); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(shared, link)
 }

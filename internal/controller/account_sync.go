@@ -64,11 +64,18 @@ func (r *SessionReconciler) syncAccountCredential(ctx context.Context, sess *acv
 	if sess.Status.PodName == "" {
 		return
 	}
+	// Read the PERSON's credential, not the session's.
+	//
+	// Every session of theirs now shares one directory (the session's own is
+	// a symlink to it), so there is one lineage to store rather than several
+	// to choose between. -h follows the link in case an older session is
+	// still running with a real directory in place.
 	home := ids.SessionStateDir(uid, id)
+	shared := ids.AccountCredentialDir(uid)
 	out, err := r.Exec(ctx, ns, sess.Status.PodName, []string{"sh", "-c",
-		`[ -d ` + shellQuoteArg(home) + `/credentials ] && ` +
-			`tar czf - -C ` + shellQuoteArg(home) + ` credentials ` +
-			`$([ -f ` + shellQuoteArg(home) + `/device_id ] && echo device_id) | base64 -w0`}, nil)
+		`[ -d ` + shellQuoteArg(shared) + ` ] && ` +
+			`tar czhf - -C ` + shellQuoteArg(ids.UserHome(uid)) + ` credentials ` +
+			`$([ -f ` + shellQuoteArg(home) + `/device_id ] && echo -C ` + shellQuoteArg(home) + ` device_id) | base64 -w0`}, nil)
 	if err != nil || strings.TrimSpace(out) == "" {
 		return
 	}
