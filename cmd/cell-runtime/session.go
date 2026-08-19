@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -182,26 +184,63 @@ func writeAccountCredential() error {
 		// the runner may simply not be the one this credential is for.
 		return nil
 	}
+	if err := installAccountCredential(home, ids.AccountCredentialDir(int64(os.Getuid())), blob); err != nil {
+		return err
+	}
+	fmt.Println("session: connected account credential installed")
+	return nil
+}
+
+// installAccountCredential lays one captured login down: the credential in
+// the person's shared directory, the device identity in this session's home.
+func installAccountCredential(home, shared, blob string) error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}
-	shared := ids.AccountCredentialDir(int64(os.Getuid()))
 	if err := os.MkdirAll(shared, 0o700); err != nil {
 		return err
 	}
-	// Unpack into the person's directory. Only when it holds nothing yet:
-	// the live file is newer than anything the control plane stored, and a
-	// second session starting must not roll its sibling back to the copy the
-	// Secret happens to hold.
-	if empty, err := dirEmpty(shared); err == nil && empty {
-		cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(home))
-		cmd.Stdin = strings.NewReader(blob)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("account credential: %v: %s", err, out)
+
+	tmp, err := os.MkdirTemp("", "acct")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	cmd := exec.Command("sh", "-c", "base64 -d | tar xzf - -C "+shellQuote(tmp))
+	cmd.Stdin = strings.NewReader(blob)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("account credential: %v: %s", err, out)
+	}
+
+	// The blob's hash IS its version. The Secret's capture never changes as
+	// the live file rotates, so a matching marker means "the live file is
+	// newer, leave it alone" — the rollback the old dirEmpty guard was for.
+	// But a re-login is a NEW blob, and the guard could not tell the two
+	// apart: it kept the dead file forever and the fresh grant never landed,
+	// which is exactly what "重连了还是用不了" was.
+	incoming := accountVersion(blob)
+	markerPath := filepath.Join(shared, ".agentcell-account-version")
+	installed, _ := os.ReadFile(markerPath)
+	if strings.TrimSpace(string(installed)) != incoming {
+		if err := os.RemoveAll(shared); err != nil {
+			return err
 		}
-		// The tar carries a credentials/ directory and a device_id; move the
-		// credential itself to where every session of this person reads it.
-		if err := moveInto(filepath.Join(home, "credentials"), shared); err != nil {
+		if err := os.MkdirAll(shared, 0o700); err != nil {
+			return err
+		}
+		if err := moveInto(filepath.Join(tmp, "credentials"), shared); err != nil {
+			return err
+		}
+		if err := os.WriteFile(markerPath, []byte(incoming), 0o600); err != nil {
+			return err
+		}
+	}
+	// The device identity travels with the grant: a session restored after a
+	// re-login must not present the OLD device with the NEW token — the
+	// provider reads that as theft, not as continuity. It lands per session
+	// (in KIMI_CODE_HOME), so refresh it on every open, marker or not.
+	if _, err := os.Stat(filepath.Join(tmp, "device_id")); err == nil {
+		if err := copyFile(filepath.Join(tmp, "device_id"), filepath.Join(home, "device_id"), 0o600); err != nil {
 			return err
 		}
 	}
@@ -217,14 +256,28 @@ func writeAccountCredential() error {
 	if err := tighten(shared); err != nil {
 		return err
 	}
-	// The device identity is part of the credential; it is read back on
-	// every request, so it has to be as private as the token it
-	// accompanies.
-	if err := os.Chmod(filepath.Join(home, "device_id"), 0o600); err != nil && !os.IsNotExist(err) {
+	return nil
+}
+
+// accountVersion identifies a captured login: same capture, same version,
+// across every rotation of the live file; a re-login, a new version.
+func accountVersion(blob string) string {
+	sum := sha256.Sum256([]byte(blob))
+	return hex.EncodeToString(sum[:8])
+}
+
+// copyFile writes src to dst with the given mode, through a temp file so a
+// crash mid-write cannot leave half a credential.
+func copyFile(src, dst string, mode fs.FileMode) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
 		return err
 	}
-	fmt.Println("session: connected account credential installed")
-	return nil
+	t := dst + ".tmp"
+	if err := os.WriteFile(t, b, mode); err != nil {
+		return err
+	}
+	return os.Rename(t, dst)
 }
 
 // writeLibrary unpacks the project's readable files into the worktree.
