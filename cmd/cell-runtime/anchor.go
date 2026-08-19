@@ -239,7 +239,29 @@ func syncBase(branch string) {
 // followed worktree may not exist yet at pod start: each cycle re-resolves
 // the directory, and while serving the fallback a watcher kicks the server
 // the moment the real target appears.
+// execArgv turns a configured command into something exec can actually run.
+//
+// The Cell API says, and has always said, that a one-element command is a
+// shell line: `["npm run dev -- --host"]`. The session path honoured that;
+// the anchor and production paths did not — they exec'd the whole string as
+// a filename. The result was a preview that never came up and an anchor
+// wedged NotReady for sixteen hours behind a readiness probe, with the real
+// answer only in a log nobody had reason to open:
+//
+//	anchor: preview start: exec: "busybox httpd -f -p 3000 -h .":
+//	executable file not found in $PATH
+//
+// Fixed here rather than in the controller so it also repairs the Cells that
+// already have such a command stored.
+func execArgv(argv []string) []string {
+	if len(argv) == 1 {
+		return []string{"sh", "-c", argv[0]}
+	}
+	return argv
+}
+
 func supervisePreview(argv []string, dir string, extraEnv []string, stop <-chan os.Signal) {
+	argv = execArgv(argv)
 	backoff := time.Second
 	for {
 		serveDir := dir

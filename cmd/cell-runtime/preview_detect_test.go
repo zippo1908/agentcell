@@ -134,3 +134,35 @@ func hasEnv(env []string, want string) bool {
 	}
 	return false
 }
+
+// A one-element command is a shell line — the Cell API has always said so.
+//
+// The anchor exec'd it as a filename instead, which is how a preview command
+// of `busybox httpd -f -p 3000 -h .` became:
+//
+//	exec: "busybox httpd -f -p 3000 -h .": executable file not found in $PATH
+//
+// repeating forever behind a readiness probe that held the anchor NotReady
+// for sixteen hours.
+func TestAOneElementCommandIsAShellLine(t *testing.T) {
+	got := execArgv([]string{"busybox httpd -f -p 3000 -h ."})
+
+	if len(got) != 3 || got[0] != "sh" || got[1] != "-c" {
+		t.Fatalf("want it run through a shell, got %v", got)
+	}
+	if got[2] != "busybox httpd -f -p 3000 -h ." {
+		t.Fatalf("the line must reach the shell intact, got %q", got[2])
+	}
+}
+
+// A real argv must be exec'd as-is: wrapping it would re-introduce a shell
+// between the platform and a command it already knows how to run.
+func TestARealArgvIsLeftAlone(t *testing.T) {
+	in := []string{"npm", "run", "dev", "--", "--host", "0.0.0.0"}
+
+	got := execArgv(in)
+
+	if joined(got) != joined(in) {
+		t.Fatalf("want %v unchanged, got %v", in, got)
+	}
+}
