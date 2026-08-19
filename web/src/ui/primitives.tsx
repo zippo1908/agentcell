@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 
 /** Status tone. Amber means in-flight and is the only one that pulses. */
 export type Tone = 'green' | 'red' | 'amber' | 'gray'
@@ -168,6 +168,11 @@ export function Confirm({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel])
+  // A consequence-stating confirm defaults focus to the confirm key: the
+  // reader has just been told what will happen, so Enter executes and
+  // Escape cancels without a Tab round-trip through the dialog.
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => confirmRef.current?.focus(), [])
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal" role="dialog" aria-modal="true">
@@ -177,7 +182,7 @@ export function Confirm({
           <button className="small ghost" onClick={onCancel}>
             取消
           </button>
-          <button className={`small ${danger ? 'danger' : 'primary'}`} onClick={onConfirm}>
+          <button ref={confirmRef} className={`small ${danger ? 'danger' : 'primary'}`} onClick={onConfirm}>
             {confirmText}
           </button>
         </div>

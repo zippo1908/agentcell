@@ -23,7 +23,7 @@ type Tab = 'overview' | 'sessions' | 'knowledge' | 'members' | 'tokens' | 'setti
  * the empty states, so it cannot go stale against the actual condition.
  */
 function nextStep(phase: string, sessions: number, hasPreview: boolean, released: boolean) {
-  if (phase === 'Error') return { tone: 'red' as const, text: '这个工作区处于 Error:先看下面的消息,修好之后控制器会自己重试。' }
+  if (phase === 'Error') return { tone: 'red' as const, text: '这个项目处于 Error:先看下面的消息,修好之后控制器会自己重试。' }
   if (phase !== 'Ready') return { tone: 'amber' as const, text: '正在准备:克隆仓库、拉起常驻锚点和预览。通常一两分钟。' }
   if (sessions === 0) return { tone: 'green' as const, text: '第一步:派一单工作给 agent。想边看边改就勾上「常驻会话」。' }
   // Not "go and configure a command" any more: nobody configures one. If
@@ -50,12 +50,11 @@ export function CellPage() {
   const cell = data?.cell
   const sessions = data?.sessions ?? []
 
-  // Node pools are only needed on the settings tab, and reading them needs a
-  // cluster-scoped permission an operator may not have granted — so a
-  // failure here must degrade to "cannot offer a choice", never break the page.
+  // Placement classes are only needed on the settings tab; a failure here
+  // must degrade to "cannot offer a choice", never break the page.
   const pools = useQuery({
-    queryKey: ['nodepools'],
-    queryFn: () => api.nodePools(),
+    queryKey: ['placementclasses'],
+    queryFn: () => api.placementClasses(),
     enabled: tab === 'settings',
     retry: false,
   })
@@ -63,10 +62,7 @@ export function CellPage() {
 
 
   const savePlacement = useMutation({
-    mutationFn: (label: string) => {
-      const [key, ...rest] = label ? label.split('=') : ['']
-      return api.savePlacement(name, key, rest.join('='))
-    },
+    mutationFn: (className: string) => api.savePlacement(name, className),
     onSuccess: () => {
       toast.success('运行位置已更新,锚点会按新位置重建')
       qc.invalidateQueries({ queryKey: ['cell', name] })
@@ -101,7 +97,7 @@ export function CellPage() {
     )
   }
   if (error || !cell) {
-    return <div className="form-error">{(error as Error)?.message ?? '找不到这个工作区'}</div>
+    return <div className="form-error">{(error as Error)?.message ?? '找不到这个项目'}</div>
   }
 
   const step = nextStep(cell.phase, sessions.filter((s) => s.phase === 'Running').length, !!cell.previewPath, !!cell.releaseRef)
@@ -109,7 +105,7 @@ export function CellPage() {
   return (
     <>
       <Link to="/cells" className="back-link">
-        ← 返回工作区
+        ← 返回项目
       </Link>
       <h1 className="page-title">
         {cell.displayName || cell.name}
@@ -217,7 +213,7 @@ export function CellPage() {
         <div className="card">
           <h3>运行位置</h3>
           <p className="hint" style={{ marginTop: 0 }}>
-            一个工作区<b>跑在一台机器上</b>——工作区卷是 ReadWriteOnce,所有 pod 跟着锚点走。
+            一个项目<b>跑在一台机器上</b>——项目卷是 ReadWriteOnce,所有 pod 跟着锚点走。
             所以这里选的是「哪一类机器」,也就是这个项目的全部算力上限。
           </p>
 
@@ -242,8 +238,8 @@ export function CellPage() {
 
           {pools.isError ? (
             <p className="hint">
-              读不到节点列表,所以没法在这里选机器。celld 需要 <code className="mono">nodes</code> 的只读权限
-              ——用新版 chart 升级即可。
+              读不到机器池列表,所以没法在这里选机器。celld 需要{' '}
+              <code className="mono">placementclasses</code> 的只读权限 ——用新版 chart 升级即可。
             </p>
           ) : (
             <div className="table-wrap" style={{ marginTop: 10 }}>
@@ -253,28 +249,29 @@ export function CellPage() {
                     <th>机器池</th>
                     <th>节点</th>
                     <th>单机可用(最大)</th>
-                    <th>污点</th>
+                    <th>类型</th>
                     <th style={{ width: 90 }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {(pools.data ?? []).map((p) => {
-                    const current = cell.pool === p.label
+                    const current = cell.pool === p.selector
                     return (
-                      <tr key={p.label}>
-                        <td className="mono">{p.label}</td>
-                        <td>{p.nodes}</td>
-                        <td className="mono">
-                          {p.schedulable ? `${p.freeCPU} / ${p.freeMemory}` : <span className="faint">不可调度</span>}
+                      <tr key={p.name}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{p.displayName || p.name}</div>
+                          <div className="mono faint">{p.selector}</div>
                         </td>
-                        <td className="faint mono" style={{ fontSize: 11 }}>
-                          {p.taints.length ? p.taints.join(' ') : NONE}
+                        <td>{p.nodes}</td>
+                        <td className="mono">{p.free || <span className="faint">{NONE}</span>}</td>
+                        <td>
+                          {p.tolerated ? <Badge tone="amber">专用</Badge> : <Badge tone="gray">共享</Badge>}
                         </td>
                         <td>
                           <button
                             className="ghost small"
                             disabled={current || savePlacement.isPending}
-                            onClick={() => savePlacement.mutate(p.label)}
+                            onClick={() => savePlacement.mutate(p.name)}
                           >
                             {current ? '当前' : '放这里'}
                           </button>
@@ -301,7 +298,7 @@ export function CellPage() {
             </div>
           )}
           <p className="hint">
-            改动会让锚点重建,这个工作区会短暂中断;正在跑的会话会被清算。
+            改动会让锚点重建,这个项目会短暂中断;正在跑的会话会被清算。
           </p>
         </div>
 
