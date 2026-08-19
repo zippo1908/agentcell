@@ -460,6 +460,13 @@ func extractStreamText(line string) (string, bool) {
 	if json.Unmarshal([]byte(line), &m) != nil {
 		return "", false
 	}
+	// The role, when present, is the cheapest truth: an answer is what the
+	// assistant says, and a tool's output — however text-shaped — is the
+	// agent reading, not the agent answering. Without this, a Read of the
+	// repo landed in the board as if it were the reply.
+	if role, _ := m["role"].(string); role != "" && role != "assistant" {
+		return "", false
+	}
 	if typ, _ := m["type"].(string); typ != "" {
 		switch typ {
 		case "assistant", "message", "text", "delta", "text_delta", "content_block_delta":
