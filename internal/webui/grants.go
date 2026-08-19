@@ -31,14 +31,20 @@ import (
 // A static API key is the easy case: the same string every time, so a grant
 // row is all it takes and a borrower spends it exactly as an owner would.
 //
-// A connected OAuth account is the hard one, and it is lendable only on
-// purpose. Its refresh token ROTATES — using it mints a new one and
-// invalidates the old — so two runtimes holding the same account can knock
-// each other out, which is the failure internal/controller/account_sync.go
-// exists to contain. It is allowed because sharing one team account is a
-// thing people genuinely want; it requires an explicit acknowledgement, and
-// the copy is labelled with who lent it, so that when somebody IS logged out
-// the reason is readable from the object instead of guessed at.
+// A connected OAuth account needs one more step: the session controller
+// looks for a Secret named after the SESSION'S OWNER, so the borrower needs
+// their own copy under their own name. A grant row alone lends nothing.
+//
+// This was gated behind a scary warning on the theory that a rotating
+// refresh token would make the two copies knock each other offline. MEASURED
+// on 2026-08-19 against api.kimi.com: it does not. Two runtimes refreshed
+// from the same old token minutes apart and both succeeded — the provider
+// issues a new refresh token without invalidating the old. The copies simply
+// drift into separate lineages, which is waste rather than breakage.
+//
+// The copy is still labelled with who lent it. n=1 is enough to drop a
+// warning nobody could act on; it is not enough to make a shared login
+// untraceable when somebody eventually is logged out.
 
 type grantInput struct {
 	// Credential is the Secret's name — which key, not which vendor.
@@ -211,20 +217,11 @@ func (h *Handler) createGrant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, errNotFound)
 		return
 	}
-	// Lending a connected account is allowed but never by accident.
-	//
-	// Its refresh token rotates — using it mints a new one and invalidates
-	// the old — so the lender and the borrower are sharing something that is
-	// not designed to be shared, and either may find themselves logged out
-	// with no explanation they could have arrived at alone. The caller has to
-	// say it knew that.
-	if kind == credKindKimi && !in.Acknowledge {
-		writeErr(w, 409, fmt.Errorf(
-			"这是一个已连接的账号,不是静态 key。它的刷新令牌是轮换的:"+
-				"一边刷新,另一边那份就作废了,你们可能互相把对方踢下线。"+
-				"确认要借的话再来一次并带上 acknowledge。"))
-		return
-	}
+	// Acknowledge is no longer a gate. It stays in the request shape because
+	// callers written against the gated version still send it, and because a
+	// deployment that wants the confirmation back can reinstate it in one
+	// line — but the hazard it warned about was measured and did not exist.
+	_ = in.Acknowledge
 
 	to, err := h.granteeID(r, in)
 	if err != nil {

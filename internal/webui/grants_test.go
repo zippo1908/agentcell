@@ -89,13 +89,13 @@ func TestAGrantForADeletedKeyIsNotOffered(t *testing.T) {
 	}
 }
 
-// A connected OAuth account is lendable, but never by accident.
+// Lending a connected account has to actually hand it over.
 //
-// Its refresh token rotates: using it mints a new one and invalidates the
-// old, so the lender and the borrower can knock each other offline. Sharing
-// one team account is a thing people genuinely want, so this is allowed —
-// but only from a caller that says it knew.
-func TestLendingAConnectedAccountNeedsSayingSo(t *testing.T) {
+// A model key is chosen per dispatch, so a grant row is enough. An account is
+// never chosen — the session controller looks for a Secret named after the
+// session's owner — so without a copy under the borrower's name, a grant
+// lends nothing at all and does so silently.
+func TestLendingAnAccountPutsItUnderTheBorrowersName(t *testing.T) {
 	oauth := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Namespace: ns, Name: "alice-kimi",
 		Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: alice.ID()},
@@ -106,34 +106,17 @@ func TestLendingAConnectedAccountNeedsSayingSo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	post := func(body string) *httptest.ResponseRecorder {
-		req := asUser(httptest.NewRequest(http.MethodPost, "/api/me/grants", strings.NewReader(body)), alice)
-		rec := httptest.NewRecorder()
-		h.createGrant(rec, req)
-		return rec
+	req := asUser(httptest.NewRequest(http.MethodPost, "/api/me/grants",
+		strings.NewReader(`{"credential":"alice-kimi","email":"bob@tinci.com"}`)), alice)
+	rec := httptest.NewRecorder()
+	h.createGrant(rec, req)
+	if rec.Code != 201 {
+		t.Fatalf("lend = %d, want 201: %s", rec.Code, rec.Body)
 	}
 
-	rec := post(`{"credential":"alice-kimi","email":"bob@tinci.com"}`)
-	if rec.Code != 409 {
-		t.Fatalf("lending a rotating account without acknowledging = %d, want 409: %s", rec.Code, rec.Body)
-	}
-	// The refusal has to explain, not just refuse: somebody asking this is
-	// trying to solve a real problem and needs to know what they are taking on.
-	if !strings.Contains(rec.Body.String(), "轮换") {
-		t.Errorf("the refusal does not say why: %s", rec.Body)
-	}
-
-	if rec = post(`{"credential":"alice-kimi","email":"bob@tinci.com","acknowledge":true}`); rec.Code != 201 {
-		t.Fatalf("acknowledged lend = %d, want 201: %s", rec.Code, rec.Body)
-	}
-
-	// The borrower needs the account under THEIR OWN name: the session
-	// controller looks for a Secret named after the session's owner, so a
-	// grant row alone would have lent nothing at all.
 	var got corev1.Secret
 	// The id an account has is derived from its address — Redeem does the
-	// same — so the borrower's Secret is named after that, not after whatever
-	// principal happened to be logged in.
+	// same — so the borrower's Secret is named after that.
 	name := strings.TrimPrefix(idOf("bob@tinci.com"), "u-") + KimiCredentialSuffix
 	if err := h.Client.Get(t.Context(),
 		types.NamespacedName{Namespace: ns, Name: name}, &got); err != nil {
@@ -142,6 +125,8 @@ func TestLendingAConnectedAccountNeedsSayingSo(t *testing.T) {
 	if string(got.Data[kimiCredKey]) != "packed-credential" {
 		t.Errorf("the borrower's copy is not the lender's credential: %q", got.Data[kimiCredKey])
 	}
+	// A shared login that eventually fails is diagnosed by knowing it was
+	// shared, so the copy records who lent it.
 	if got.Labels["agentcell.io/lent-by"] != alice.ID() {
 		t.Errorf("a borrowed login must record who lent it, got %q", got.Labels["agentcell.io/lent-by"])
 	}

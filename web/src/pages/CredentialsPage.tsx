@@ -456,11 +456,10 @@ function Lending() {
             style={{ minWidth: 240 }}
           />
           <button
-            className={isAccount ? 'danger' : ''}
             disabled={!email.trim() || lend.isPending}
             onClick={() => lend.mutate()}
           >
-            {lend.isPending ? '借出中…' : isAccount ? '仍然共享这个账号' : '借出'}
+            {lend.isPending ? '借出中…' : isAccount ? '共享这个账号' : '借出'}
           </button>
         </div>
       )}
@@ -468,15 +467,15 @@ function Lending() {
           for a way to share their Kimi login should find the answer before
           they try it, not after. */}
       {isAccount ? (
-        <p className="hint" style={{ color: 'var(--red, #c0392b)' }}>
-          <b>这是一个已连接的账号,不是静态 key。</b>它的刷新令牌是<b>轮换</b>的:一边刷新,
-          另一边那份就作废了 —— 你们可能互相把对方踢下线,而被踢的一方只会看到「请重新登录」。
-          借出去的那份会记上是谁借的,真出问题时能一眼看出原因。
-          想稳一点就借一把 API key,或者让对方自己连一次账号(三十秒)。
+        <p className="hint">
+          借的是<b>已连接的账号</b>:对方名下会放一份拷贝(会话控制器只认按自己名字命名的那一份,
+          光记一笔账等于没借)。两边之后各自刷新、各走各的令牌链 —— 2026-08-19 实测过,
+          Kimi 换发新令牌<b>不会作废旧的</b>,所以这不影响使用。借出去的那份记着是谁借的,
+          万一哪天真有人被登出,原因能一眼看出来。
         </p>
       ) : (
         <p className="hint">
-          静态 API key 每次都是同一个字符串,借出去不会互相影响 —— 这才是它能被借的原因。
+          静态 API key 每次都是同一个字符串,借出去不会互相影响。
         </p>
       )}
     </div>
