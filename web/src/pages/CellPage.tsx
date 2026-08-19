@@ -21,7 +21,10 @@ function nextStep(phase: string, sessions: number, hasPreview: boolean, released
   if (phase === 'Error') return { tone: 'red' as const, text: '这个工作区处于 Error:先看下面的消息,修好之后控制器会自己重试。' }
   if (phase !== 'Ready') return { tone: 'amber' as const, text: '正在准备:克隆仓库、拉起常驻锚点和预览。通常一两分钟。' }
   if (sessions === 0) return { tone: 'green' as const, text: '第一步:派一单工作给 agent。想边看边改就勾上「常驻会话」。' }
-  if (!hasPreview) return { tone: 'amber' as const, text: '没有配置预览命令,所以看不到跑起来的产品。在设置里补一条即可。' }
+  // Not "go and configure a command" any more: nobody configures one. If
+  // there is still no preview, detection looked and found nothing to serve,
+  // and the reason is in the anchor's log rather than in a form.
+  if (!hasPreview) return { tone: 'amber' as const, text: '还没有可用的预览:平台没在仓库里认出能跑起来的东西(package.json 的 dev/start、Django、静态页)。等代码进来会自动重试。' }
   if (!released) return { tone: 'green' as const, text: '会话在跑。产出满意之后清算 → 批阅 → 发布到正式区。' }
   return { tone: 'green' as const, text: '一切正常。改动经清算和批阅之后,用「发布」推到正式区。' }
 }
@@ -159,6 +162,10 @@ export function CellPage() {
 
       {tab === 'overview' && (
         <>
+          {/* First on the page when it applies: a project with no repository
+              can be looked at but not worked in, and every other card here
+              describes work that cannot start until this is answered. */}
+          {!cell.repoURL && <AttachRepo cell={cell.name} />}
           <div className="card">
             <h3>下一步</h3>
             <div className="row" style={{ alignItems: 'flex-start', gap: 8 }}>
@@ -175,6 +182,7 @@ export function CellPage() {
             <Defs
               items={[
                 ['状态', cell.phase || NONE],
+                ['仓库', cell.repoURL ? `${cell.repoURL} (${cell.repoBranch || 'main'})` : '还没关联'],
                 ['槽位', `${cell.activeSessions} / ${cell.maxSessions}`],
                 ['预览路径', cell.previewPath || NONE],
                 ['正式区路径', cell.productionPath || NONE],
@@ -411,5 +419,70 @@ export function CellPage() {
         />
       )}
     </>
+  )
+}
+
+/**
+ * Pointing a project at its repository, after the fact.
+ *
+ * Creating a project no longer demands a URL, because a project is usually
+ * agreed on before somebody creates the GitLab repository for it. What was
+ * left behind was a project that looks fine and quietly cannot do anything:
+ * no checkout, so no worktree, so nothing for an agent to work on. This card
+ * exists to say that out loud and to fix it in one step.
+ */
+function AttachRepo({ cell }: { cell: string }) {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [url, setUrl] = useState('')
+  const [branch, setBranch] = useState('main')
+  const [secretName, setSecretName] = useState('')
+
+  const opts = useQuery({ queryKey: ['new-project-options'], queryFn: () => api.newProjectOptions() })
+
+  const attach = useMutation({
+    mutationFn: () => api.attachRepo(cell, url.trim(), branch.trim(), secretName),
+    onSuccess: () => {
+      toast.success('仓库已关联,工作区会重新拉取')
+      qc.invalidateQueries({ queryKey: ['cell', cell] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  return (
+    <div className="card">
+      <h3>还没有关联仓库</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        这个项目建起来了,但还没有代码。关联之后 agent 才有东西可以干活,
+        产出会推成 <code className="mono">session/&lt;id&gt;</code> 分支等你批阅。
+      </p>
+      <label className="field">
+        <span>仓库地址</span>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://git.tinci.com/team/shop.git" />
+      </label>
+      <div className="row">
+        <label className="field" style={{ flex: 1 }}>
+          <span>基线分支</span>
+          <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+        </label>
+        <label className="field" style={{ flex: 1 }}>
+          <span>git 凭据</span>
+          <select value={secretName} onChange={(e) => setSecretName(e.target.value)}>
+            <option value="">不需要(公开仓库)</option>
+            {(opts.data?.gitCredentials ?? []).map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <div className="hint">在「我的凭据」里绑定过 GitLab 令牌的话,它就在这个列表里。</div>
+        </label>
+      </div>
+      <div className="btn-row" style={{ marginTop: 12 }}>
+        <button className="primary" disabled={!url.trim() || attach.isPending} onClick={() => attach.mutate()}>
+          {attach.isPending ? '关联中…' : '关联仓库'}
+        </button>
+      </div>
+    </div>
   )
 }

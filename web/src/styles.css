@@ -624,6 +624,40 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 .pick-name { font-size: 13px; font-weight: 600; }
 .pick-sub { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
 .pick-desc { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+
+/* "详情" — the card shows what distinguishes one choice from another, and
+   parks the rest under a hover. Prose in every card made the grid a wall of
+   text to read before picking anything.
+
+   The card itself is the focus target — a span with tabindex inside a button
+   is not valid HTML, and the card was already focusable — so tabbing to a
+   choice reveals its detail too, rather than leaving it mouse-only. */
+.pick-detail {
+  font-size: 11px; color: var(--text-faint);
+  align-self: flex-start; cursor: help;
+  border-bottom: 1px dotted var(--border-strong);
+}
+.pick-tip {
+  display: none;
+  position: absolute; left: 10px; right: 10px; top: calc(100% - 4px);
+  z-index: 20;
+  flex-direction: column; gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--panel-raised, var(--panel));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .32);
+  font-size: 11px; line-height: 1.55; color: var(--text-dim);
+  text-align: left; white-space: normal; overflow-wrap: anywhere;
+}
+.pick-tip b { color: var(--text); font-size: 12px; }
+.pick-tip code { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.pick-detail:hover .pick-tip,
+.pick:focus-visible .pick-tip { display: flex; }
+/* The tooltip hangs out of the card, so the card has to be the thing it is
+   positioned against — and the card has to be allowed to overlap the ones
+   below it while the tooltip is up. */
+.pick { position: relative; }
+.pick:has(.pick-detail:hover), .pick:focus-visible { z-index: 21; }
 /* Cards hold prose, and prose without this spills out of the grid cell —
    which is what it did: a description ran out past the panel's left edge. */
 .pick > span { min-width: 0; overflow-wrap: anywhere; }

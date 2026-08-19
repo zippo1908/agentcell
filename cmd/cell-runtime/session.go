@@ -68,11 +68,22 @@ func runSession() error {
 	// pod for as long as it is the followed one.
 	var previewArgv []string
 	if raw := os.Getenv(runtimeapi.EnvPreviewCmd); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &previewArgv); err == nil && len(previewArgv) > 0 {
-			stop := make(chan os.Signal, 1)
-			signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-			go supervisePreview(previewArgv, wt, stop)
+		_ = json.Unmarshal([]byte(raw), &previewArgv)
+	}
+	var previewEnv []string
+	if len(previewArgv) == 0 {
+		// Same rule as the anchor: an unconfigured preview is one to work
+		// out from the checkout, not one to skip silently.
+		plan := detectPreview(wt, anchorPreviewPort())
+		previewArgv, previewEnv = plan.Argv, plan.Env
+		if len(previewArgv) == 0 {
+			fmt.Println("session: 不启动预览 —", plan.Why)
 		}
+	}
+	if len(previewArgv) > 0 {
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+		go supervisePreview(previewArgv, wt, previewEnv, stop)
 	}
 
 	if err := writeAgentConfig(); err != nil {
@@ -654,8 +665,11 @@ func branchesOf(dir, base, repoName string) error {
 // says whether the server is already up, and a second one would fight for
 // the port.
 func runPreviewStart(args []string) error {
-	if len(args) < 3 {
-		return fmt.Errorf("preview-start: need <session-id> <port> <argv...>")
+	// argv is optional: with none, the checkout is inspected and the command
+	// worked out here (see preview_detect.go), which is what "预览默认开着"
+	// means in practice — nobody types a command for the common cases.
+	if len(args) < 2 {
+		return fmt.Errorf("preview-start: need <session-id> <port> [argv...]")
 	}
 	id, portArg, argv := args[0], args[1], args[2:]
 	port, err := strconv.Atoi(portArg)
@@ -680,6 +694,19 @@ func runPreviewStart(args []string) error {
 	if _, err := os.Stat(wt); err != nil {
 		return fmt.Errorf("preview-start: no worktree for %s yet", id)
 	}
+	var extraEnv []string
+	if len(argv) == 0 {
+		plan := detectPreview(wt, port)
+		if len(plan.Argv) == 0 {
+			// Not an error: plenty of repositories have nothing to serve, and
+			// failing the reconcile over it would be worse than saying so.
+			// The sentence goes to stdout so it reaches whoever asked.
+			fmt.Println("preview not started —", plan.Why)
+			return nil
+		}
+		argv, extraEnv = plan.Argv, plan.Env
+		fmt.Printf("preview auto-detected: %v\n", argv)
+	}
 	logFile := filepath.Join(ids.UserHome(uid), "preview-"+id+".log")
 	lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -688,6 +715,9 @@ func runPreviewStart(args []string) error {
 	defer func() { _ = lf.Close() }()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = wt
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	cmd.Stdout, cmd.Stderr = lf, lf
 	cmd.Stdin = nil
 	// Its own process group: it outlives this exec, and killing it later

@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,18 +51,37 @@ func runAnchor() error {
 			return fmt.Errorf("parse %s: %w", runtimeapi.EnvPreviewCmd, err)
 		}
 	}
-	if len(previewCmd) == 0 {
-		fmt.Println("anchor: no preview command configured; idling")
-		<-stop
-		return nil
-	}
-
 	target := os.Getenv(runtimeapi.EnvPreviewTarget)
 	if target == "" {
 		target = ids.RepoPath
 	}
-	supervisePreview(previewCmd, target, stop)
+
+	// No command configured is no longer "no preview": the checkout is here
+	// by now (ensureClone ran above), so read it and work one out. Only a
+	// repository with nothing recognisable to serve ends up without one, and
+	// it says which.
+	var previewEnv []string
+	if len(previewCmd) == 0 {
+		plan := detectPreview(target, anchorPreviewPort())
+		if len(plan.Argv) == 0 {
+			fmt.Println("anchor: 不启动预览 —", plan.Why)
+			<-stop
+			return nil
+		}
+		previewCmd, previewEnv = plan.Argv, plan.Env
+		fmt.Printf("anchor: 自动判定预览命令 %v\n", previewCmd)
+	}
+	supervisePreview(previewCmd, target, previewEnv, stop)
 	return nil
+}
+
+// anchorPreviewPort is the port the platform will probe and proxy; detection
+// has to aim the server at that one rather than whatever it defaults to.
+func anchorPreviewPort() int {
+	if p, err := strconv.Atoi(os.Getenv(runtimeapi.EnvPreviewPort)); err == nil && p > 0 {
+		return p
+	}
+	return 3000
 }
 
 // ensureClone prepares EVERY repository this project is made of.
@@ -69,7 +90,19 @@ func runAnchor() error {
 // error, because an agent would then be looking at a codebase with a piece
 // missing and no indication which piece.
 func ensureClone() error {
-	repos := reposFromEnv()
+	// A project may legitimately have no repository yet: it can be created
+	// first and pointed at GitLab afterwards. Cloning "" used to be a hard
+	// error that took the whole anchor down with it.
+	var repos []runtimeapi.Repo
+	for _, r := range reposFromEnv() {
+		if strings.TrimSpace(r.URL) != "" {
+			repos = append(repos, r)
+		}
+	}
+	if len(repos) == 0 {
+		fmt.Println("anchor: 这个项目还没有关联仓库,先起一个空工作区")
+		return nil
+	}
 	for _, r := range repos {
 		if len(repos) == 1 {
 			// Single-repo project: the URL it always had.
@@ -206,7 +239,7 @@ func syncBase(branch string) {
 // followed worktree may not exist yet at pod start: each cycle re-resolves
 // the directory, and while serving the fallback a watcher kicks the server
 // the moment the real target appears.
-func supervisePreview(argv []string, dir string, stop <-chan os.Signal) {
+func supervisePreview(argv []string, dir string, extraEnv []string, stop <-chan os.Signal) {
 	backoff := time.Second
 	for {
 		serveDir := dir
@@ -222,7 +255,11 @@ func supervisePreview(argv []string, dir string, stop <-chan os.Signal) {
 		cmd.Stderr = os.Stderr
 		// The dev server runs repo-controlled code; it must not inherit the
 		// git credentials this supervisor holds for clone/fetch.
-		cmd.Env = envWithoutGitCreds()
+		//
+		// extraEnv comes last so a detected PORT/HOST wins: it is the port
+		// the platform is about to probe and proxy, and a stale value from
+		// the image would leave the preview serving where nobody looks.
+		cmd.Env = append(envWithoutGitCreds(), extraEnv...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		start := time.Now()
 		err := cmd.Start()

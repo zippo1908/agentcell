@@ -106,12 +106,32 @@ export const api = {
     }),
 
   people: () =>
-    req<{ email: string; name?: string; admin?: boolean; disabled?: boolean }[]>('/api/people'),
-  createInvite: (email: string, name: string, admin: boolean) =>
+    req<{ email: string; name?: string; admin?: boolean; disabled?: boolean; canCreate?: boolean }[]>(
+      '/api/people'),
+  createInvite: (email: string, name: string, admin: boolean, canCreate: boolean) =>
     req<{ invite: string; path: string; expires: string }>('/api/invites', {
       method: 'POST',
-      body: JSON.stringify({ email, name, admin }),
+      body: JSON.stringify({ email, name, admin, canCreate }),
     }),
+
+  /** Attach a repository to a project created before it had one. */
+  attachRepo: (cell: string, url: string, branch: string, secretName: string) =>
+    req<{ repo: unknown }>(`/api/cells/${cell}/repo`, {
+      method: 'PUT',
+      body: JSON.stringify({ url, branch, secretName }),
+    }),
+
+  /** My own forge tokens. Listing never returns the tokens themselves. */
+  gitIdentities: () =>
+    req<{ identities: { provider: string; username: string; secretName: string }[] }>(
+      '/api/me/git-identities'),
+  bindGitIdentity: (provider: string, username: string, token: string) =>
+    req<{ provider: string; username: string; secretName: string }>('/api/me/git-identities', {
+      method: 'PUT',
+      body: JSON.stringify({ provider, username, token }),
+    }),
+  unbindGitIdentity: (provider: string) =>
+    req<{ deleted: string }>(`/api/me/git-identities/${provider}`, { method: 'DELETE' }),
 
   nodePools: () => req<NodePool[]>('/api/nodepools'),
 

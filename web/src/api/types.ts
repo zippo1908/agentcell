@@ -27,6 +27,9 @@ export interface Cell {
   node?: string
   /** Placement in force, e.g. "agentcell.io/pool=gpu"; absent = scheduler chooses. */
   pool?: string
+  /** Absent on a project created before its repository existed. */
+  repoURL?: string
+  repoBranch?: string
   /** Why it has landed nowhere, in the scheduler's own words. */
   schedulingMessage?: string
   /** The Team whose members carry a role into this Cell. */

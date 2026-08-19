@@ -47,6 +47,7 @@ export function CredentialsPage() {
         <span className="sub">模型 API key,只有你能用</span>
       </h1>
       <KimiAccount />
+      <ForgeToken />
 
       <div className="card">
         <h3>已有凭据</h3>
@@ -213,6 +214,120 @@ function KimiAccount() {
           {state?.message && <span className="faint">{state.message}</span>}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Your own GitLab (or GitHub) token.
+ *
+ * Until now a project could only use a forge credential somebody had created
+ * by hand as a Kubernetes Secret, which meant onboarding a colleague ended
+ * with "ask an administrator to make you one". Bound here, it shows up in
+ * the credential picker on the project forms as your own.
+ *
+ * It is never shared and never lent. A commit pushed with somebody else's
+ * token is that person's commit as far as GitLab is concerned, and an audit
+ * trail that attributes work to the wrong human is worse than none.
+ */
+function ForgeToken() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const [provider, setProvider] = useState('gitlab')
+  const [username, setUsername] = useState('')
+  const [token, setToken] = useState('')
+
+  const bound = useQuery({ queryKey: ['git-identities'], queryFn: api.gitIdentities })
+
+  const bind = useMutation({
+    mutationFn: () => api.bindGitIdentity(provider, username.trim(), token.trim()),
+    onSuccess: () => {
+      setUsername('')
+      setToken('')
+      toast.success('令牌已绑定,新建项目时可以直接选它')
+      qc.invalidateQueries({ queryKey: ['git-identities'] })
+      // The project forms list credentials; a freshly bound one has to
+      // appear there without a reload, or it reads as not having worked.
+      qc.invalidateQueries({ queryKey: ['new-project-options'] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const unbind = useMutation({
+    mutationFn: (p: string) => api.unbindGitIdentity(p),
+    onSuccess: () => {
+      toast.success('已解绑')
+      qc.invalidateQueries({ queryKey: ['git-identities'] })
+      qc.invalidateQueries({ queryKey: ['new-project-options'] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const list = bound.data?.identities ?? []
+
+  return (
+    <div className="card">
+      <h3>我的代码仓库令牌</h3>
+      <p className="hint" style={{ marginTop: 0 }}>
+        绑定后,新建项目和关联仓库时可以直接选「我的令牌」,不用再找管理员建凭据。
+        令牌只属于你 —— 它推出去的提交,在 GitLab 那边算你的。
+      </p>
+
+      {list.length > 0 && (
+        <table className="grid" style={{ marginTop: 8, marginBottom: 12 }}>
+          <thead>
+            <tr>
+              <th>平台</th>
+              <th>用户名</th>
+              <th>凭据名</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((g) => (
+              <tr key={g.provider}>
+                <td>
+                  <Tag>{g.provider}</Tag>
+                </td>
+                <td>{g.username}</td>
+                <td className="mono faint">{g.secretName}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="ghost small"
+                    disabled={unbind.isPending}
+                    onClick={() => unbind.mutate(g.provider)}
+                  >
+                    解绑
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+          <option value="gitlab">GitLab</option>
+          <option value="github">GitHub</option>
+        </select>
+        <input
+          placeholder="用户名"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          style={{ minWidth: 160 }}
+        />
+        <input
+          type="password"
+          placeholder="访问令牌"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          style={{ minWidth: 260 }}
+          autoComplete="new-password"
+        />
+        <button disabled={!username.trim() || !token.trim() || bind.isPending} onClick={() => bind.mutate()}>
+          {bind.isPending ? '保存中…' : list.some((g) => g.provider === provider) ? '替换' : '绑定'}
+        </button>
+      </div>
     </div>
   )
 }

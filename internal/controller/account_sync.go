@@ -152,7 +152,9 @@ func shellQuoteArg(s string) string { return "'" + strings.ReplaceAll(s, "'", `'
 // worktree and can therefore serve it. Only one session per Cell is followed
 // at a time, so at most one runtime carries the label for that Cell.
 func (r *SessionReconciler) servePreviewFrom(ctx context.Context, sess *acv1.Session, cell *acv1.Cell, ns, id string, uid int64) {
-	if r.Exec == nil || cell == nil || len(cell.Spec.Preview.Command) == 0 {
+	// An empty command no longer means "no preview" — it means the runtime
+	// works one out from the worktree. Only an explicit "off" skips.
+	if r.Exec == nil || cell == nil || !cell.Spec.Preview.PreviewEnabled() {
 		return
 	}
 	if cell.Spec.Preview.FollowSession != id {

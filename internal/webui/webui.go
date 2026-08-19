@@ -130,6 +130,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/cells", h.createCell)
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
+	mux.HandleFunc("PUT /api/cells/{cell}/repo", h.putRepo)
+	mux.HandleFunc("GET /api/me/git-identities", h.listGitIdentities)
+	mux.HandleFunc("PUT /api/me/git-identities", h.putGitIdentity)
+	mux.HandleFunc("DELETE /api/me/git-identities/{provider}", h.deleteGitIdentity)
 	mux.HandleFunc("GET /api/placementclasses", h.listPlacementClasses)
 	mux.HandleFunc("GET /api/new-project-options", h.newProjectOptions)
 	mux.HandleFunc("GET /api/cells/{cell}/branches", h.listBranches)
@@ -375,6 +379,12 @@ type cellView struct {
 	// SchedulingMessage is the scheduler's own explanation for a Cell that
 	// has landed nowhere — otherwise the most opaque state this system has.
 	SchedulingMessage string `json:"schedulingMessage,omitempty"`
+	// RepoURL is empty for a project created before its repository existed.
+	// The console needs to know, because that project can be looked at but
+	// not worked in, and the reason has to be on the page rather than
+	// discovered as an agent with nothing to check out.
+	RepoURL    string `json:"repoURL,omitempty"`
+	RepoBranch string `json:"repoBranch,omitempty"`
 }
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
@@ -386,6 +396,7 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		Message: c.Status.Message, HandoffMessage: c.Status.HandoffMessage,
 		Access: string(effectiveAccess(c)), Members: c.Spec.Members,
 		Node: c.Status.Node, SchedulingMessage: c.Status.SchedulingMessage,
+		RepoURL: c.Spec.Repo.URL, RepoBranch: c.Spec.Repo.Branch,
 	}
 	for k, val := range c.Spec.Placement.NodeSelector {
 		v.Pool = k + "=" + val

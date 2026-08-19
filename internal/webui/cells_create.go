@@ -21,7 +21,11 @@ type createCellRequest struct {
 	SecretName  string `json:"secretName"`
 	Image       string `json:"image"`
 	Description string `json:"description"`
-	Preview     string `json:"preview"`
+	// Preview is an explicit command. Normally empty: the platform reads the
+	// checkout and works one out.
+	Preview string `json:"preview"`
+	// PreviewMode is "off" to run no preview at all; anything else is auto.
+	PreviewMode string `json:"previewMode"`
 	PreviewPort int32  `json:"previewPort"`
 	MaxSessions int32  `json:"maxSessions"`
 	// ProductionTarget: "incell" (default) runs production in this Cell;
@@ -67,8 +71,12 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	if strings.TrimSpace(req.RepoURL) == "" || strings.TrimSpace(req.Image) == "" {
-		writeErr(w, 400, fmt.Errorf("repoURL and image are required"))
+	// The repository is no longer required here. A project is usually agreed
+	// on before its GitLab repository exists, and demanding the URL up front
+	// only bought a Cell pointed at something that did not resolve yet.
+	// PUT /api/cells/{cell}/repo attaches it later.
+	if strings.TrimSpace(req.Image) == "" {
+		writeErr(w, 400, fmt.Errorf("image is required"))
 		return
 	}
 	// A git credential is a Secret in the control namespace, and pointing a
@@ -171,12 +179,22 @@ func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Every project gets a preview unless it says otherwise. Which command
+	// serves this checkout is read out of the checkout itself, so the form
+	// no longer asks — the answer lives in the repository, and on the day a
+	// project is created the repository is usually still empty.
+	port := req.PreviewPort
+	if port == 0 {
+		port = 3000
+	}
+	cell.Spec.Preview = acv1.PreviewSpec{Port: port}
+	if req.PreviewMode == string(acv1.PreviewOff) {
+		cell.Spec.Preview.Mode = acv1.PreviewOff
+	}
+	// A command may still be stated — by cellctl, by a project whose server
+	// detection cannot work out — and it always wins over detection.
 	if p := strings.Fields(req.Preview); len(p) > 0 {
-		port := req.PreviewPort
-		if port == 0 {
-			port = 3000
-		}
-		cell.Spec.Preview = acv1.PreviewSpec{Command: p, Port: port}
+		cell.Spec.Preview.Command = p
 	}
 	if err := h.Client.Create(r.Context(), cell); err != nil {
 		writeErr(w, 409, err)
