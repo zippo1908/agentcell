@@ -117,9 +117,24 @@ previewKeySecret: ""
 #             headless: ["kimi", "--yes", "-p", "{{task}}"]
 #             session_id: uuid
 #             resume: ["kimi", "--yes", "--resume", "{{session}}", "-p", "{{task}}"]
+#   presets:
+#     devboxes:
+#       local.yaml: |
+#         version: 1
+#         devboxes:
+#           - name: slim
+#             display_name: 标准(轻)
+#             image: registry.internal:5000/devbox-slim:v1
+#             description: alpine · Claude Code + Codex + Kimi + git/tmux
+#             size: 814MB
+#
+# The built-in catalogue names images on ghcr.io. A cluster that cannot reach
+# ghcr.io needs this overlay, or every new project starts in ImagePullBackOff
+# — and the create-a-project form offers the unreachable image by default.
 presets:
   providers: {}
   runners: {}
+  devboxes: {}
 
 gitBroker:
   enabled: true

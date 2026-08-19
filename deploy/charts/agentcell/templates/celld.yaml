@@ -127,6 +127,9 @@ spec:
             {{- if .Values.presets.providers }}
             - {name: providers-d, mountPath: /etc/agentcell/providers.d, readOnly: true}
             {{- end }}
+            {{- if .Values.presets.devboxes }}
+            - {name: devboxes-d, mountPath: /etc/agentcell/devboxes.d, readOnly: true}
+            {{- end }}
             {{- if .Values.presets.runners }}
             - {name: runners-d, mountPath: /etc/agentcell/runners.d, readOnly: true}
             {{- end }}
@@ -147,6 +150,10 @@ spec:
         {{- if .Values.presets.runners }}
         - name: runners-d
           configMap: {name: agentcell-runners}
+        {{- end }}
+        {{- if .Values.presets.devboxes }}
+        - name: devboxes-d
+          configMap: {name: agentcell-devboxes}
         {{- end }}
         {{- if or .Values.celld.auth.existingSecret .Values.celld.auth.tokens }}
         - name: tokens
