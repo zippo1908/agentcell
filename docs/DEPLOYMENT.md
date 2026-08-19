@@ -68,6 +68,22 @@ podman build -t ghcr.io/agentcell/celld  -f images/celld/Containerfile .
 podman build -t ghcr.io/agentcell/devbox -f images/devbox/Containerfile .
 ```
 
+> **`make build` 不是可选的,而且漏掉它不会报错。** `images/celld/Containerfile`
+> 只有一行 `COPY bin/celld /celld` —— 它**不编译**,只拷贝已经构建好的二进制。
+> 跳过 `make build` 直接 `podman build`,得到的是一个内容陈旧但完全合法的新镜像:
+> 它会推送成功、拉取成功、rollout 成功,**而且 digest 一致**,因为 pod 跑的确实
+> 就是你推的那个镜像——只是镜像里的二进制是旧的。
+>
+> 所以「只核对 digest」是不够的。digest 证明的是**投递**,不是**内容**。
+> 想确认二进制真的是新的,在打包前查一个只有新代码才有的符号:
+>
+> ```bash
+> strings bin/celld | grep -c "<新代码里的某个字符串>"
+> ```
+>
+> 或者看 `make build` 的输出里 `version.Commit=` 是不是你期望的那个 commit。
+
+
 **Single-node k3s** — import into its containerd (import each image
 separately; a multi-image archive can collapse tags):
 
