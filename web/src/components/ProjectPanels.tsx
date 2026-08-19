@@ -255,14 +255,27 @@ export function ProjectTokens({ cell }: { cell: Cell }) {
   const toast = useToast()
   const opts = useQuery({ queryKey: ['new-project-options'], queryFn: () => api.newProjectOptions() })
   const [picked, setPicked] = useState<string | null>(null)
+  const [username, setUsername] = useState('')
+  const [token, setToken] = useState('')
 
+  const done = (msg: string) => {
+    toast.success(msg)
+    setPicked(null)
+    setUsername('')
+    setToken('')
+    qc.invalidateQueries({ queryKey: ['cell', cell.name] })
+    // The new credential has to appear in the picker too, or it looks like
+    // nothing was saved.
+    qc.invalidateQueries({ queryKey: ['new-project-options'] })
+  }
   const save = useMutation({
     mutationFn: (name: string) => api.setRepoCredential(cell.name, name),
-    onSuccess: () => {
-      toast.success('已切换,锚点会用新凭据重新拉取')
-      setPicked(null)
-      qc.invalidateQueries({ queryKey: ['cell', cell.name] })
-    },
+    onSuccess: () => done('已切换,锚点会用新凭据重新拉取'),
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const enter = useMutation({
+    mutationFn: () => api.setRepoToken(cell.name, username.trim(), token.trim()),
+    onSuccess: () => done('令牌已保存并绑到这个项目'),
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -301,6 +314,38 @@ export function ProjectTokens({ cell }: { cell: Cell }) {
               onClick={() => save.mutate(picked ?? '')}
             >
               {save.isPending ? '切换中…' : '换成这个'}
+            </button>
+          </div>
+
+          {/* Typing one in, for the person whose list is empty. Choosing from
+              a list of nothing, with "go to another page and come back" as
+              the only way forward, is the shape this platform keeps trying
+              to remove. */}
+          <h3 style={{ marginTop: 22 }}>或者直接填一个</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            存成这个项目自己的凭据(<code className="mono">{cell.name}-git</code>),归你所有。
+            和「我的凭据」里那份个人身份是两回事 —— 这里可以放一个部署专用的令牌。
+          </p>
+          <div className="row" style={{ flexWrap: 'wrap' }}>
+            <input
+              placeholder="用户名"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              style={{ minWidth: 160 }}
+            />
+            <input
+              type="password"
+              placeholder="访问令牌"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              style={{ minWidth: 260 }}
+              autoComplete="new-password"
+            />
+            <button
+              disabled={!username.trim() || !token.trim() || enter.isPending}
+              onClick={() => enter.mutate()}
+            >
+              {enter.isPending ? '保存中…' : '保存并使用'}
             </button>
           </div>
         </>

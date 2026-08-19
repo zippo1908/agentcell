@@ -214,6 +214,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ secretName }),
     }),
+  /** Or type one in on the project's own page, for somebody who has none. */
+  setRepoToken: (cell: string, username: string, token: string) =>
+    req<{ secretName: string }>(`/api/cells/${cell}/repo-credential`, {
+      method: 'PUT',
+      body: JSON.stringify({ username, token }),
+    }),
 
   /** Who is on this project — names, not the hashes the CR stores. */
   members: (cell: string) =>

@@ -6,9 +6,13 @@ import (
 	"net/http"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	acv1 "github.com/zippo1908/agentcell/api/v1alpha1"
+	"github.com/zippo1908/agentcell/internal/identity"
 )
 
 // Attaching a repository to a project that already exists.
@@ -100,14 +104,35 @@ func (h *Handler) putRepoCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		SecretName string `json:"secretName"`
+		// Or type one here. A project page that can only CHOOSE a credential
+		// is useless to the person who has none — and telling them to go to
+		// another page, create one, and come back is the shape this platform
+		// keeps trying to remove.
+		Username string `json:"username"`
+		Token    string `json:"token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
 	in.SecretName = strings.TrimSpace(in.SecretName)
-	// Empty clears it, for a repository that needs no credential at all.
-	if in.SecretName != "" {
+	in.Username = strings.TrimSpace(in.Username)
+	in.Token = strings.TrimSpace(in.Token)
+
+	if in.Token != "" {
+		if in.Username == "" {
+			// Both, or the clone fails later with an authentication error
+			// that says nothing about which half was missing.
+			writeErr(w, 400, fmt.Errorf("用户名和令牌都要填"))
+			return
+		}
+		name, err := h.putProjectCredential(r, cell.Name, in.Username, in.Token)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		in.SecretName = name
+	} else if in.SecretName != "" {
 		if err := h.checkCredentialOwnership(r, in.SecretName); err != nil {
 			writeErr(w, 404, err)
 			return
@@ -119,4 +144,49 @@ func (h *Handler) putRepoCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"secretName": cell.Spec.Repo.SecretName})
+}
+
+// putProjectCredential stores a token entered on a project's own page.
+//
+// Named after the project rather than the person, because that is what it
+// is: the credential THIS project clones and pushes with. A personal forge
+// identity (bound in 我的凭据) is a different thing and keeps its own name —
+// somebody may well want a deploy token here and their own identity there.
+//
+// Owned by whoever entered it, so the same ownership rule that governs
+// choosing a credential governs this one.
+func (h *Handler) putProjectCredential(r *http.Request, cell, username, token string) (string, error) {
+	name := cell + "-git"
+	p := identity.FromContext(r.Context())
+	var sec corev1.Secret
+	err := h.Client.Get(r.Context(), types.NamespacedName{Namespace: h.Namespace, Name: name}, &sec)
+	switch {
+	case apierrors.IsNotFound(err):
+		return name, h.Client.Create(r.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: h.Namespace, Name: name,
+				Labels: map[string]string{OwnerLabel: p.ID()},
+			},
+			Type: corev1.SecretTypeBasicAuth,
+			Data: map[string][]byte{
+				corev1.BasicAuthUsernameKey: []byte(username),
+				corev1.BasicAuthPasswordKey: []byte(token),
+			},
+		})
+	case err != nil:
+		return "", err
+	}
+	// Never adopt a Secret of this name that belongs to somebody else: the
+	// name is derived from the project, and a hand-made Secret could be
+	// sitting on it.
+	if !p.Owns(sec.Labels[OwnerLabel]) {
+		return "", fmt.Errorf("凭据名 %s 已被别的东西占用", name)
+	}
+	if sec.Data == nil {
+		sec.Data = map[string][]byte{}
+	}
+	sec.Type = corev1.SecretTypeBasicAuth
+	sec.Data[corev1.BasicAuthUsernameKey] = []byte(username)
+	sec.Data[corev1.BasicAuthPasswordKey] = []byte(token)
+	return name, h.Client.Update(r.Context(), &sec)
 }
