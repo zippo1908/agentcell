@@ -6,7 +6,7 @@ import type {
   Credential,
   Me,
   Meta,
-  NodePool,
+  PlacementClass,
   NewProjectOptions,
   Post,
   Branch,
@@ -150,13 +150,13 @@ export const api = {
   unbindGitIdentity: (provider: string) =>
     req<{ deleted: string }>(`/api/me/git-identities/${provider}`, { method: 'DELETE' }),
 
-  nodePools: () => req<NodePool[]>('/api/nodepools'),
+  placementClasses: () => req<PlacementClass[]>('/api/placementclasses'),
 
-  /** Empty key clears the placement and lets the scheduler choose again. */
-  savePlacement: (name: string, key: string, value: string) =>
-    req<{ nodeSelector: Record<string, string>; tolerations: number }>(
+  /** Empty class clears the placement and lets the scheduler choose again. */
+  savePlacement: (name: string, className: string) =>
+    req<{ ok: string }>(
       `/api/cells/${name}/placement`,
-      { method: 'PUT', body: JSON.stringify({ key, value }) },
+      { method: 'PUT', body: JSON.stringify({ class: className }) },
     ),
 
   saveDescription: (name: string, description: string) =>

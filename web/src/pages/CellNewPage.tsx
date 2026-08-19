@@ -86,7 +86,7 @@ export function CellNewPage() {
         maxSessions: Number(f.maxSessions) || 2,
       }),
     onSuccess: (r) => {
-      toast.success(`工作区 ${r.cell} 已创建`)
+      toast.success(`项目 ${r.cell} 已创建`)
       nav(`/cells/${r.cell}`)
     },
     onError: (e) => toast.error((e as Error).message),
@@ -96,7 +96,7 @@ export function CellNewPage() {
 
   return (
     <>
-      <h1 className="page-title">新建工作区</h1>
+      <h1 className="page-title">新建项目</h1>
       <div className="card" style={{ maxWidth: 720 }}>
         <div className="form-section-title">项目</div>
         <label className="field">
@@ -326,7 +326,7 @@ export function CellNewPage() {
 
         <div className="btn-row" style={{ marginTop: 20 }}>
           <button className="primary" disabled={!ok || create.isPending} onClick={() => create.mutate()}>
-            {create.isPending ? '创建中…' : '创建工作区'}
+            {create.isPending ? '创建中…' : '创建项目'}
           </button>
           <button className="ghost" onClick={() => nav('/cells')}>
             取消

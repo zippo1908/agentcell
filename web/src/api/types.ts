@@ -82,17 +82,18 @@ export interface Team {
   role: string
 }
 
-/** A class of machine a Cell can be placed on, as it exists in the cluster. */
-export interface NodePool {
-  key: string
-  value: string
-  label: string
+/** A class of machine a Cell can be placed on, as the operator offers it. */
+export interface PlacementClass {
+  name: string
+  displayName: string
+  description: string
+  /** The node selector the class expands to, e.g. "agentcell.io/pool=gpu". */
+  selector: string
   nodes: number
-  taints: string[]
-  /** Largest SINGLE node's free capacity — a Cell fits on one machine or none. */
-  freeCPU: string
-  freeMemory: string
-  schedulable: boolean
+  /** Largest single node's free capacity — a Cell fits on one machine or none. */
+  free?: string
+  /** Dedicated pools carry taints; the platform adds the toleration itself. */
+  tolerated?: boolean
 }
 
 export type SessionPhase =

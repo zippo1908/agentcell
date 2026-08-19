@@ -51,7 +51,13 @@ export function BoardPage() {
 
   const posts = board.data?.posts ?? []
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' })
+    // Follow the stream only when the reader is already at the bottom.
+    // The board polls every few seconds; scrolling up to read history would
+    // otherwise be yanked back down on every new message.
+    const stream = endRef.current?.parentElement
+    if (!stream) return
+    const nearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80
+    if (nearBottom) endRef.current?.scrollIntoView({ block: 'end' })
   }, [posts.length])
 
   // --- @ ---------------------------------------------------------------
@@ -180,7 +186,7 @@ export function BoardPage() {
           <div className="board-empty">
             <p>还没有人说话。</p>
             <p className="hint">
-              试试 <code className="mono">@工作区名 把商品卡片改成两列</code> —— agent 会接单,
+              试试 <code className="mono">@项目名 把商品卡片改成两列</code> —— agent 会接单,
               做完在这里回你,附上分支和 diff。
             </p>
           </div>
@@ -219,7 +225,7 @@ export function BoardPage() {
           ref={taRef}
           value={text}
           rows={2}
-          placeholder="@工作区 说要做什么;输入 @ 选人,或 @机器人 让 agent 接单"
+          placeholder="@项目 说要做什么;输入 @ 选人,或 @机器人 让 agent 接单"
           onChange={(e) => {
             setText(e.target.value)
             refreshMention(e.target.value, e.target.selectionStart ?? 0)

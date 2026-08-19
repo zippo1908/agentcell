@@ -12,6 +12,16 @@ import { NONE } from '../lib/format'
  */
 export function CapabilitiesPage() {
   const { data: meta, isLoading } = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 60_000 })
+  const { data: opts, isLoading: optsLoading } = useQuery({
+    queryKey: ['new-project-options'],
+    queryFn: () => api.newProjectOptions(),
+    staleTime: 60_000,
+  })
+  const { data: classes, isLoading: classesLoading } = useQuery({
+    queryKey: ['placementclasses'],
+    queryFn: () => api.placementClasses(),
+    staleTime: 60_000,
+  })
   const runners = meta?.runners ?? []
   const providers = meta?.providers ?? []
   const byName = Object.fromEntries(providers.map((p) => [p.name, p]))
@@ -122,6 +132,96 @@ export function CapabilitiesPage() {
         )}
         <div className="hint" style={{ marginTop: 12 }}>
           模型清单只是起点:厂商上新的速度远快于这张表,可以直接填一个不在清单里的。
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>开发镜像</h3>
+        {optsLoading ? (
+          <SkeletonTable rows={3} cols={4} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>镜像</th>
+                  <th>规格</th>
+                  <th>描述</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(opts?.devboxes ?? []).map((d) => (
+                  <tr key={d.name}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{d.displayName}</div>
+                      <div className="mono faint">{d.name}</div>
+                    </td>
+                    <td className="mono" style={{ maxWidth: 320 }}>
+                      {d.image}
+                    </td>
+                    <td>{d.size}</td>
+                    <td className="muted" style={{ maxWidth: 320 }}>
+                      {d.description || NONE}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="hint" style={{ marginTop: 12 }}>
+          镜像里必须带 agent CLI、git、tmux 和 cell-runtime —— 建项目的人不该需要知道这些。
+          想加自己的镜像或指向私有 registry,往 <code className="mono">/etc/agentcell/devboxes.d/</code> 丢一个
+          YAML 即可,同名条目会被覆盖,不需要发版。
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>机器池</h3>
+        {classesLoading ? (
+          <SkeletonTable rows={2} cols={5} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>节点选择器</th>
+                  <th>节点数</th>
+                  <th>单节点可用</th>
+                  <th>类型</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(classes ?? []).map((c) => (
+                  <tr key={c.name}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{c.displayName || c.name}</div>
+                      <div className="mono faint">{c.name}</div>
+                    </td>
+                    <td className="mono">{c.selector}</td>
+                    <td className="num-col">{c.nodes}</td>
+                    <td className="mono">{c.free || <span className="faint">{NONE}</span>}</td>
+                    <td>
+                      {c.tolerated ? <Badge tone="amber">专用</Badge> : <Badge tone="gray">共享</Badge>}
+                    </td>
+                  </tr>
+                ))}
+                {(classes ?? []).length === 0 && (
+                  <tr>
+                    <td className="faint" colSpan={5}>
+                      集群没有单独的机器池,调度器自由分配
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="hint" style={{ marginTop: 12 }}>
+          池是运维用 PlacementClass 摆出来的选项:「单节点可用」取池里最空的一台,因为一个项目
+          跑在一台机器上。「专用」池带污点,选定后平台自己补容忍,不需要你管。
         </div>
       </div>
     </>
