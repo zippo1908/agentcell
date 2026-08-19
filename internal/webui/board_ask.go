@@ -110,6 +110,12 @@ func (r *askRegistry) get(id string) (askEntry, bool) {
 }
 
 // boardAsk streams one registered ask's answer as server-sent events.
+//
+// This response is only a live VIEW of the answer, never its home: a
+// detached collector owns the exec and writes the outcome to the board no
+// matter what happens to this connection. Before the split, an answer died
+// with its stream — close the tab, hiccup the proxy, restart celld mid-run,
+// and the answer the person just watched form was nowhere on the board.
 func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 	t, _, ok := h.boardFor(w, r)
 	if !ok {
@@ -127,46 +133,80 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, fmt.Errorf("streaming is not supported by this server"))
 		return
 	}
+
+	events := make(chan map[string]any, 64)
+	go h.collectAsk(t.Name, e, events)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(200)
 
-	// The request's own context is the cancellation: a closed tab stops the
-	// exec. The timeout caps it from the other side.
-	ctx, cancel := context.WithTimeout(r.Context(), askStreamTimeout)
-	defer cancel()
-
-	emit := func(v any) {
-		b, err := json.Marshal(v)
-		if err != nil {
+	tick := time.NewTicker(askHeartbeat)
+	defer tick.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			// The watcher left; the collector keeps going and the answer
+			// still lands on the board. That is the entire point.
 			return
+		case <-tick.C:
+			_, _ = fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			b, err := json.Marshal(ev)
+			if err != nil {
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+			if ev["t"] == "done" || ev["t"] == "error" {
+				return
+			}
 		}
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
-		flusher.Flush()
 	}
-	fail := func(err error) {
-		emit(map[string]any{"t": "error", "message": err.Error()})
+}
+
+// collectAsk runs one ask to its end — waking the session, exec'ing the CLI,
+// gathering the text — and ALWAYS posts the outcome to the board, answer or
+// failure. Events are fanned out for whoever happens to be watching; the
+// board copy does not depend on them.
+func (h *Handler) collectAsk(cell string, e askEntry, events chan<- map[string]any) {
+	defer close(events)
+	ctx, cancel := context.WithTimeout(context.Background(), askStreamTimeout)
+	defer cancel()
+	send := func(v map[string]any) {
+		select {
+		case events <- v:
+		case <-ctx.Done():
+		}
 	}
 
 	// Say what the wait is, because it can be two minutes of silence while a
 	// sleeping session wakes: a blank bubble reads as broken, not as loading.
-	emit(map[string]any{"t": "waiting", "message": "正在等项目里的会话就绪……"})
+	send(map[string]any{"t": "waiting", "message": "正在等项目里的会话就绪……"})
 
-	sess, err := h.waitBoardRuntime(ctx, t.Name)
+	sess, err := h.waitBoardRuntime(ctx, cell)
 	if err != nil {
-		fail(err)
+		h.postAskFailure(cell, nil, err)
+		send(map[string]any{"t": "error", "message": err.Error()})
 		return
 	}
 	if h.RESTConfig == nil {
-		fail(fmt.Errorf("这个 celld 没有集群 exec 权限,流不了"))
+		err := fmt.Errorf("这个 celld 没有集群 exec 权限,流不了")
+		h.postAskFailure(cell, nil, err)
+		send(map[string]any{"t": "error", "message": err.Error()})
 		return
 	}
-	emit(map[string]any{"t": "started", "message": "会话就绪,agent 开跑"})
+	send(map[string]any{"t": "started", "message": "会话就绪,agent 开跑"})
 
 	uid, err := runtimeUID(sess.Status.PodName)
 	if err != nil {
-		fail(err)
+		h.postAskFailure(cell, nil, err)
+		send(map[string]any{"t": "error", "message": err.Error()})
 		return
 	}
 	id := sess.Status.SessionID
@@ -185,7 +225,7 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 		`; TASK="$1"; exec kimi -p "$TASK" --output-format stream-json`
 	argv := []string{"sh", "-c", script, "sh", e.Task}
 
-	ns := ids.WorkloadNamespace(t.Name)
+	ns := ids.WorkloadNamespace(cell)
 	lines := make(chan string, 64)
 	streamErr := make(chan error, 1)
 	go func() {
@@ -196,56 +236,57 @@ func (h *Handler) boardAsk(w http.ResponseWriter, r *http.Request) {
 	// The CLI's last words that were not stream-json (its own error lines).
 	// When the run fails, these say why more often than the exit status does.
 	var plain []string
-	tick := time.NewTicker(askHeartbeat)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			// Client gone or the cap hit. Either way the other end is no
-			// longer reading, and the exec dies with the context.
-			return
-		case <-tick.C:
-			_, _ = fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
-		case line, ok := <-lines:
-			if !ok {
-				err := <-streamErr
-				if err != nil && full.Len() == 0 {
-					fail(fmt.Errorf("kimi 没有跑完:%s", streamFailure(err, plain)))
-					return
-				}
-				text := full.String()
-				// Post BEFORE done: the board is the copy of record, and a
-				// client that got "done" for an answer the board never shows
-				// would have the only copy of it. A fresh context because the
-				// request's may already be ending.
-				post := acv1.Post{
-					Kind: acv1.PostAgent, Author: t.Name, Cell: t.Name,
-					Session: sess.Name, Body: text,
-				}
-				pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
-				perr := h.appendPost(pctx, t.Name, &post)
-				pcancel()
-				if perr != nil {
-					fail(fmt.Errorf("回答没能写到黑板:%w", perr))
-					return
-				}
-				emit(map[string]any{"t": "done", "text": text})
-				return
+	for line := range lines {
+		if frag, ok := extractStreamText(line); ok {
+			full.WriteString(frag)
+			send(map[string]any{"t": "delta", "text": frag})
+		} else if s := strings.TrimSpace(line); s != "" && !strings.HasPrefix(s, "{") {
+			// Plain stdout that is not stream-json is the CLI talking
+			// about itself — usually the reason it is about to fail.
+			if len(plain) >= 3 {
+				plain = plain[1:]
 			}
-			if frag, ok := extractStreamText(line); ok {
-				full.WriteString(frag)
-				emit(map[string]any{"t": "delta", "text": frag})
-			} else if s := strings.TrimSpace(line); s != "" && !strings.HasPrefix(s, "{") {
-				// Plain stdout that is not stream-json is the CLI talking
-				// about itself — usually the reason it is about to fail.
-				if len(plain) >= 3 {
-					plain = plain[1:]
-				}
-				plain = append(plain, s)
-			}
+			plain = append(plain, s)
 		}
 	}
+	err = <-streamErr
+	if err != nil && full.Len() == 0 {
+		failure := fmt.Errorf("kimi 没有跑完:%s", streamFailure(err, plain))
+		h.postAskFailure(cell, sess, failure)
+		send(map[string]any{"t": "error", "message": failure.Error()})
+		return
+	}
+	text := full.String()
+	h.postAskAnswer(cell, sess, text)
+	send(map[string]any{"t": "done", "text": text})
+}
+
+// postAskAnswer lands the completed answer on the board — the copy of
+// record, posted whether or not anyone is still holding the stream.
+func (h *Handler) postAskAnswer(cell string, sess *acv1.Session, text string) {
+	post := acv1.Post{
+		Kind: acv1.PostAgent, Author: cell, Cell: cell,
+		Session: sess.Name, Body: text,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = h.appendPost(ctx, cell, &post)
+}
+
+// postAskFailure lands the reason there is no answer. The board's rule —
+// nothing fails silently — covers the agent too: an answer that could not
+// be produced is part of the conversation, not a gap in it.
+func (h *Handler) postAskFailure(cell string, sess *acv1.Session, outcome error) {
+	post := acv1.Post{
+		Kind: acv1.PostSystem, Author: cell, Cell: cell,
+		Body: outcome.Error(),
+	}
+	if sess != nil {
+		post.Session = sess.Name
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = h.appendPost(ctx, cell, &post)
 }
 
 // waitBoardRuntime waits until the project's board session has a live

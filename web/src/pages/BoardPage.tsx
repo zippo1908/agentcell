@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { Post } from '../api/types'
 import { Spinner, useToast } from '../ui/primitives'
+import { Markdown } from '../lib/markdown'
 
 /**
  * The board — where work is asked for and where it comes back.
@@ -326,7 +327,7 @@ export function BoardPage() {
                 </div>
               ) : (
                 <div className="post-text">
-                  {stream.text}
+                  <Markdown text={stream.text} />
                   <span className="stream-caret" />
                 </div>
               )}
@@ -432,7 +433,7 @@ function PostRow({ post }: { post: Post }) {
             </Link>
           )}
         </div>
-        <div className="post-text">{post.body}</div>
+        <div className="post-text">{isAgent ? <Markdown text={post.body} /> : post.body}</div>
       </div>
     </div>
   )
