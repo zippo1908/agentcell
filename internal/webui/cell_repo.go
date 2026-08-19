@@ -80,3 +80,43 @@ func (h *Handler) putRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"repo": cell.Spec.Repo})
 }
+
+// putRepoCredential changes WHICH credential this project uses, without
+// touching which repository it points at.
+//
+// Separate from putRepo on purpose. Rotating a token, or moving a project
+// from a hand-made shared credential onto your own, is routine and safe:
+// the codebase is unchanged, so every clone and worktree stays valid. Only
+// the repository URL is the thing that must not quietly move.
+func (h *Handler) putRepoCredential(w http.ResponseWriter, r *http.Request) {
+	var cell acv1.Cell
+	if err := h.Client.Get(r.Context(),
+		types.NamespacedName{Namespace: h.Namespace, Name: r.PathValue("cell")}, &cell); err != nil {
+		writeErr(w, 404, errNotFound)
+		return
+	}
+	if !h.authorize(w, r, &cell, ActionSettings) {
+		return
+	}
+	var in struct {
+		SecretName string `json:"secretName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	in.SecretName = strings.TrimSpace(in.SecretName)
+	// Empty clears it, for a repository that needs no credential at all.
+	if in.SecretName != "" {
+		if err := h.checkCredentialOwnership(r, in.SecretName); err != nil {
+			writeErr(w, 404, err)
+			return
+		}
+	}
+	cell.Spec.Repo.SecretName = in.SecretName
+	if err := h.Client.Update(r.Context(), &cell); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"secretName": cell.Spec.Repo.SecretName})
+}

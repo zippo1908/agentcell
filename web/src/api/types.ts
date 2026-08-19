@@ -30,6 +30,8 @@ export interface Cell {
   /** Absent on a project created before its repository existed. */
   repoURL?: string
   repoBranch?: string
+  /** Which credential this project clones and pushes with; a name only. */
+  repoSecretName?: string
   /** Why it has landed nowhere, in the scheduler's own words. */
   schedulingMessage?: string
   /** The Team whose members carry a role into this Cell. */

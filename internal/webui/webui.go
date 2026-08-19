@@ -131,6 +131,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/cells/{cell}", h.getCell)
 	mux.HandleFunc("PUT /api/cells/{cell}/description", h.putDescription)
 	mux.HandleFunc("PUT /api/cells/{cell}/repo", h.putRepo)
+	mux.HandleFunc("PUT /api/cells/{cell}/repo-credential", h.putRepoCredential)
 	mux.HandleFunc("GET /api/me/git-identities", h.listGitIdentities)
 	mux.HandleFunc("PUT /api/me/git-identities", h.putGitIdentity)
 	mux.HandleFunc("DELETE /api/me/git-identities/{provider}", h.deleteGitIdentity)
@@ -385,6 +386,9 @@ type cellView struct {
 	// discovered as an agent with nothing to check out.
 	RepoURL    string `json:"repoURL,omitempty"`
 	RepoBranch string `json:"repoBranch,omitempty"`
+	// RepoSecretName is which credential this project clones and pushes
+	// with. A name only — never anything from inside it.
+	RepoSecretName string `json:"repoSecretName,omitempty"`
 }
 
 func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
@@ -397,6 +401,7 @@ func (h *Handler) toCellView(r *http.Request, c *acv1.Cell) cellView {
 		Access: string(effectiveAccess(c)), Members: c.Spec.Members,
 		Node: c.Status.Node, SchedulingMessage: c.Status.SchedulingMessage,
 		RepoURL: c.Spec.Repo.URL, RepoBranch: c.Spec.Repo.Branch,
+		RepoSecretName: c.Spec.Repo.SecretName,
 	}
 	for k, val := range c.Spec.Placement.NodeSelector {
 		v.Pool = k + "=" + val

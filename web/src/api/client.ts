@@ -168,6 +168,37 @@ export const api = {
 
   diff: (session: string) => req<Diff>(`/api/sessions/${session}/diff`),
 
+  /** The project's knowledge base: what people put there for the agent. */
+  files: (cell: string) =>
+    req<{ files: { path: string; size: number; mime: string; readable: boolean; uploadedBy?: string; created: number }[] }>(
+      `/api/cells/${cell}/files`),
+  uploadFile: async (cell: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    // No Content-Type header: the browser has to set the multipart boundary,
+    // and setting it by hand produces a body the server cannot parse.
+    const res = await fetch(`/api/cells/${cell}/files`, { method: 'POST', body: form })
+    if (!res.ok) throw new Error((await res.text()) || `上传失败 (${res.status})`)
+    return res.json() as Promise<{ path: string }>
+  },
+  deleteFile: (cell: string, path: string) =>
+    req<{ deleted: string }>(`/api/cells/${cell}/files/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'DELETE',
+    }),
+  fileURL: (cell: string, path: string) =>
+    `/api/cells/${cell}/files/${path.split('/').map(encodeURIComponent).join('/')}`,
+
+  /** Which credential this project uses for its repository. */
+  setRepoCredential: (cell: string, secretName: string) =>
+    req<{ secretName: string }>(`/api/cells/${cell}/repo-credential`, {
+      method: 'PUT',
+      body: JSON.stringify({ secretName }),
+    }),
+
+  /** Who is on this project — names, not the hashes the CR stores. */
+  members: (cell: string) =>
+    req<{ members: { email: string; name?: string; role: string; unknown?: boolean }[]; open: boolean }>(
+      `/api/cells/${cell}/members`),
   putMember: (cell: string, userID: string, role: string) =>
     req<{ access: string }>(`/api/cells/${cell}/members`, {
       method: 'PUT',

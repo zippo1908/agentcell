@@ -596,8 +596,29 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 .post-text { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .post.system .post-text { color: var(--text-dim); }
 
-.board-composer { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; }
+.board-composer { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; position: relative; }
 .board-composer textarea { flex: 1; resize: vertical; min-height: 44px; }
+
+/* The @ picker.
+   Above the composer rather than below it: the composer sits at the bottom
+   of the page, and a menu hanging off the bottom would open off-screen. */
+.mention-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
+  z-index: 30; max-height: 240px; overflow-y: auto;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--panel-raised, var(--panel));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .34);
+}
+.mention-item {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 7px 11px; border: 0; background: none; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.mention-item.on { background: var(--accent); color: #fff; }
+.mention-name { font-size: 13px; }
+.mention-sub { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.mention-item.on .mention-sub { color: rgba(255, 255, 255, .78); }
 
 /* ── Choice cards ─────────────────────────────────────────────────────────
    Creating a project is a series of choices the platform can already offer,
