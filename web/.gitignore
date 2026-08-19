@@ -1,2 +1,6 @@
-node_modules/
+# No trailing slash: with one, this matches a DIRECTORY only, and a symlink
+# named node_modules slips past it. That is exactly how an absolute path to
+# somebody's dev machine got committed — every clean clone then failed
+# pnpm install with ENOTDIR.
+node_modules
 *.tsbuildinfo

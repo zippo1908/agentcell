@@ -424,8 +424,8 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := identity.FromContext(r.Context())
-	if !p.Admin && p.Kind != identity.KindToken {
-		writeErr(w, 403, errors.New("只有管理员能邀请人"))
+	if d := h.canPlatform(r.Context(), p, PlatformInvite); !d.Allow {
+		writeErr(w, 403, d.Err())
 		return
 	}
 	var body struct {

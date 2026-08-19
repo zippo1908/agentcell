@@ -68,22 +68,8 @@ type createCellRequest struct {
 // this grant and has no row to carry it, and quietly withdrawing something
 // those deployments already do would be an upgrade that breaks them.
 func (h *Handler) mayCreateProjects(r *http.Request) error {
-	db := h.accountsDB()
-	if db == nil {
-		return nil
-	}
 	p := identity.FromContext(r.Context())
-	if p.Kind != identity.KindUser {
-		return nil
-	}
-	u, _, err := db.UserByEmail(r.Context(), p.Email)
-	if err != nil {
-		return nil
-	}
-	if u.Admin || u.CanCreate {
-		return nil
-	}
-	return fmt.Errorf("你的账号还没有开通「创建项目」;找管理员开通,或者请项目维护者把你加进已有项目")
+	return h.canPlatform(r.Context(), p, PlatformCreateProject).Err()
 }
 
 func (h *Handler) createCell(w http.ResponseWriter, r *http.Request) {

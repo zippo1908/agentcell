@@ -395,6 +395,12 @@ one. So no gateway is required and any standards-compliant provider works.
 [`deploy/identity/`](deploy/identity/) has a Casdoor + Apache APISIX® path
 for registration, login and TLS if you want one ready-made.
 
+Joining an existing enterprise identity — including **why the switch cannot
+simply be turned on** (the same person logging in two ways computes to two
+different ids, and membership, credential ownership and worktrees all hang off
+that id) — is written up in
+**[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)**.
+
 Production walkthrough (ingress/TLS, storage, upgrades, troubleshooting):
 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 

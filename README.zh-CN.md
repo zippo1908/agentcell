@@ -337,6 +337,10 @@ celld **自己**拿 provider 的 JWKS 验 ID token,**绝不信任身份头**—�
 东西都能伪造一个头。所以不装网关也能用,任何标准 OIDC 提供方都行。想要现成的注册、
 登录和 TLS,[`deploy/identity/`](deploy/identity/) 里有 Casdoor + Apache APISIX® 的清单。
 
+接入公司统一身份的完整说明——包括**为什么不能直接打开开关**(同一个人换登录方式
+会算出不同的 ID,项目成员、凭据归属和工作树都挂在那个 ID 上)、以及身份链接怎么做:
+**[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)**。
+
 **边看边改**:常驻会话在 agent 结束后保留槽位,你可以看完结果**在同一个对话里再补
 一句**,而不是重派一个什么都要重新摸清的新会话:
 
