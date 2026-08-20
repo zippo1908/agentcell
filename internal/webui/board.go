@@ -195,8 +195,17 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 
 	// Addressing the agent no longer needs a name. One board, one project,
 	// one agent — so calling it is just saying so.
+	askID := ""
 	if hasBotAlias(text) {
-		h.dispatchFromBoard(r.Context(), t.Name, t.Name, text, p)
+		task := strings.TrimSpace(mentionRe.ReplaceAllString(text, ""))
+		// quiet: the streamed answer replaces the "接了" ack — two messages
+		// for one ask is noise, and the bubble already says it is coming.
+		// The ask is registered only when the dispatch actually started:
+		// otherwise the asker would hold a stream that waits out its whole
+		// deadline for a session the board already said could not start.
+		if h.dispatchFromBoard(r.Context(), t.Name, t.Name, text, p, true) && task != "" {
+			askID = h.asks.put(askEntry{Cell: t.Name, Task: task, Asker: p.ID()})
+		}
 	}
 
 	// The rule at the top of this file, finally applied to people too: an @
@@ -208,7 +217,11 @@ func (h *Handler) postToBoard(w http.ResponseWriter, r *http.Request) {
 			"没找到这些人:@"+strings.Join(miss, " @")+" —— 只能 @ 这个项目的成员。输入 @ 会列出可选的人。",
 			t.Name)
 	}
-	writeJSON(w, 201, map[string]any{"id": post.ID})
+	resp := map[string]any{"id": post.ID}
+	if askID != "" {
+		resp["ask"] = askID
+	}
+	writeJSON(w, 201, resp)
 }
 
 // appendPost adds a post under optimistic concurrency. Two people typing at
@@ -271,7 +284,7 @@ func (h *Handler) resolveMentions(ctx context.Context, t *acv1.Cell, body string
 	byName := map[string]string{}
 	ambiguous := map[string]bool{}
 	for _, u := range h.accountsForMentions(ctx) {
-		id := identity.Principal{Subject: identity.UserSubject(u.email)}.ID()
+		id := principalIDFor(ctx, h.accountsDB(), u.email)
 		if !member[id] {
 			continue
 		}
@@ -332,7 +345,7 @@ func (h *Handler) unresolvedMentions(ctx context.Context, t *acv1.Cell, body str
 	}
 	byName := map[string]bool{}
 	for _, u := range h.accountsForMentions(ctx) {
-		id := identity.Principal{Subject: identity.UserSubject(u.email)}.ID()
+		id := principalIDFor(ctx, h.accountsDB(), u.email)
 		if !member[id] {
 			continue
 		}
@@ -391,21 +404,25 @@ func hasBotAlias(body string) bool {
 //
 // It answers in the stream whatever happens. A dispatch that cannot start —
 // no credential, no permission, the Cell full — is a thing the asker needs
-// told, and the board is where they are looking.
-func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string, p identity.Principal) {
+// told, and the board is where they are looking. quiet suppresses the "接了"
+// ack (the caller is about to stream the answer itself, and the ack would be
+// a second message saying less). The return reports whether a session was
+// started or continued — the failure posts are already on the board either
+// way, so callers need only the fact.
+func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string, p identity.Principal, quiet bool) bool {
 	task := strings.TrimSpace(mentionRe.ReplaceAllString(text, ""))
 	if task == "" {
 		h.systemPost(ctx, team, "@"+cell+" 收到,但没说要做什么。", cell)
-		return
+		return false
 	}
 	var c acv1.Cell
 	if err := h.Client.Get(ctx, types.NamespacedName{Namespace: h.Namespace, Name: cell}, &c); err != nil {
 		h.systemPost(ctx, team, "找不到工作区 "+cell+"。", "")
-		return
+		return false
 	}
 	if !can(p, &c, ActionDispatch) {
 		h.systemPost(ctx, team, "你在 "+cell+" 里没有动手的权限。", cell)
-		return
+		return false
 	}
 
 	// One shared conversation per project, and the FIRST person to open it
@@ -420,21 +437,23 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 	if live, err := h.liveBoardSession(ctx, cell); err == nil && live != nil {
 		if err := h.queueFollowUp(ctx, live, task); err != nil {
 			h.systemPost(ctx, team, "接不上你在 "+cell+" 的会话:"+err.Error(), cell)
-			return
+			return false
 		}
-		body := "接着这个项目的会话说:" + task
-		if !p.Owns(live.Spec.OwnerUserID) {
-			// Say who is paying, every time somebody else drives it. A
-			// shared session that silently spends one person's quota is a
-			// surprise waiting to land on them.
-			body += "(这条会话由 " + h.displayOwner(ctx, live.Spec.OwnerUserID) + " 的额度承担)"
+		if !quiet {
+			body := "接着这个项目的会话说:" + task
+			if !p.Owns(live.Spec.OwnerUserID) {
+				// Say who is paying, every time somebody else drives it. A
+				// shared session that silently spends one person's quota is a
+				// surprise waiting to land on them.
+				body += "(这条会话由 " + h.displayOwner(ctx, live.Spec.OwnerUserID) + " 的额度承担)"
+			}
+			ack := acv1.Post{
+				Kind: acv1.PostAgent, Author: cell, Cell: cell, Session: live.Name,
+				Body: body,
+			}
+			_ = h.appendPost(ctx, team, &ack)
 		}
-		ack := acv1.Post{
-			Kind: acv1.PostAgent, Author: cell, Cell: cell, Session: live.Name,
-			Body: body,
-		}
-		_ = h.appendPost(ctx, team, &ack)
-		return
+		return true
 	}
 	sess := &acv1.Session{ObjectMeta: metav1.ObjectMeta{
 		Namespace: h.Namespace, Name: ids.SessionName(ids.NewSessionID()),
@@ -450,14 +469,23 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 		runner, provider, model, err = h.providerFor(ctx, cell)
 		if err != nil {
 			h.systemPost(ctx, team, err.Error(), cell)
-			return
+			return false
+		}
+	}
+	if model == "" && provider != "" {
+		// Defaults may name a pairing without a model; the dispatch form has
+		// the same gap and answers it with the provider's first model. A
+		// session created without one starts the CLI with no default_model,
+		// which fails only after everything else has already worked.
+		if pr, ok := h.Registry.Provider(provider); ok && len(pr.Models) > 0 {
+			model = pr.Models[0]
 		}
 	}
 	sess.Spec.Runner, sess.Spec.Provider, sess.Spec.Model = runner, provider, model
 	cred, err := h.credentialFor(ctx, p, runner)
 	if err != nil {
 		h.systemPost(ctx, team, err.Error(), cell)
-		return
+		return false
 	}
 	sess.Spec.CredentialSecret = cred
 	// The real person who asked. They fund it; everyone else who may
@@ -467,13 +495,16 @@ func (h *Handler) dispatchFromBoard(ctx context.Context, team, cell, text string
 	sess.Spec.Board = team
 	if err := h.Client.Create(ctx, sess); err != nil {
 		h.systemPost(ctx, team, "派不出去:"+err.Error(), cell)
-		return
+		return false
 	}
-	ack := acv1.Post{
-		Kind: acv1.PostAgent, Author: cell, Cell: cell, Session: sess.Name,
-		Body: "接了:" + task,
+	if !quiet {
+		ack := acv1.Post{
+			Kind: acv1.PostAgent, Author: cell, Cell: cell, Session: sess.Name,
+			Body: "接了:" + task,
+		}
+		_ = h.appendPost(ctx, team, &ack)
 	}
-	_ = h.appendPost(ctx, team, &ack)
+	return true
 }
 
 // soleCredential picks the caller's model key when there is exactly one.
@@ -584,7 +615,7 @@ func (h *Handler) displayOwner(ctx context.Context, id string) string {
 		return id
 	}
 	for _, u := range users {
-		if (identity.Principal{Subject: identity.UserSubject(u.Email)}).ID() == id {
+		if principalIDFor(ctx, h.accountsDB(), u.Email) == id {
 			if u.Name != "" {
 				return u.Name
 			}

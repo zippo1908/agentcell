@@ -43,7 +43,28 @@ type Principal struct {
 	Name    string
 	Email   string
 	Kind    Kind
+	// id is the ALLOCATED principal id, resolved from the identity-binding
+	// table when authentication happens. Unexported and set only through
+	// WithID, so it cannot be filled in by accident somewhere that has not
+	// actually resolved anything.
+	//
+	// Empty means "not resolved", and ID() then derives the value the way
+	// it always did. That fallback is what keeps deployments without an
+	// account store working, and what makes this change safe to roll out:
+	// for every existing person the resolved id and the derived id are the
+	// same value, because the resolved one was adopted from it.
+	id string
 }
+
+// WithID returns a copy carrying an allocated principal id.
+func (p Principal) WithID(id string) Principal {
+	p.id = id
+	return p
+}
+
+// HasAllocatedID reports whether this principal's id came from the binding
+// table rather than from hashing its subject.
+func (p Principal) HasAllocatedID() bool { return p.id != "" }
 
 // StaticToken is the principal every static bearer token resolves to.
 var StaticToken = Principal{Subject: "token:static", Name: "static token", Kind: KindToken}
@@ -61,19 +82,43 @@ func OIDCSubject(issuer, sub string) string {
 	return "oidc:" + hex.EncodeToString(h[:4]) + ":" + sub
 }
 
-// ID is the form written to Kubernetes objects: a hash, so it is a valid
-// label value and a valid CR field regardless of what the IdP puts in `sub`
-// (which may contain '@', '|', spaces, or be longer than 63 characters).
+// ID is the form written to Kubernetes objects — a short opaque token, so it
+// is a valid label value and a valid CR field regardless of what an IdP puts
+// in `sub` (which may contain '@', '|', spaces, or exceed 63 characters).
+// It also means an object's owner cannot be read back as an email address by
+// anyone who can list CRs.
 //
-// Hashing also means an object's owner cannot be read back as an email
-// address by anyone who can list CRs.
+// Where the value comes from is the thing that changed. It is now the id
+// ALLOCATED to this principal and stored against its logins; hashing the
+// subject is the fallback for principals nothing has resolved — a deployment
+// with no account store, or the static token.
+//
+// The distinction matters because this value is written into Cell member
+// lists, Secret owner labels, Session owners and Unix uids. While it was
+// derived, the way a person authenticated decided who they were, so
+// connecting an IdP would have made everybody a stranger and changing
+// somebody's email was impossible by construction. Allocated, a login is
+// just one of a principal's identifiers and can be added or removed
+// freely. See internal/store/principals.go.
 func (p Principal) ID() string {
+	if p.id != "" {
+		return p.id
+	}
 	if p.Subject == "" {
 		return ""
 	}
 	h := sha256.Sum256([]byte(p.Subject))
 	return "u-" + hex.EncodeToString(h[:8])
 }
+
+// Provider names the authentication method a binding is keyed by.
+//
+// The Kind is enough: subjects are already globally unique by construction
+// (UserSubject carries the address, OIDCSubject carries a hash of the
+// issuer), so the issuer distinction lives inside the subject rather than
+// being split across two columns. Splitting it later is a migration of this
+// table alone, which is exactly the property the redesign was for.
+func (p Principal) Provider() string { return string(p.Kind) }
 
 // Display is a human label for the UI and audit lines, never for authorization.
 func (p Principal) Display() string {

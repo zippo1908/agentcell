@@ -68,6 +68,10 @@ type Handler struct {
 	// terminals bounds how many exec streams one person can hold open; see
 	// maxTerminalsPerUser.
 	terminals *terminalCounter
+	// asks holds the @机器人 questions awaiting their streamed answer; see
+	// board_ask.go. Zero value is ready to use.
+	asks   askRegistry
+	probes probeCache
 }
 
 // previewBaseFor returns the origin serving a specific Cell's untrusted
@@ -148,6 +152,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/cells/{cell}/branches", h.listBranches)
 	mux.HandleFunc("GET /api/cells/{cell}/board", h.listBoard)
 	mux.HandleFunc("POST /api/cells/{cell}/board", h.postToBoard)
+	mux.HandleFunc("GET /api/cells/{cell}/board/ask/{ask}", h.boardAsk)
+	mux.HandleFunc("GET /api/cells/{cell}/board/prewarm", h.boardPrewarm)
 	mux.HandleFunc("GET /api/sessions/{session}/terminal", h.sessionTerminal)
 	mux.HandleFunc("PUT /api/cells/{cell}/placement", h.putPlacement)
 	mux.HandleFunc("POST /api/cells/{cell}/dispatch", h.dispatch)

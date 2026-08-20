@@ -1,0 +1,10 @@
+# egress-proxy image. Build from repo root:
+#   make build && podman build -t ghcr.io/agentcell/egress-proxy -f images/egress-proxy/Containerfile .
+#
+# Note the `make build` — this file COPIES a binary, it does not compile one.
+# Skipping it produces a valid image containing stale code, which pushes,
+# pulls and rolls out successfully with a matching digest.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY bin/egress-proxy /egress-proxy
+USER nonroot
+ENTRYPOINT ["/egress-proxy"]

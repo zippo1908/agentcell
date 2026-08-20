@@ -120,7 +120,9 @@ func principalOf(u store.User) identity.Principal {
 	}
 }
 
-// Verify checks an email and password.
+// Verify checks an email and password. The principal it returns carries its
+// allocated id, so the very first thing a person does after logging in is
+// already attributed to the right entity.
 func (a *Accounts) Verify(ctx context.Context, email, pw string) (identity.Principal, bool) {
 	u, hash, err := a.DB.UserByEmail(ctx, email)
 	if err != nil {
@@ -133,7 +135,7 @@ func (a *Accounts) Verify(ctx context.Context, email, pw string) (identity.Princ
 	if u.Disabled || !verifyPassword(hash, pw) {
 		return identity.Principal{}, false
 	}
-	return principalOf(u), true
+	return a.resolved(ctx, principalOf(u)), true
 }
 
 // --- session cookies -------------------------------------------------
@@ -198,7 +200,33 @@ func (a *Accounts) fromCookie(ctx context.Context, value string) (identity.Princ
 	// Past halfway: worth sliding the window forward. Before halfway the
 	// request costs nothing extra, which is most of them.
 	stale := time.Until(time.Unix(exp, 0)) < renewWithin
-	return principalOf(u), true, stale
+	return a.resolved(ctx, principalOf(u)), true, stale
+}
+
+// resolved attaches the ALLOCATED principal id to a freshly authenticated
+// caller — the one stored against this login rather than hashed from it.
+//
+// One indexed lookup, on a path that already reads the account row to verify
+// the signature, so it costs an extra primary-key hit and no extra round
+// trip. It is deliberately not cached: a binding changes when somebody links
+// or unlinks a login, and serving a stale identity is exactly the class of
+// bug this whole change exists to remove.
+//
+// On any failure the principal is returned as it came, and ID() falls back
+// to hashing the subject. For every account that existed before this change
+// those two values are identical — the allocated id was adopted from the
+// derived one — so the fallback is a no-op rather than a different identity.
+// For a principal allocated later the fallback yields an id that owns
+// nothing, which loses access rather than granting it.
+func (a *Accounts) resolved(ctx context.Context, p identity.Principal) identity.Principal {
+	if a == nil || a.DB == nil || p.Subject == "" || p.Kind == identity.KindToken {
+		return p
+	}
+	id, err := a.DB.ResolveOrCreatePrincipal(ctx, p.Provider(), p.Subject)
+	if err != nil {
+		return p
+	}
+	return p.WithID(id)
 }
 
 // --- invitations -----------------------------------------------------
@@ -424,8 +452,8 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := identity.FromContext(r.Context())
-	if !p.Admin && p.Kind != identity.KindToken {
-		writeErr(w, 403, errors.New("只有管理员能邀请人"))
+	if d := h.canPlatform(r.Context(), p, PlatformInvite); !d.Allow {
+		writeErr(w, 403, d.Err())
 		return
 	}
 	var body struct {

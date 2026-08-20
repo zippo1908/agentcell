@@ -77,29 +77,20 @@ func TestLinkingIsIdempotent(t *testing.T) {
 	}
 }
 
-// A second session must not roll the shared login back to whatever the
-// control plane last stored: the live file has been refreshed since, and the
-// stored copy is older by construction.
-func TestASecondSessionDoesNotOverwriteALiveCredential(t *testing.T) {
-	shared := t.TempDir()
-	live := filepath.Join(shared, "kimi-code.json")
-	if err := os.WriteFile(live, []byte(`{"refresh_token":"current"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	empty, err := dirEmpty(shared)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if empty {
-		t.Fatal("a directory holding a live credential must not read as empty")
-	}
-
-	// And the guard the other way: a first session finds nothing and unpacks.
-	if empty, err := dirEmpty(t.TempDir()); err != nil || !empty {
-		t.Fatalf("a fresh directory should be empty: %v %v", empty, err)
-	}
-}
+// The rollback property this file used to guard lives in
+// account_credential_test.go now.
+//
+// It was checked here through dirEmpty: "the directory is not empty, so do
+// not unpack". That guard was too blunt — it could not tell a stale snapshot
+// of the SAME login from a NEW one, so a person who reconnected their account
+// never received the new credential and saw "reconnected and it still does
+// not work". installAccountCredential replaced it with the blob hash as a
+// version, and TestInstallAccountCredential covers both directions: the same
+// blob must not roll a rotated file back, and a different blob must land.
+//
+// The test that used to be here was removed rather than kept, because
+// dirEmpty no longer has a caller: a green test over a function nothing
+// calls is confidence about nothing.
 
 // moveInto carries the unpacked credential across without leaving a copy.
 func TestMoveIntoLeavesNothingBehind(t *testing.T) {

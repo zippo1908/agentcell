@@ -616,7 +616,7 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 
 @media (prefers-reduced-motion: reduce) {
   .card, .toast, .modal, .modal-mask { animation: none; }
-  .badge.amber .dot { animation: none; }
+  .badge.amber .dot, .stream-caret, .think-dots span, .shimmer-text { animation: none; }
 }
 
 /* ── The board ────────────────────────────────────────────────────────────
@@ -641,6 +641,7 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 }
 .board-empty { padding: 40px 0; text-align: center; color: var(--text-dim); }
 .board-empty p { margin: 0 0 6px; }
+.board-banner { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 
 .post { display: flex; gap: 10px; padding: 9px 0; }
 .post + .post { border-top: 1px solid var(--border-soft); }
@@ -660,6 +661,96 @@ pre.diff .meta { display: block; color: var(--text-faint); }
 .post-link { margin-left: auto; font-size: 11px; }
 .post-text { font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .post.system .post-text { color: var(--text-dim); }
+
+/* Markdown inside agent answers: quiet, dense, same ink — formatting is
+   structure, not decoration. */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 6px 0; }
+.md-h { font-weight: 650; margin: 10px 0 4px; }
+.md-h1 { font-size: 15px; }
+.md-h2 { font-size: 14px; }
+.md-h3, .md-h4 { font-size: 13px; }
+.md-list { margin: 6px 0; padding-left: 18px; }
+.md-list li { margin: 2px 0; }
+.md-code {
+  background: var(--machine-bg); color: var(--machine-fg);
+  border-radius: var(--r-sm); padding: 8px 10px; margin: 6px 0;
+  font-family: var(--mono); font-size: 12px; overflow-x: auto; white-space: pre;
+}
+.md-table { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.md-table th, .md-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.md-table th { background: var(--panel-2); font-weight: 600; }
+.md-quote { border-left: 2px solid var(--border-strong); margin: 6px 0; padding: 2px 0 2px 10px; color: var(--text-dim); }
+.md-hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+/* The streaming answer's caret. In-flight work pulses amber everywhere in
+   this UI (badge.amber, .note) — the caret is the same state, one glyph tall. */
+.stream-caret {
+  display: inline-block; width: 1px; height: 1em; margin-left: 2px;
+  vertical-align: -0.12em; background: var(--amber);
+  animation: caret-breathe 1.1s ease-in-out infinite;
+}
+@keyframes caret-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.12; } }
+
+/* The wait before the first delta. A blank bubble reads as broken, so the
+   wait gets a face: three dots that think, and the phase named in light that
+   sweeps — the same amber as every other in-flight thing, spent two ways so
+   the two never blur with a pulsing badge. */
+.stream-waiting { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.think-dots { display: inline-flex; gap: 4px; align-items: center; }
+.think-dots span {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--amber);
+  animation: think-bounce 1.2s ease-in-out infinite;
+}
+.think-dots span:nth-child(2) { animation-delay: 0.15s; }
+.think-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes think-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.55; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+.shimmer-text {
+  font-size: 12.5px;
+  background: linear-gradient(90deg,
+    var(--text-faint) 0%, var(--text-faint) 35%,
+    var(--amber) 50%,
+    var(--text-faint) 65%, var(--text-faint) 100%);
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-sweep 2.2s linear infinite;
+}
+@keyframes shimmer-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+/* Who you are talking to, in the board header: chips for the first few, the
+   full list one click away — most days nobody needs more than a glance. */
+.board-members { position: relative; margin-left: auto; }
+.board-members-toggle {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px; background: transparent; border: 0; cursor: pointer;
+  border-radius: var(--r-pill);
+}
+.board-members-toggle:hover { background: var(--panel-2); }
+.member-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 8px 1px 1px; border: 1px solid var(--border); border-radius: var(--r-pill);
+  font-size: 11px; color: var(--text-dim); background: var(--panel);
+}
+.member-chip .post-mark { flex-basis: 18px; height: 18px; font-size: 8px; }
+.member-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  min-width: 230px; max-height: 280px; overflow-y: auto; padding: 4px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--panel-raised, var(--panel));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .34);
+}
+.member-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; font-size: 12px; }
+.member-row .member-name { font-weight: 500; }
+.member-row .mention-sub { margin-left: auto; }
 
 .board-composer { display: flex; gap: 8px; margin-top: 10px; align-items: flex-end; position: relative; }
 .board-composer textarea { flex: 1; resize: vertical; min-height: 44px; }
@@ -848,6 +939,21 @@ body.resizing { cursor: col-resize; user-select: none; }
 
 /* Projects in the navigation. */
 .nav-projects-label { display: flex; align-items: center; justify-content: space-between; }
+.nav-label-group { display: flex; align-items: center; gap: 3px; }
+/* A quieter sibling of .nav-fold: it sits inside the label row, so it gets
+   no border of its own — the label is already the quietest text on screen. */
+.nav-group-fold {
+  background: transparent; border: 0; color: var(--text-faint);
+  width: 16px; height: 16px; padding: 0; border-radius: 2px;
+  font-size: 9px; line-height: 1; cursor: pointer;
+}
+.nav-group-fold:hover { color: var(--text); background: var(--panel-2); }
+/* The closed state only applies where the label (and its chevron) exists:
+   the folded sidebar is an icon rail with its own rules, and on a phone the
+   labels are hidden — hiding the list there too would leave it unreachable. */
+@media (min-width: 761px) {
+  .sidebar:not(.folded) .nav-group-closed { display: none; }
+}
 .nav-projects { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
 .nav-project {
   display: flex; align-items: center; gap: 8px;

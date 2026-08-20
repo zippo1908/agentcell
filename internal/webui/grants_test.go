@@ -102,7 +102,11 @@ func TestLendingAnAccountPutsItUnderTheBorrowersName(t *testing.T) {
 	}}
 	oauth.Data = map[string][]byte{kimiCredKey: []byte("packed-credential")}
 	h := lendingFixture(t, oauth)
-	if err := h.Auth.Accounts.DB.CreateUser(t.Context(), bob.ID(), "bob@tinci.com", "Bob", "h", false, false); err != nil {
+	// Created the way Redeem creates accounts: the stored id IS the one
+	// derived from the address. A fixture that stores a different id builds
+	// a state production never produces — and used to pass only because
+	// nothing read the id column.
+	if err := h.Auth.Accounts.DB.CreateUser(t.Context(), idOf("bob@tinci.com"), "bob@tinci.com", "Bob", "h", false, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -146,7 +150,11 @@ func TestLendingDoesNotClobberSomebodyElsesOwnLogin(t *testing.T) {
 	}}
 	own.Data = map[string][]byte{kimiCredKey: []byte("bobs-own-credential")}
 	h := lendingFixture(t, lender, own)
-	if err := h.Auth.Accounts.DB.CreateUser(t.Context(), bob.ID(), "bob@tinci.com", "Bob", "h", false, false); err != nil {
+	// Created the way Redeem creates accounts: the stored id IS the one
+	// derived from the address. A fixture that stores a different id builds
+	// a state production never produces — and used to pass only because
+	// nothing read the id column.
+	if err := h.Auth.Accounts.DB.CreateUser(t.Context(), idOf("bob@tinci.com"), "bob@tinci.com", "Bob", "h", false, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,5 +186,63 @@ func TestLendingSomebodyElsesKeyIsRefused(t *testing.T) {
 
 	if rec.Code != 404 {
 		t.Fatalf("Bob lending Alice's key = %d, want 404: %s", rec.Code, rec.Body)
+	}
+}
+
+// Lending follows the BINDING table, not a hash of the address.
+//
+// This is the one that matters after ADR-0016. A principal's id is allocated
+// and stored; hashing the address is only the fallback. The two agree for
+// every account that existed before that change, because each adopted its
+// derived id — so a regression here is invisible today and total the moment
+// somebody's id was allocated rather than adopted, which is what a first SSO
+// login produces.
+//
+// The failure mode is silent: the credential is lent to an id that resolves
+// to nobody. No error anywhere, because "no such principal" and "a principal
+// who owns nothing" look identical from outside.
+func TestLendingFollowsTheBindingNotTheAddressHash(t *testing.T) {
+	oauth := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: "alice-kimi",
+		Labels: map[string]string{credLabel: credKindKimi, OwnerLabel: alice.ID()},
+	}}
+	oauth.Data = map[string][]byte{kimiCredKey: []byte("packed-credential")}
+	h := lendingFixture(t, oauth)
+	db := h.Auth.Accounts.DB
+
+	// A borrower whose id was ALLOCATED, not adopted — the shape every
+	// principal has once an IdP is connected.
+	const allocated = "u-0f0f0f0f0f0f0f0f"
+	if err := db.CreateUser(t.Context(), allocated, "carol@tinci.com", "Carol", "h", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if allocated == idOf("carol@tinci.com") {
+		t.Fatal("the fixture is not testing anything: the allocated id equals the derived one")
+	}
+
+	req := asUser(httptest.NewRequest(http.MethodPost, "/api/me/grants",
+		strings.NewReader(`{"credential":"alice-kimi","email":"carol@tinci.com"}`)), alice)
+	rec := httptest.NewRecorder()
+	h.createGrant(rec, req)
+	if rec.Code != 201 {
+		t.Fatalf("lend = %d, want 201: %s", rec.Code, rec.Body)
+	}
+
+	// The copy must be named after the id her session will resolve to.
+	want := strings.TrimPrefix(allocated, "u-") + KimiCredentialSuffix
+	var got corev1.Secret
+	if err := h.Client.Get(t.Context(),
+		types.NamespacedName{Namespace: ns, Name: want}, &got); err != nil {
+		t.Fatalf("the borrowed account is not under the id she actually resolves to (%s): %v", want, err)
+	}
+
+	// And the grant row points at the same principal, or she can see the
+	// key listed and still be refused when she spends it.
+	gs, err := db.GrantsTo(t.Context(), allocated, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gs) != 1 || gs[0].Credential != "alice-kimi" {
+		t.Fatalf("the grant was written against a different principal: %+v", gs)
 	}
 }

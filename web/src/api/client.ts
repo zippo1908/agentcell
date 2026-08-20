@@ -99,11 +99,18 @@ export const api = {
   board: (cell: string) =>
     req<{ posts: Post[]; latest: number }>(`/api/cells/${cell}/board`),
 
+  // Mentioning the robot returns an ask id alongside the post id; the
+  // answer itself streams from GET .../board/ask/{ask} as SSE.
   postToBoard: (cell: string, body: string) =>
-    req<{ id: number }>(`/api/cells/${cell}/board`, {
+    req<{ id: number; ask?: string }>(`/api/cells/${cell}/board`, {
       method: 'POST',
       body: JSON.stringify({ body }),
     }),
+
+  /** Wake the project's conversation and learn whether an ask would work. */
+  boardPrewarm: (cell: string) =>
+    req<{ session: 'none' | 'warming' | 'ready'; credential?: 'ok' | 'invalid' | 'missing' | 'unknown'; message?: string }>(
+      `/api/cells/${cell}/board/prewarm`),
 
   people: () =>
     req<{ email: string; name?: string; admin?: boolean; disabled?: boolean; canCreate?: boolean }[]>(

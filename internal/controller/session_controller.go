@@ -54,6 +54,10 @@ const (
 // session — finished, killed or deleted — leaves the worktree behind or
 // loses produced commits.
 type SessionReconciler struct {
+	// EgressProxyURL points this session's outbound HTTP at the egress
+	// proxy. See egress_env.go for why NO_PROXY matters as much as the
+	// proxy address itself.
+	EgressProxyURL string
 	client.Client
 	Registry *access.Registry
 	// GitBrokerURL, when set, routes the settle push through the broker so
@@ -508,6 +512,11 @@ func (r *SessionReconciler) ensureSessionPod(ctx context.Context, sess *acv1.Ses
 			return err
 		}
 		env = append(env, corev1.EnvVar{Name: runtimeapi.EnvAgentConfig, Value: string(cfgJSON)})
+	}
+	{
+		// Outbound HTTP goes through the egress proxy when one is configured.
+		// Appended last so nothing above can be overridden by it.
+		env = append(env, egressEnv(r.EgressProxyURL)...)
 	}
 	argvJSON, err := json.Marshal(argv)
 	if err != nil {
